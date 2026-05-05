@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tizen application config for jellyfin-tv-shell.
+  Permissions and feature declarations follow upstream jellyfin-tizen so we
+  inherit their working defaults. Adjust as we shake out the prototype in
+  [JEL-3].
+-->
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="https://jellyfin.org/jellyfin-tv-shell"
+        version="0.0.0"
+        viewmodes="maximized">
+  <tizen:application id="JLFN0000.JellyfinTV"
+                     package="JLFN0000"
+                     required_version="2.4" />
+  <name>Jellyfin</name>
+  <icon src="icon.png" />
+  <content src="index.html" />
+
+  <!-- Allow loading the user's Jellyfin web client. HTTP allowance is required
+       because most self-hosted Jellyfin instances do not run HTTPS. This is
+       the documented mixed-content trade-off (see roadmap section 4). -->
+  <access origin="*" subdomains="true" />
+  <tizen:allow-navigation>* *</tizen:allow-navigation>
+
+  <feature name="http://tizen.org/feature/screen.size.normal.1080.1920" />
+  <feature name="http://tizen.org/feature/network.internet" />
+
+  <tizen:privilege name="http://tizen.org/privilege/internet" />
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice" />
+  <tizen:privilege name="http://tizen.org/privilege/mediaplayback" />
+
+  <tizen:profile name="tv" />
+  <tizen:setting screen-orientation="landscape"
+                 background-support="enable"
+                 encryption="disable"
+                 install-location="auto"
+                 hwkey-event="enable" />
+</widget>

@@ -1,0 +1,17 @@
+{
+  "id": "org.jellyfin.tv",
+  "version": "0.0.0",
+  "vendor": "Jellyfin Project",
+  "type": "web",
+  "main": "index.html",
+  "title": "Jellyfin",
+  "icon": "icon.png",
+  "uiRevision": 2,
+  "iconColor": "#00a4dc",
+  "disableBackHistoryAPI": true,
+  "supportTouchMode": "none",
+  "requiredPermissions": [
+    "time.query",
+    "media.operation"
+  ]
+}

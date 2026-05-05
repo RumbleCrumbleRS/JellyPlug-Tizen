@@ -1,0 +1,8 @@
+{
+  "extends": "@jellyfin-tv/tsconfig-base/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"]
+}

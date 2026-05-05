@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shell-core" },
+    { "path": "./packages/shell-tizen" },
+    { "path": "./packages/shell-webos" }
+  ]
+}

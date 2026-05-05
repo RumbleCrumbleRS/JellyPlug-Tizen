@@ -1,0 +1,12 @@
+{
+  "name": "@jellyfin-tv/shell-android",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jellyfin TV browser shell for Android TV (Kotlin/Leanback). pnpm workspace shim only - real build is Gradle.",
+  "license": "GPL-2.0-only",
+  "scripts": {
+    "build": "bash -c 'echo Android build runs via Gradle. See app/ and the release-android.yml workflow.'",
+    "lint": "echo \"(use Android Lint via Gradle)\"",
+    "test": "echo \"(use ./gradlew test)\""
+  }
+}
