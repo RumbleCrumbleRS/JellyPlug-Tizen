@@ -1,20 +1,73 @@
 #!/usr/bin/env bash
-# Build a Tizen .wgt for jellyfin-tv-shell.
+# Build a signed Tizen .wgt for @jellyfin-tv/shell-tizen.
 #
-# Requires: Tizen Studio CLI (`tizen` on PATH) with a configured signing
-# profile. CI runs this in a container that ships Tizen Studio (see
-# .github/workflows/ci.yml).
+# Layout:
+#   src/                  source tree (index.html, shell.js, connect/, icon.png)
+#   tizen/config.xml      Tizen widget manifest
+#   build/widget/         staged widget root (generated)
+#   dist/                 final .wgt output (generated)
 #
-# Stub for [JEL-3] (Tizen prototype). The real implementation will:
-#   1. Stage shell-core dist/, connect-screen/, and shell-tizen dist/ into a
-#      build/tizen/ directory matching the .wgt layout.
-#   2. Copy tizen/config.xml + icon.png.
-#   3. Run `tizen build-web -- -out build/tizen/.buildResult` then
-#      `tizen package -t wgt -o dist/ -- build/tizen/.buildResult`.
-#   4. Verify signature with `tizen signing-profile`.
+# Requires: Tizen Studio CLI on PATH (`tizen`, ~5.5+) with an active
+# signing profile. CI installs this in a Tizen Studio container. Locally
+# the VirtualCertificate / TVs profile configured during JEL-3 works.
 #
-# For now we emit a placeholder so the CI scaffold has something to point at.
+# Usage: pnpm -C packages/shell-tizen build
+#        (or)  bash scripts/build-wgt.sh
 
 set -euo pipefail
-mkdir -p dist
-echo "tizen build placeholder - implemented in [JEL-3]" > dist/jellyfin-tv-shell.wgt.placeholder
+
+PKG_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SRC_DIR="$PKG_DIR/src"
+CONFIG_XML="$PKG_DIR/tizen/config.xml"
+STAGE_DIR="$PKG_DIR/build/widget"
+DIST_DIR="$PKG_DIR/dist"
+WGT_NAME="JellyfinShell.wgt"
+
+# Pick the right CLI binary:
+#   - Linux/macOS containers ship `tizen` (CI image).
+#   - Windows local dev uses `tizen.bat` from <tizen-studio>/tools/ide/bin.
+TIZEN_CLI=""
+if command -v tizen >/dev/null 2>&1; then
+  TIZEN_CLI="tizen"
+elif command -v tizen.bat >/dev/null 2>&1; then
+  TIZEN_CLI="tizen.bat"
+elif [[ -x "/c/tizen-studio/tools/ide/bin/tizen.bat" ]]; then
+  TIZEN_CLI="/c/tizen-studio/tools/ide/bin/tizen.bat"
+else
+  echo "ERROR: Tizen CLI not found. Install Tizen Studio and ensure" >&2
+  echo "       <tizen-studio>/tools/ide/bin is on PATH (or set up CI image)." >&2
+  exit 1
+fi
+
+echo ">> staging widget"
+rm -rf "$STAGE_DIR" "$DIST_DIR"
+mkdir -p "$STAGE_DIR" "$DIST_DIR"
+cp -R "$SRC_DIR"/. "$STAGE_DIR"/
+cp "$CONFIG_XML" "$STAGE_DIR/config.xml"
+
+echo ">> "$TIZEN_CLI" build-web"
+# build-web walks the staged dir, rejects manifest violations, and writes
+# the packaged tree into .buildResult inside the widget root.
+( cd "$STAGE_DIR" && "$TIZEN_CLI" build-web -- . )
+
+# Tizen build-web emits .buildResult under the input dir.
+BUILD_RESULT="$STAGE_DIR/.buildResult"
+
+echo ">> "$TIZEN_CLI" package -t wgt"
+( cd "$BUILD_RESULT" && "$TIZEN_CLI" package -t wgt -o "$DIST_DIR" -- . )
+
+# Tizen names the output after <name> in config.xml; rename to a stable
+# filename so CI/QA always look in the same place.
+shopt -s nullglob
+EMITTED=( "$DIST_DIR"/*.wgt )
+shopt -u nullglob
+if [[ ${#EMITTED[@]} -eq 0 ]]; then
+  echo "ERROR: no .wgt produced in $DIST_DIR" >&2
+  exit 1
+fi
+if [[ "${EMITTED[0]##*/}" != "$WGT_NAME" ]]; then
+  mv -f "${EMITTED[0]}" "$DIST_DIR/$WGT_NAME"
+fi
+
+echo ">> built: $DIST_DIR/$WGT_NAME"
+ls -lh "$DIST_DIR/$WGT_NAME"
