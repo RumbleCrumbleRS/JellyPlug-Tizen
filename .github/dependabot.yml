@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      typescript:
+        patterns:
+          - "typescript*"
+          - "@typescript-eslint/*"
+      eslint:
+        patterns:
+          - "eslint*"
+          - "prettier*"
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: gradle
+    directory: "/packages/shell-android"
+    schedule:
+      interval: weekly

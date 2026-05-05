@@ -1,0 +1,143 @@
+# CI: lint + typecheck + per-platform build matrix.
+#
+# Triggered on PRs and pushes to main. Path filters keep webOS/Android jobs
+# from running on Tizen-only changes (and vice versa). shell-core changes
+# fan out to all platforms.
+#
+# This workflow is drafted but NOT enabled - it has no remote yet (see
+# repo-structure section 9). Once the repo is pushed to GitHub it activates
+# automatically.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run format:check
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+
+  build-core:
+    name: build shell-core
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @jellyfin-tv/shell-core build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shell-core-dist
+          path: packages/shell-core/dist
+
+  build-tizen:
+    name: build shell-tizen
+    runs-on: ubuntu-latest
+    needs: [build-core]
+    container:
+      # Pre-built image with Tizen Studio CLI 5.5+ already configured.
+      # Maintained by the Jellyfin community (existing jellyfin-tizen uses it).
+      # Replace with the canonical image once we confirm a maintained source.
+      image: ghcr.io/jellyfin/tizen-studio:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build .wgt
+        run: pnpm --filter @jellyfin-tv/shell-tizen build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-tv-shell-tizen-${{ github.sha }}
+          path: packages/shell-tizen/dist/*.wgt*
+
+  build-webos:
+    name: build shell-webos
+    runs-on: ubuntu-latest
+    needs: [build-core]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install ares-cli
+        run: npm i -g @webosose/ares-cli
+      - name: Build .ipk
+        run: pnpm --filter @jellyfin-tv/shell-webos build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-tv-shell-webos-${{ github.sha }}
+          path: packages/shell-webos/dist/*.ipk*
+
+  build-android:
+    name: build shell-android
+    runs-on: ubuntu-latest
+    needs: [lint] # Android build is independent of TS workspace
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Build debug APK
+        working-directory: packages/shell-android
+        run: |
+          # Stubbed until M5 lands the real Gradle project.
+          mkdir -p app/build/outputs/apk/debug
+          echo "android build placeholder - M5" > app/build/outputs/apk/debug/jellyfin-tv-shell.apk.placeholder
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-tv-shell-android-${{ github.sha }}
+          path: packages/shell-android/app/build/outputs/apk/debug/*

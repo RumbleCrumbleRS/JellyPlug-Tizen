@@ -1,0 +1,7 @@
+# Default ownership: founding engineer until specialists are hired.
+*                                @jellyfin/tv-founding-engineer
+
+# Replace with platform owners once hired:
+# packages/shell-tizen/**         @jellyfin/tv-tizen
+# packages/shell-webos/**         @jellyfin/tv-webos
+# packages/shell-android/**       @jellyfin/tv-android

@@ -1,0 +1,44 @@
+# Release: build a signed Tizen .wgt and attach to the GitHub Release.
+# Triggered by tags matching tizen-v*.
+
+name: release-tizen
+
+on:
+  push:
+    tags:
+      - "tizen-v*"
+
+jobs:
+  release:
+    name: build + upload .wgt
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/jellyfin/tizen-studio:latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Configure Tizen signing profile
+        env:
+          # Author/distributor certificates exported from Samsung Seller Office.
+          # Stored as repo secrets; never committed.
+          TIZEN_AUTHOR_P12_BASE64: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
+          TIZEN_AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          TIZEN_DISTRIBUTOR_P12_BASE64: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
+          TIZEN_DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+        run: bash tooling/ci/configure-tizen-signing.sh
+      - name: Build signed .wgt
+        run: pnpm --filter @jellyfin-tv/shell-tizen build
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/shell-tizen/dist/*.wgt
+          generate_release_notes: true

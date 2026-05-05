@@ -1,0 +1,31 @@
+node_modules/
+dist/
+build/
+.turbo/
+
+# Tizen / webOS / Android build outputs
+*.wgt
+*.wgt.placeholder
+*.ipk
+*.ipk.placeholder
+*.apk
+*.apk.placeholder
+.buildResult/
+local.properties
+.gradle/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Secrets - never commit
+*.p12
+keystore/
+.env
+.env.*
+!.env.example
