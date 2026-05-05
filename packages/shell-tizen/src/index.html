@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Jellyfin Shell</title>
+    <!-- Boot script registers Tizen TV remote keys, exposes window.NativeShell,
+         then either shows the connect screen or loads ${server}/web/.
+         All flow stays on widget origin so tizen.* / webapis.* remain available. -->
+    <script src="shell.js"></script>
+    <link rel="stylesheet" href="connect/connect.css" />
+</head>
+<body>
+    <!-- Connect screen container. Replaced by remote web client on successful connect. -->
+    <div id="boot-root">
+        <div class="boot-shell">
+            <h1>Jellyfin</h1>
+            <p>Enter your Jellyfin server address to continue.</p>
+            <form id="server-form">
+                <input id="server-input" type="url" placeholder="https://jellyfin.example.com" autofocus required />
+                <button type="submit">Connect</button>
+            </form>
+            <p class="boot-error" id="boot-error" hidden></p>
+            <p class="boot-hint">Press the BACK key to exit.</p>
+        </div>
+    </div>
+</body>
+</html>

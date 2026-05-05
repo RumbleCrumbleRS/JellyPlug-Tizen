@@ -1,0 +1,83 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #101010;
+    color: #f0f0f0;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden;
+}
+
+.boot-shell {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 4rem;
+    gap: 1.5rem;
+    text-align: center;
+}
+
+.boot-shell h1 {
+    font-size: 5rem;
+    margin: 0 0 0.5rem;
+    color: #00a4dc;
+    letter-spacing: 0.1em;
+}
+
+.boot-shell p {
+    font-size: 1.5rem;
+    margin: 0;
+}
+
+#server-form {
+    display: flex;
+    gap: 1rem;
+    width: 60%;
+    max-width: 900px;
+}
+
+#server-input {
+    flex: 1;
+    font-size: 2rem;
+    padding: 1rem 1.25rem;
+    background: #1c1c1c;
+    color: #f0f0f0;
+    border: 2px solid #2c2c2c;
+    border-radius: 6px;
+    outline: none;
+}
+
+#server-input:focus {
+    border-color: #00a4dc;
+}
+
+#server-form button {
+    font-size: 2rem;
+    padding: 1rem 2rem;
+    background: #00a4dc;
+    color: #ffffff;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+#server-form button:focus {
+    border-color: #ffffff;
+    outline: none;
+}
+
+.boot-error {
+    color: #ff5050;
+    min-height: 1.5em;
+}
+
+.boot-hint {
+    margin-top: 2rem;
+    color: #888;
+    font-size: 1rem;
+}

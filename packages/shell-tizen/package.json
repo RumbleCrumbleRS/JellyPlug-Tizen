@@ -1,20 +1,12 @@
 {
   "name": "@jellyfin-tv/shell-tizen",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Jellyfin TV browser shell for Samsung Tizen.",
   "license": "GPL-2.0-only",
-  "type": "module",
   "scripts": {
-    "build": "tsc --build && bash scripts/build-wgt.sh",
-    "lint": "eslint src",
+    "build": "bash scripts/build-wgt.sh",
+    "clean": "rm -rf build dist",
     "test": "echo \"(no tests yet)\""
-  },
-  "dependencies": {
-    "@jellyfin-tv/shell-core": "workspace:*"
-  },
-  "devDependencies": {
-    "@jellyfin-tv/tsconfig-base": "workspace:*",
-    "@jellyfin-tv/eslint-config": "workspace:*"
   }
 }
