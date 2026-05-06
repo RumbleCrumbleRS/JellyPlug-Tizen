@@ -10,8 +10,5 @@
   "iconColor": "#00a4dc",
   "disableBackHistoryAPI": true,
   "supportTouchMode": "none",
-  "requiredPermissions": [
-    "time.query",
-    "media.operation"
-  ]
+  "requiredPermissions": ["time.query", "media.operation"]
 }
