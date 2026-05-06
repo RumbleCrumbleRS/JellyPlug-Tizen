@@ -7,8 +7,23 @@
 <img alt="Logo Banner" src="https://raw.githubusercontent.com/jellyfin/jellyfin-ux/master/branding/SVG/banner-logo-solid.svg?sanitize=true"/>
 </p>
 
-## Build Process
-_Also look [Wiki](https://github.com/jellyfin/jellyfin-tizen/wiki)._
+## Quick Start
+
+Pick the path that matches you:
+
+| Path | Best for | What you do |
+| ---- | -------- | ----------- |
+| **1. Pre-built WGT** | Most users. You just want Jellyfin on your Samsung TV. | Download the latest `Jellyfin.wgt` from [Releases](https://github.com/jellyfin/jellyfin-tizen/releases) and sideload it. You still need Developer Mode + a Samsung/Tizen certificate to install. See [Deployment](#deployment). |
+| **2. Samsung-Jellyfin-Installer** | Users who want a guided installer instead of the Tizen CLI. | Use the community installer at [Jellyfin2Samsung/Samsung-Jellyfin-Installer](https://github.com/Jellyfin2Samsung/Samsung-Jellyfin-Installer). It wraps the certificate + sideload steps in a GUI. Community-maintained; not part of the Jellyfin project. |
+| **3. Build from Source** | Developers, contributors, anyone tracking a non-release branch. | Follow [Build from Source](#build-from-source) below. |
+
+> All three paths produce the same Tizen app. The difference is only how you obtain and install the WGT.
+
+> Samsung Tizen TVs require Developer Mode and a signed certificate to sideload any app. There is no public Jellyfin entry in the Samsung Smart Hub store.
+
+## Build from Source
+
+_Also see the [Wiki](https://github.com/jellyfin/jellyfin-tizen/wiki)._
 
 ### Prerequisites
 * Tizen Studio 4.6+ with IDE or Tizen Studio 4.6+ with CLI. See [Installing TV SDK](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/installing-tv-sdk.html).
