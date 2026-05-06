@@ -2,6 +2,7 @@ node_modules/
 dist/
 build/
 .turbo/
+*.tsbuildinfo
 
 # Tizen / webOS / Android build outputs
 *.wgt
