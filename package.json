@@ -9,8 +9,8 @@
   "license": "GPL-2.0-or-later",
   "private": true,
   "scripts": {
-    "package": "tizen package -t wgt --",
-    "build": "tizen package -t wgt --"
+    "package": "tizen package -t wgt -- .",
+    "build": "tizen package -t wgt -- ."
   },
   "type": "module"
 }

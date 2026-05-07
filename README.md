@@ -76,8 +76,10 @@ This repository is the widget source. There is no bundler step; the build artifa
 From the repository root:
 
 ```sh
-tizen package -t wgt --
+tizen package -t wgt -- .
 ```
+
+The trailing `.` tells the Tizen CLI to package the current directory. Older docs sometimes show the command without it; newer Tizen CLI versions (5.5+) reject the empty form with `Error: No argument is allowed`.
 
 > You should get `JellyPlug-Tizen.wgt` (or similar, named after `<widget id>` in `config.xml`) in the project root.
 
