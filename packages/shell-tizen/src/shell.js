@@ -318,24 +318,34 @@
   // tizen.*, webapis.*, and window.NativeShell remain accessible to the
   // running web client. Scripts/CSS resolve relative to the remote /web/.
 
-  function buildSeedScript(serverUrl) {
+  // Per JEL-144: NEVER hand-author the plugins[] list. Bare names without the
+  // `/plugin` suffix don't resolve in pluginManager.loadPlugin (which does
+  // `import('../plugins/${spec}')`), and a hand-rolled list also drops any
+  // server-installed web plugins. Always fetch the real `${server}/web/config.json`
+  // and override only `servers` + `multiserver`.
+  function buildSeedScript(serverUrl, baseConfig) {
     // Runs INSIDE the rewritten document, before jellyfin-web's own scripts.
     // Intercepts XMLHttpRequest + fetch for config.json so jellyfin-web's
     // webSettings.getConfig() sees servers:[serverUrl]. That makes
     // serverAddress() resolve to our server and ServerConnections.initApiClient()
     // get called automatically -- so the user lands directly on the server's
     // login UI without a second "Add Server" entry.
+    var merged = {};
+    if (baseConfig && typeof baseConfig === "object") {
+      for (var k in baseConfig) {
+        if (Object.prototype.hasOwnProperty.call(baseConfig, k)) {
+          merged[k] = baseConfig[k];
+        }
+      }
+    }
+    merged.servers = [serverUrl];
+    merged.multiserver = false;
     var SAFE = JSON.stringify(serverUrl);
+    var CFG_JSON = JSON.stringify(merged);
     return [
       "(function(){",
       "  var S=" + SAFE + ";",
-      "  var CFG=JSON.stringify({",
-      "    servers:[S],",
-      "    multiserver:false,",
-      '    plugins:["playAccessValidation","experimentalWarnings","htmlAudioPlayer","htmlVideoPlayer","photoPlayer","bookPlayer","backdropScreensaver","logoScreensaver","sessionPlayer","syncPlay"],',
-      '    themes:[{name:"Dark",id:"dark","default":true},{name:"Light",id:"light"}],',
-      "    menuLinks:[]",
-      "  });",
+      "  var CFG=" + JSON.stringify(CFG_JSON) + ";",
       '  var matches=function(u){return /(^|\\/)config\\.json(\\?|$)/.test(String(u||""));};',
       "  var origOpen=XMLHttpRequest.prototype.open;",
       "  var origSend=XMLHttpRequest.prototype.send;",
@@ -361,37 +371,60 @@
     ].join("\n");
   }
 
-  function loadRemoteWebClient(serverUrl) {
-    var baseUrl = serverUrl + "/web/";
-    return fetch(baseUrl + "index.html", {
+  // Fetch the real web/config.json so we can preserve the server's
+  // plugins[], themes[], menuLinks[] and any other future fields. The
+  // shell only ever overrides `servers` + `multiserver`. If the fetch
+  // fails (older server, network blip), fall back to an empty base
+  // object — jellyfin-web will treat missing fields as defaults rather
+  // than crashing.
+  function loadRemoteConfig(serverUrl) {
+    return fetch(serverUrl + "/web/config.json", {
       cache: "no-store",
       credentials: "omit",
     })
       .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .catch(function () {
+        return {};
+      });
+  }
+
+  function loadRemoteWebClient(serverUrl) {
+    var baseUrl = serverUrl + "/web/";
+    return Promise.all([
+      fetch(baseUrl + "index.html", {
+        cache: "no-store",
+        credentials: "omit",
+      }).then(function (r) {
         if (!r.ok)
           throw new Error("Failed to fetch web client (HTTP " + r.status + ")");
         return r.text();
-      })
-      .then(function (html) {
-        var doc = new DOMParser().parseFromString(html, "text/html");
-        // Force <base href> so relative links resolve to the server.
-        var existingBase = doc.querySelector("base");
-        if (existingBase) existingBase.remove();
-        var baseTag = doc.createElement("base");
-        baseTag.href = baseUrl;
-        doc.head.insertBefore(baseTag, doc.head.firstChild);
-        // Seed config.json BEFORE any jellyfin-web script runs so the
-        // user only enters the server URL once (in the shell).
-        var seedTag = doc.createElement("script");
-        seedTag.textContent = buildSeedScript(serverUrl);
-        if (baseTag.nextSibling)
-          doc.head.insertBefore(seedTag, baseTag.nextSibling);
-        else doc.head.appendChild(seedTag);
-        window.__jellyfinShellBootDone = true;
-        document.open("text/html", "replace");
-        document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
-        document.close();
-      });
+      }),
+      loadRemoteConfig(serverUrl),
+    ]).then(function (results) {
+      var html = results[0];
+      var baseConfig = results[1];
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      // Force <base href> so relative links resolve to the server.
+      var existingBase = doc.querySelector("base");
+      if (existingBase) existingBase.remove();
+      var baseTag = doc.createElement("base");
+      baseTag.href = baseUrl;
+      doc.head.insertBefore(baseTag, doc.head.firstChild);
+      // Seed config.json BEFORE any jellyfin-web script runs so the
+      // user only enters the server URL once (in the shell).
+      var seedTag = doc.createElement("script");
+      seedTag.textContent = buildSeedScript(serverUrl, baseConfig);
+      if (baseTag.nextSibling)
+        doc.head.insertBefore(seedTag, baseTag.nextSibling);
+      else doc.head.appendChild(seedTag);
+      window.__jellyfinShellBootDone = true;
+      document.open("text/html", "replace");
+      document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
+      document.close();
+    });
   }
 
   // ---- Connect screen flow ----------------------------------------------
