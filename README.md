@@ -16,7 +16,8 @@ Pick the path that matches you:
 | Path | Best for | What you do |
 | ---- | -------- | ----------- |
 | **1. Pre-built WGT** | Most users. You just want Jellyfin on your Samsung TV. | Download the latest `JellyfinShell.wgt` from [Releases](https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases) and sideload it. You still need Developer Mode + a Samsung/Tizen certificate to install. See [Deployment](#deployment). |
-| **2. Build from Source** | Developers, contributors, anyone tracking a non-release branch. | Follow [Build from Source](#build-from-source) below. |
+| **2. Samsung-Jellyfin-Installer** | Users who want a guided installer instead of the Tizen CLI. | Use the community installer at [Jellyfin2Samsung/Samsung-Jellyfin-Installer](https://github.com/Jellyfin2Samsung/Samsung-Jellyfin-Installer). It wraps the certificate + sideload steps in a GUI. Community-maintained; not part of this project. |
+| **3. Build from Source** | Developers, contributors, anyone tracking a non-release branch. | Follow [Build from Source](#build-from-source) below. |
 
 > Samsung Tizen TVs require Developer Mode and a signed certificate to sideload any app. There is no public entry in the Samsung Smart Hub store.
 
