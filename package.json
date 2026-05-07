@@ -7,8 +7,7 @@
     "url": "git+https://github.com/jellyfin/jellyfin-tizen.git"
   },
   "scripts": {
-    "build": "gulp",
-    "postinstall": "gulp"
+    "build": "gulp"
   },
   "devDependencies": {
     "@babel/preset-env": "7.25.7",
