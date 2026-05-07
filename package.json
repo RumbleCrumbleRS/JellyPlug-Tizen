@@ -1,22 +1,16 @@
 {
-  "name": "jellyfin-tizen",
-  "version": "0.1.0",
-  "description": "Jellyfin for Samsung Smart TV (Tizen)",
+  "name": "jellyplug-tizen",
+  "version": "0.2.0",
+  "description": "Thin browser-shell for Jellyfin on Samsung Tizen TVs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jellyfin/jellyfin-tizen.git"
+    "url": "git+https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git"
   },
+  "license": "GPL-2.0-or-later",
+  "private": true,
   "scripts": {
-    "build": "gulp"
-  },
-  "devDependencies": {
-    "@babel/preset-env": "7.25.7",
-    "@babel/register": "7.25.7",
-    "del": "8.0.0",
-    "gulp": "5.0.0",
-    "gulp-dom": "1.0.0",
-    "gulp-if": "3.0.0",
-    "gulp-scan": "0.1.4"
+    "package": "tizen package -t wgt --",
+    "build": "tizen package -t wgt --"
   },
   "type": "module"
 }

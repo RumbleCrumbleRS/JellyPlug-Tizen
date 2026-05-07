@@ -1,6 +1,72 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta http-equiv="refresh" content="0; url=www/index.html" />
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: gap: file: filesystem: ws: wss:;">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>Jellyfin</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --accent: #00a4dc;
+            --bg: #101010;
+            --fg: #f5f5f5;
+            --muted: #a0a0a0;
+            --field-bg: #1c1c1c;
+            --field-border: #303030;
+            --error: #ff6b6b;
+        }
+        html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: 'Segoe UI', Roboto, system-ui, sans-serif; }
+        #boot-status, #connection-screen { display: none; height: 100%; }
+        body[data-state="loading"] #boot-status { display: flex; }
+        body[data-state="connect"] #connection-screen { display: flex; }
+        #boot-status, #connection-screen { align-items: center; justify-content: center; flex-direction: column; gap: 1.5rem; padding: 4rem; box-sizing: border-box; text-align: center; }
+        h1 { font-size: 2.5rem; margin: 0 0 0.5rem; color: var(--accent); }
+        p.muted { color: var(--muted); margin: 0; font-size: 1.1rem; }
+        form { display: flex; flex-direction: column; gap: 1rem; width: min(640px, 80vw); }
+        label { font-size: 1rem; color: var(--muted); text-align: left; }
+        input[type="url"] {
+            font-size: 1.4rem; padding: 1rem 1.25rem;
+            background: var(--field-bg); color: var(--fg);
+            border: 2px solid var(--field-border); border-radius: 0.5rem;
+            outline: none;
+        }
+        input[type="url"]:focus { border-color: var(--accent); }
+        button {
+            font-size: 1.3rem; padding: 1rem 2rem;
+            background: var(--accent); color: #fff;
+            border: 2px solid transparent; border-radius: 0.5rem;
+            cursor: pointer;
+        }
+        button:focus { border-color: #fff; outline: none; }
+        .spinner {
+            width: 64px; height: 64px;
+            border: 6px solid var(--field-border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .error { color: var(--error); font-size: 1rem; min-height: 1.5em; }
+    </style>
+    <script src="$WEBAPIS/webapis/webapis.js"></script>
+    <script src="tizen.js"></script>
+    <script src="bootstrap.js" defer></script>
 </head>
+<body data-state="loading">
+    <main id="boot-status" aria-live="polite">
+        <div class="spinner" role="presentation"></div>
+        <p class="muted" id="boot-message">Loading Jellyfin web client&hellip;</p>
+    </main>
+    <main id="connection-screen">
+        <h1>Jellyfin</h1>
+        <p class="muted">Enter the address of your Jellyfin server to load its web client.</p>
+        <form id="server-form" autocomplete="off">
+            <label for="server-url">Server URL</label>
+            <input type="url" id="server-url" name="server-url" placeholder="http://192.168.1.100:8096" required inputmode="url" spellcheck="false">
+            <p class="error" id="connection-error"></p>
+            <button type="submit">Connect</button>
+        </form>
+    </main>
+</body>
 </html>

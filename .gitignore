@@ -1,4 +1,6 @@
 *.wgt
-www
-.*
 node_modules
+.DS_Store
+.tizen-build
+.tizen.sign
+.tmp
