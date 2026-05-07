@@ -1,5 +1,11 @@
-# Release: build a signed Tizen .wgt and attach to the GitHub Release.
+# Release: publish a pre-built signed Tizen .wgt as a GitHub Release.
 # Triggered by tags matching tizen-v*.
+#
+# The workflow looks for `release-artifacts/v<version>/*.wgt` in the tagged
+# commit (where <version> is everything after `tizen-v`) and attaches it to
+# the Release. The widget is built and signed locally by the maintainer (see
+# `packages/shell-tizen/scripts/build-wgt.sh` and `release-artifacts/README.md`)
+# until the CI image + Tizen signing secrets are wired up.
 
 name: release-tizen
 
@@ -10,35 +16,35 @@ on:
 
 jobs:
   release:
-    name: build + upload .wgt
+    name: attach signed .wgt to Release
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/jellyfin/tizen-studio:latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Configure Tizen signing profile
-        env:
-          # Author/distributor certificates exported from Samsung Seller Office.
-          # Stored as repo secrets; never committed.
-          TIZEN_AUTHOR_P12_BASE64: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
-          TIZEN_AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
-          TIZEN_DISTRIBUTOR_P12_BASE64: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
-          TIZEN_DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
-        run: bash tooling/ci/configure-tizen-signing.sh
-      - name: Build signed .wgt
-        run: pnpm --filter @jellyfin-tv/shell-tizen build
-      - name: Attach to release
+
+      - name: Resolve version + artifact path
+        id: resolve
+        run: |
+          tag="${GITHUB_REF##*/}"            # tizen-v1.0.0
+          version="${tag#tizen-v}"           # 1.0.0
+          dir="release-artifacts/v${version}"
+          shopt -s nullglob
+          wgts=("$dir"/*.wgt)
+          shopt -u nullglob
+          if [[ ${#wgts[@]} -eq 0 ]]; then
+            echo "::error::No .wgt found in $dir for tag $tag. Build locally and commit it before tagging." >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "wgt_path=${wgts[0]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release + attach .wgt
         uses: softprops/action-gh-release@v2
         with:
-          files: packages/shell-tizen/dist/*.wgt
+          name: "Tizen Shell v${{ steps.resolve.outputs.version }}"
+          files: ${{ steps.resolve.outputs.wgt_path }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
