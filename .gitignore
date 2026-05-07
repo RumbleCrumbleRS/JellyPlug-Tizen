@@ -15,6 +15,9 @@ build/
 local.properties
 .gradle/
 
+# Pre-built release artifacts checked in until CI signing is wired up.
+!release-artifacts/**/*.wgt
+
 # IDEs
 .vscode/
 .idea/
