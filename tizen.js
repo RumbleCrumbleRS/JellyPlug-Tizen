@@ -1,7 +1,9 @@
 (function () {
     'use strict';
 
-    console.log('Tizen adapter');
+    var hasTizen = typeof tizen !== 'undefined' && tizen && tizen.application;
+    var hasWebapis = typeof webapis !== 'undefined' && webapis;
+    console.log('Tizen adapter (hasTizen=' + hasTizen + ')');
 
     // Similar to jellyfin-web
     function generateDeviceId() {
@@ -21,11 +23,21 @@
         return deviceId;
     }
 
+    function getAppVersion() {
+        if (!hasTizen) return '0.0.0-browser';
+        try {
+            return tizen.application.getCurrentApplication().appInfo.version;
+        } catch (e) {
+            console.warn('Could not read Tizen app version', e);
+            return '0.0.0-unknown';
+        }
+    }
+
     var AppInfo = {
         deviceId: getDeviceId(),
         deviceName: 'Samsung Smart TV',
         appName: 'Jellyfin for Tizen',
-        appVersion: tizen.application.getCurrentApplication().appInfo.version
+        appVersion: getAppVersion()
     };
 
     // List of supported features
@@ -52,18 +64,28 @@
             return Promise.resolve(systeminfo);
         }
 
+        if (!hasTizen || !tizen.systeminfo) {
+            systeminfo = {
+                resolutionWidth: window.screen ? window.screen.width : 1920,
+                resolutionHeight: window.screen ? window.screen.height : 1080
+            };
+            return Promise.resolve(systeminfo);
+        }
+
         return new Promise(function (resolve) {
             tizen.systeminfo.getPropertyValue('DISPLAY', function (result) {
                 var devicePixelRatio = 1;
 
-                if (typeof webapis.productinfo.is8KPanelSupported === 'function' && webapis.productinfo.is8KPanelSupported()){
-                    console.log("8K UHD is supported");
-                    devicePixelRatio = 4;
-                } else if (typeof webapis.productinfo.isUdPanelSupported === 'function' && webapis.productinfo.isUdPanelSupported()){
-                    console.log("4K UHD is supported");
-                    devicePixelRatio = 2;
-                } else {
-                    console.log("UHD is not supported");
+                if (hasWebapis && webapis.productinfo) {
+                    if (typeof webapis.productinfo.is8KPanelSupported === 'function' && webapis.productinfo.is8KPanelSupported()){
+                        console.log("8K UHD is supported");
+                        devicePixelRatio = 4;
+                    } else if (typeof webapis.productinfo.isUdPanelSupported === 'function' && webapis.productinfo.isUdPanelSupported()){
+                        console.log("4K UHD is supported");
+                        devicePixelRatio = 2;
+                    } else {
+                        console.log("UHD is not supported");
+                    }
                 }
 
                 systeminfo = Object.assign({}, result, {
@@ -111,7 +133,9 @@
 
             exit: function () {
                 postMessage('AppHost.exit');
-                tizen.application.getCurrentApplication().exit();
+                if (hasTizen) {
+                    try { tizen.application.getCurrentApplication().exit(); } catch (e) { console.warn(e); }
+                }
             },
 
             getDefaultLayout: function () {
@@ -180,6 +204,7 @@
     };
 
     window.addEventListener('load', function () {
+        if (!hasTizen || !tizen.tvinputdevice) return;
         tizen.tvinputdevice.registerKey('MediaPlay');
         tizen.tvinputdevice.registerKey('MediaPause');
         tizen.tvinputdevice.registerKey('MediaStop');
@@ -190,6 +215,7 @@
     });
 
     function updateKeys() {
+        if (!hasTizen || !tizen.tvinputdevice) return;
         if (location.hash.indexOf('/queue') !== -1 || location.hash.indexOf('/video') !== -1) {
             // Disable on-screen playback control, if available on the page
             tizen.tvinputdevice.registerKey('MediaPlayPause');
