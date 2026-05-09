@@ -414,9 +414,25 @@
   // On Chrome >=70 the index.html bootstrap skips loading babel.min.js
   // entirely, so this code path is a no-op (typeof Babel === 'undefined').
 
+  // Match Chrome/N or Chromium/N. Some Samsung Tizen WebViews report
+  // `Chromium/56` instead of `Chrome/56` (Q60R 2019 panels seen in JEL-401),
+  // so match both. Fall back to a feature-probe of optional chaining (?.)
+  // so we still trigger transpilation even if a future TV ships an
+  // unexpected UA shape — parse failure is the actual failure mode.
   function isLegacyChromium() {
-    var m = /Chrome\/(\d+)\./.exec(navigator.userAgent || "");
-    return !!(m && parseInt(m[1], 10) < 70);
+    var ua = navigator.userAgent || "";
+    var m = /(?:Chrome|Chromium)\/(\d+)\./.exec(ua);
+    if (m && parseInt(m[1], 10) < 70) return true;
+    // Feature probe: build a script that uses ES2020 optional chaining.
+    // If the engine cannot parse it, we are on a legacy WebView regardless
+    // of what the UA string claims.
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function("var a={};return a?.b");
+      return false;
+    } catch (e) {
+      return true;
+    }
   }
 
   function isJellyfinWebBundle(src) {
@@ -424,6 +440,21 @@
     if (/\.bundle\.js$/i.test(bare)) return true;
     if (/(^|\/)serviceworker\.js$/i.test(bare)) return true;
     return false;
+  }
+
+  var SHELL_DEBUG = false;
+  try {
+    SHELL_DEBUG = localStorage.getItem("jellyfin.shell.debug") === "1";
+  } catch (e) {
+    /* ignore */
+  }
+  function shellLog() {
+    if (!SHELL_DEBUG) return;
+    try {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift("[shell]");
+      console.log.apply(console, args);
+    } catch (_) {}
   }
 
   function babelTranspile(src) {
@@ -443,7 +474,16 @@
   }
 
   function transpileLegacyScripts(doc, baseUrl) {
-    if (!isLegacyChromium() || typeof window.Babel === "undefined") {
+    var legacy = isLegacyChromium();
+    var hasBabel = typeof window.Babel !== "undefined";
+    shellLog("transpile gate: legacy=" + legacy + " babel=" + hasBabel);
+    if (!legacy) return Promise.resolve();
+    if (!hasBabel) {
+      try {
+        console.warn(
+          "shell: legacy Chromium detected but Babel not loaded — server plugins using ES2020+ syntax will fail to parse",
+        );
+      } catch (_) {}
       return Promise.resolve();
     }
     var scripts = Array.prototype.slice.call(doc.querySelectorAll("script"));
@@ -466,9 +506,27 @@
           .then(function (code) {
             var out = babelTranspile(code);
             if (out == null) return;
-            var blob = new Blob([out], { type: "application/javascript" });
-            s.setAttribute("src", URL.createObjectURL(blob));
+            // Inline the transpiled code instead of swapping `src` to a blob:
+            // URL. Two reasons (JEL-401 follow-up):
+            //   1. Chromium 56's document.open()/document.write() handoff can
+            //      invalidate Blob URL bindings created on the prior document,
+            //      so <script src="blob:..."> resolves to about:blank and the
+            //      plugin silently never executes.
+            //   2. The default Tizen widget CSP (`default-src 'self'`) blocks
+            //      `blob:` and `data:` script sources unless the widget opts
+            //      in, which we don't.
+            // Inline scripts execute at parse time; defer/async on the
+            // original tag are dropped, but server plugins are typically
+            // self-contained DOM/CSS injectors and tolerate earlier
+            // execution. Original src is preserved on a data attribute for
+            // diagnostics.
+            s.removeAttribute("src");
+            s.removeAttribute("defer");
+            s.removeAttribute("async");
+            s.removeAttribute("type");
+            s.textContent = out;
             s.setAttribute("data-shell-transpiled-from", url);
+            shellLog("transpiled+inlined", url);
           })
           .catch(function (e) {
             try {
@@ -482,6 +540,7 @@
       if (transpiled != null && transpiled !== content) {
         s.textContent = transpiled;
         s.setAttribute("data-shell-transpiled-inline", "1");
+        shellLog("transpiled inline script");
       }
       return null;
     });
