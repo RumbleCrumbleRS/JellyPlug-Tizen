@@ -11,7 +11,7 @@
          @babel/standalone lets the shell transpile those plugin scripts at
          load time before document.write, so they parse and run on old
          WebViews. Loaded conditionally to avoid the ~3 MB cost on newer TVs. -->
-    <script>(function(){var m=/Chrome\/(\d+)\./.exec(navigator.userAgent||'');if(m&&parseInt(m[1],10)<70)document.write('<script src="babel.min.js"><\/script>');})();</script>
+    <script>(function(){var ua=navigator.userAgent||'';var m=/(?:Chrome|Chromium)\/(\d+)\./.exec(ua);var legacy=!!(m&&parseInt(m[1],10)<70);if(!legacy){try{new Function('var a={};return a?.b');}catch(e){legacy=true;}}if(legacy){document.write('<script src="babel.min.js"><\/script>');document.write('<script>try{console.log("[shell] babel loaded:",typeof Babel!=="undefined","ua:",navigator.userAgent);}catch(_){}<\/script>');}})();</script>
     <!-- Boot script registers Tizen TV remote keys, exposes window.NativeShell,
          then either shows the connect screen or loads ${server}/web/.
          All flow stays on widget origin so tizen.* / webapis.* remain available. -->
