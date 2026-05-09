@@ -340,6 +340,23 @@
     }
     merged.servers = [serverUrl];
     merged.multiserver = false;
+    // JEL-206: Tizen 5.0 (Chromium 56) and 5.5 (Chromium 69) cannot parse
+    // ES2020+ syntax (?., ??, ||=, private class fields, etc.).
+    // jellyfin-web core is transpiled for these targets via @babel/preset-env
+    // (browserslist includes Chrome 56), but server-installed third-party
+    // web plugins are served raw and frequently use modern syntax — a single
+    // ?. throws SyntaxError at parse time and the plugin module fails
+    // silently. Strip non-builtin plugin specs on old WebViews so the core
+    // web client still boots cleanly. Built-in plugin specs look like
+    // "htmlVideoPlayer/plugin" — bare identifiers, no path or URL.
+    var chromeMatch = /Chrome\/(\d+)\./.exec(navigator.userAgent || "");
+    var chromeMajor = chromeMatch ? parseInt(chromeMatch[1], 10) : 0;
+    if (chromeMajor && chromeMajor < 70 && Array.isArray(merged.plugins)) {
+      var BUILTIN_PLUGIN_RE = /^[A-Za-z][A-Za-z0-9]*(\/plugin)?$/;
+      merged.plugins = merged.plugins.filter(function (p) {
+        return typeof p === "string" && BUILTIN_PLUGIN_RE.test(p);
+      });
+    }
     var SAFE = JSON.stringify(serverUrl);
     var CFG_JSON = JSON.stringify(merged);
     return [
