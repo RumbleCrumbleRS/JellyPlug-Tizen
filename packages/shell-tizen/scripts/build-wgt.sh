@@ -21,7 +21,7 @@ SRC_DIR="$PKG_DIR/src"
 CONFIG_XML="$PKG_DIR/tizen/config.xml"
 STAGE_DIR="$PKG_DIR/build/widget"
 DIST_DIR="$PKG_DIR/dist"
-WGT_NAME="JellyfinShell.wgt"
+WGT_NAME="JellyPlug.wgt"
 
 # Pick the right CLI binary:
 #   - Linux/macOS containers ship `tizen` (CI image).
