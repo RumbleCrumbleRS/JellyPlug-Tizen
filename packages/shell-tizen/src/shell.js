@@ -473,6 +473,76 @@
     }
   }
 
+  // Inject runtime polyfills for Web APIs that Chromium 56 lacks but that
+  // server plugins (JellyfinEnhanced etc.) call at runtime. Babel handles
+  // syntax (?.  ??) but cannot polyfill built-ins; we must add them here.
+  // Only injected when isLegacyChromium() is true so modern TVs see no cost.
+  //
+  // Confirmed needed (JEL-401 follow-up):
+  //   Promise.allSettled  — Chrome 76; used in /JellyfinEnhanced/script
+  //   Object.fromEntries  — Chrome 73; common in plugin init code
+  //   Array.prototype.flat/flatMap — Chrome 69; data-pipeline helpers
+  //   queueMicrotask      — Chrome 71; async scheduling in plugins
+  //   globalThis          — Chrome 71; module compat shim
+  function injectChromium56Polyfills(doc) {
+    if (!isLegacyChromium()) return;
+    var polyfillTag = doc.createElement("script");
+    polyfillTag.textContent = [
+      "(function(){",
+      // Promise.allSettled
+      "if(!Promise.allSettled){",
+      "  Promise.allSettled=function(ps){",
+      "    return Promise.all(ps.map(function(p){",
+      "      return Promise.resolve(p).then(",
+      "        function(v){return{status:'fulfilled',value:v};},",
+      "        function(r){return{status:'rejected',reason:r};});",
+      "    }));};",
+      "}",
+      // Object.fromEntries
+      "if(!Object.fromEntries){",
+      "  Object.fromEntries=function(it){",
+      "    var o={};",
+      "    Array.from(it).forEach(function(kv){o[kv[0]]=kv[1];});",
+      "    return o;};",
+      "}",
+      // Array.prototype.flat
+      "if(!Array.prototype.flat){",
+      "  Array.prototype.flat=function(d){",
+      "    d=d===undefined?1:Math.floor(d);",
+      "    if(d<1)return Array.prototype.slice.call(this);",
+      "    return [].concat.apply([],Array.prototype.map.call(this,function(v){",
+      "      return Array.isArray(v)&&d>1?v.flat(d-1):[v];}));};",
+      "}",
+      // Array.prototype.flatMap
+      "if(!Array.prototype.flatMap){",
+      "  Array.prototype.flatMap=function(f,t){",
+      "    return Array.prototype.map.call(this,f,t).flat(1);};",
+      "}",
+      // queueMicrotask
+      "if(!window.queueMicrotask){",
+      "  window.queueMicrotask=function(fn){Promise.resolve().then(fn);};",
+      "}",
+      // globalThis
+      "if(typeof globalThis==='undefined'){",
+      "  Object.defineProperty(Object.prototype,'__globalThis__',{get:function(){return this;},configurable:true});",
+      "  globalThis=__globalThis__;",
+      "  delete Object.prototype.__globalThis__;",
+      "}",
+      "})();",
+    ].join("\n");
+    polyfillTag.setAttribute("data-shell-polyfill", "1");
+    // Insert directly after the seed script (which is after the base tag).
+    var seedTag = doc.querySelector("script[data-shell-seed]");
+    if (seedTag && seedTag.nextSibling) {
+      doc.head.insertBefore(polyfillTag, seedTag.nextSibling);
+    } else if (seedTag) {
+      doc.head.appendChild(polyfillTag);
+    } else {
+      doc.head.insertBefore(polyfillTag, doc.head.firstChild);
+    }
+    shellLog("injected polyfills for Chromium 56");
+  }
+
   function transpileLegacyScripts(doc, baseUrl) {
     var legacy = isLegacyChromium();
     var hasBabel = typeof window.Babel !== "undefined";
@@ -577,6 +647,7 @@
       if (baseTag.nextSibling)
         doc.head.insertBefore(seedTag, baseTag.nextSibling);
       else doc.head.appendChild(seedTag);
+      injectChromium56Polyfills(doc);
       return transpileLegacyScripts(doc, baseUrl).then(function () {
         window.__jellyfinShellBootDone = true;
         document.open("text/html", "replace");
