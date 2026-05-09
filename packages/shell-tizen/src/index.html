@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1920, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Jellyfin Shell</title>
+    <!-- JEL-401: Tizen 5.0 / 5.5 ship Chromium 56 / 69 which cannot parse
+         ES2020+ syntax (?., ??, ||=, private fields, etc.). Server-installed
+         Jellyfin plugins (Editor's Choice, JellyfinEnhanced, NotifySync, ...)
+         are served raw and frequently use modern syntax. Vendoring
+         @babel/standalone lets the shell transpile those plugin scripts at
+         load time before document.write, so they parse and run on old
+         WebViews. Loaded conditionally to avoid the ~3 MB cost on newer TVs. -->
+    <script>(function(){var m=/Chrome\/(\d+)\./.exec(navigator.userAgent||'');if(m&&parseInt(m[1],10)<70)document.write('<script src="babel.min.js"><\/script>');})();</script>
     <!-- Boot script registers Tizen TV remote keys, exposes window.NativeShell,
          then either shows the connect screen or loads ${server}/web/.
          All flow stays on widget origin so tizen.* / webapis.* remain available. -->
