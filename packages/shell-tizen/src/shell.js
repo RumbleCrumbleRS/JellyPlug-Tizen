@@ -340,23 +340,12 @@
     }
     merged.servers = [serverUrl];
     merged.multiserver = false;
-    // JEL-206: Tizen 5.0 (Chromium 56) and 5.5 (Chromium 69) cannot parse
-    // ES2020+ syntax (?., ??, ||=, private class fields, etc.).
-    // jellyfin-web core is transpiled for these targets via @babel/preset-env
-    // (browserslist includes Chrome 56), but server-installed third-party
-    // web plugins are served raw and frequently use modern syntax — a single
-    // ?. throws SyntaxError at parse time and the plugin module fails
-    // silently. Strip non-builtin plugin specs on old WebViews so the core
-    // web client still boots cleanly. Built-in plugin specs look like
-    // "htmlVideoPlayer/plugin" — bare identifiers, no path or URL.
-    var chromeMatch = /Chrome\/(\d+)\./.exec(navigator.userAgent || "");
-    var chromeMajor = chromeMatch ? parseInt(chromeMatch[1], 10) : 0;
-    if (chromeMajor && chromeMajor < 70 && Array.isArray(merged.plugins)) {
-      var BUILTIN_PLUGIN_RE = /^[A-Za-z][A-Za-z0-9]*(\/plugin)?$/;
-      merged.plugins = merged.plugins.filter(function (p) {
-        return typeof p === "string" && BUILTIN_PLUGIN_RE.test(p);
-      });
-    }
+    // JEL-401 (supersedes JEL-206): we no longer strip non-builtin plugin
+    // specs on old Chromium. Server plugins are loaded as <script> tags
+    // injected into /web/index.html, not via cfg.plugins[]; the strip
+    // filter never matched for the upstream-builtin specs in cfg.plugins
+    // anyway. Plugin scripts that use ES2020+ syntax are transpiled by
+    // transpileLegacyScripts() before document.write — see below.
     var SAFE = JSON.stringify(serverUrl);
     var CFG_JSON = JSON.stringify(merged);
     return [
@@ -408,6 +397,97 @@
       });
   }
 
+  // ---- Plugin script transpilation (JEL-401) ----------------------------
+  //
+  // Tizen 5.0 / 5.5 ship Chromium 56 / 69 which cannot parse ES2020+
+  // syntax (?., ??, ||=, private fields, etc.). jellyfin-web's own bundles
+  // are transpiled for these targets at build time, but server-installed
+  // Jellyfin plugins (Editor's Choice, JellyfinEnhanced, NotifySync, ...)
+  // are served raw — a single ?. token throws SyntaxError at parse time and
+  // the entire plugin module silently fails to register. We pre-fetch any
+  // <script> tag the server has injected into index.html that is NOT a
+  // jellyfin-web webpack bundle, run it through @babel/standalone targeting
+  // Chrome 56, and substitute a Blob URL containing the transpiled code.
+  // Defer ordering is preserved because the replacement <script> still
+  // carries the original defer attribute.
+  //
+  // On Chrome >=70 the index.html bootstrap skips loading babel.min.js
+  // entirely, so this code path is a no-op (typeof Babel === 'undefined').
+
+  function isLegacyChromium() {
+    var m = /Chrome\/(\d+)\./.exec(navigator.userAgent || "");
+    return !!(m && parseInt(m[1], 10) < 70);
+  }
+
+  function isJellyfinWebBundle(src) {
+    var bare = String(src || "").split("?")[0];
+    if (/\.bundle\.js$/i.test(bare)) return true;
+    if (/(^|\/)serviceworker\.js$/i.test(bare)) return true;
+    return false;
+  }
+
+  function babelTranspile(src) {
+    try {
+      return window.Babel.transform(src, {
+        presets: [["env", { targets: { chrome: "56" }, modules: false }]],
+        sourceType: "script",
+        compact: true,
+        comments: false,
+      }).code;
+    } catch (e) {
+      try {
+        console.warn("shell: babel transpile failed", e && e.message);
+      } catch (_) {}
+      return null;
+    }
+  }
+
+  function transpileLegacyScripts(doc, baseUrl) {
+    if (!isLegacyChromium() || typeof window.Babel === "undefined") {
+      return Promise.resolve();
+    }
+    var scripts = Array.prototype.slice.call(doc.querySelectorAll("script"));
+    var jobs = scripts.map(function (s) {
+      if (s.getAttribute("data-shell-seed") === "1") return null;
+      var src = s.getAttribute("src");
+      if (src) {
+        if (isJellyfinWebBundle(src)) return null;
+        var url;
+        try {
+          url = new URL(src, baseUrl).href;
+        } catch (_) {
+          return null;
+        }
+        return fetch(url, { cache: "no-store", credentials: "omit" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (code) {
+            var out = babelTranspile(code);
+            if (out == null) return;
+            var blob = new Blob([out], { type: "application/javascript" });
+            s.setAttribute("src", URL.createObjectURL(blob));
+            s.setAttribute("data-shell-transpiled-from", url);
+          })
+          .catch(function (e) {
+            try {
+              console.warn("shell: skip transpile", url, e && e.message);
+            } catch (_) {}
+          });
+      }
+      var content = s.textContent || "";
+      if (!content || !content.replace(/\s/g, "")) return null;
+      var transpiled = babelTranspile(content);
+      if (transpiled != null && transpiled !== content) {
+        s.textContent = transpiled;
+        s.setAttribute("data-shell-transpiled-inline", "1");
+      }
+      return null;
+    });
+    return Promise.all(jobs);
+  }
+
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/";
     return Promise.all([
@@ -433,14 +513,17 @@
       // Seed config.json BEFORE any jellyfin-web script runs so the
       // user only enters the server URL once (in the shell).
       var seedTag = doc.createElement("script");
+      seedTag.setAttribute("data-shell-seed", "1");
       seedTag.textContent = buildSeedScript(serverUrl, baseConfig);
       if (baseTag.nextSibling)
         doc.head.insertBefore(seedTag, baseTag.nextSibling);
       else doc.head.appendChild(seedTag);
-      window.__jellyfinShellBootDone = true;
-      document.open("text/html", "replace");
-      document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
-      document.close();
+      return transpileLegacyScripts(doc, baseUrl).then(function () {
+        window.__jellyfinShellBootDone = true;
+        document.open("text/html", "replace");
+        document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
+        document.close();
+      });
     });
   }
 
