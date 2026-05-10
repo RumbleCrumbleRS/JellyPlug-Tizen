@@ -520,6 +520,7 @@
         shellVersion +
         ' legacy="+(init.legacy?"1":"0")+" babel="+(init.babel?"1":"0")+" poly="+(init.polyfilled?"1":"0"),',
       '    "plugins found="+(init.scriptsFound||0)+" tr="+(init.transpiled||0)+" fail="+(init.transpileFailed||0)+" skip="+(init.skipped||0),',
+      '    "dyn="+(init.dynScripts||0)+" dynTr="+(init.dynTranspiled||0)+" dynFail="+(init.dynFail||0)+" dynBy="+(init.dynBypass||0),',
       '    "err="+d.errors.length+" warn="+d.warns.length+" ua="+s.ua.slice(0,40)];',
       "  var es=d.errors.slice(-8);",
       '  for(var i=0;i<es.length;i++){lines.push("E "+es[i].f+":"+es[i].l+" "+es[i].m);}',
@@ -529,6 +530,88 @@
       "}",
       "function start(){try{render();}catch(_){}setInterval(function(){try{render();}catch(_){}},800);}",
       'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start);}else{start();}',
+      "})();",
+    ].join("\n");
+  }
+
+  // ---- Runtime dynamic-script interceptor (JEL-401 v1.0.11) -------------
+  //
+  // transpileLegacyScripts() above only catches <script src=...> tags that
+  // are present in /web/index.html at parse time. Server plugins like
+  // JellyfinEnhanced load *additional* sub-modules (theme-selector.js,
+  // colored-activity-icons.js, ui.js, more-info-menu.js, calendar-page.js,
+  // requests-page.js) at runtime via:
+  //
+  //   var s = document.createElement('script');
+  //   s.src = baseUrl + '/sub/script.js';
+  //   document.head.appendChild(s);
+  //
+  // Those bypass the parse-time transpile and parse-fail on Chromium 56 with
+  // "Unexpected token ." (optional chaining / class fields). This interceptor
+  // overrides HTMLScriptElement.prototype.src setter (and setAttribute('src',
+  // …)) so any dynamic script.src assignment triggers a synchronous fetch +
+  // Babel transpile + textContent inline before the script element is added
+  // to the DOM. We fire a synthetic 'load' event after a microtask so plugin
+  // code that wires .onload still resolves.
+  //
+  // Sync XHR is deprecated everywhere but still works on Chromium 56 and is
+  // the only way to make the setter call appear synchronous to the calling
+  // plugin code, which often does s.src=u; head.appendChild(s); s.onload=cb
+  // in immediate succession.
+  function buildScriptInterceptorSeed() {
+    return [
+      "(function(){",
+      "if(window.__shellScriptInterceptor)return;",
+      "window.__shellScriptInterceptor=true;",
+      "var d=window.__shellDiagInit=window.__shellDiagInit||{};",
+      "d.dynScripts=0;d.dynTranspiled=0;d.dynFail=0;d.dynBypass=0;",
+      "var proto=HTMLScriptElement.prototype;",
+      "var desc=Object.getOwnPropertyDescriptor(proto,'src')||",
+      "  Object.getOwnPropertyDescriptor(HTMLElement.prototype,'src');",
+      "if(!desc||!desc.set){return;}",
+      "var origSrcSet=desc.set,origSrcGet=desc.get;",
+      "var origSetAttr=proto.setAttribute||Element.prototype.setAttribute;",
+      "function transpile(src){",
+      "  if(typeof window.Babel==='undefined')return null;",
+      "  try{return window.Babel.transform(src,{presets:[['env',{targets:{chrome:'56'},modules:false}]],sourceType:'script',compact:true,comments:false}).code;}catch(e){",
+      "    try{console.warn('shell: dyn babel fail',e&&e.message);}catch(_){}return null;}",
+      "}",
+      "function intercept(el,url){",
+      "  d.dynScripts++;",
+      "  var u=String(url==null?'':url);",
+      "  if(!u||/^(blob:|data:|about:|javascript:)/i.test(u)){d.dynBypass++;return false;}",
+      "  if(/\\.bundle\\.js(\\?|$)/i.test(u)){d.dynBypass++;return false;}",
+      "  if(/(^|\\/)serviceworker\\.js$/i.test(u)){d.dynBypass++;return false;}",
+      "  var resolved=u;try{resolved=new URL(u,document.baseURI||location.href).href;}catch(_){}",
+      "  var xhr;try{xhr=new XMLHttpRequest();xhr.open('GET',resolved,false);xhr.send();}catch(e){d.dynFail++;return false;}",
+      "  if(xhr.status<200||xhr.status>=300){d.dynFail++;return false;}",
+      "  var out=transpile(xhr.responseText);",
+      "  if(out==null){d.dynFail++;return false;}",
+      "  try{el.removeAttribute('async');}catch(_){}",
+      "  try{el.removeAttribute('defer');}catch(_){}",
+      "  el.text=out;",
+      "  el.setAttribute('data-shell-dyn-transpiled',resolved);",
+      "  d.dynTranspiled++;",
+      "  setTimeout(function(){",
+      "    try{el.dispatchEvent(new Event('load'));}catch(_){",
+      "      try{var ev=document.createEvent('Event');ev.initEvent('load',false,false);el.dispatchEvent(ev);}catch(__){}",
+      "    }",
+      "    if(typeof el.onload==='function'){try{el.onload({type:'load',target:el});}catch(_){}}",
+      "  },0);",
+      "  return true;",
+      "}",
+      "Object.defineProperty(proto,'src',{configurable:true,enumerable:true,",
+      "  get:function(){return origSrcGet.call(this);},",
+      "  set:function(url){",
+      "    try{if(intercept(this,url))return;}catch(e){d.dynFail++;}",
+      "    origSrcSet.call(this,url);",
+      "  }});",
+      "proto.setAttribute=function(name,value){",
+      "  if(typeof name==='string'&&name.toLowerCase()==='src'){",
+      "    try{if(intercept(this,value))return;}catch(e){d.dynFail++;}",
+      "  }",
+      "  return origSetAttr.apply(this,arguments);",
+      "};",
       "})();",
     ].join("\n");
   }
@@ -772,7 +855,7 @@
       window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy;
       var diagTag = doc.createElement("script");
       diagTag.setAttribute("data-shell-diag", "1");
-      diagTag.textContent = buildDiagSeedScript("1.0.10");
+      diagTag.textContent = buildDiagSeedScript("1.0.11");
       doc.head.insertBefore(diagTag, baseTag);
       // Seed config.json BEFORE any jellyfin-web script runs so the
       // user only enters the server URL once (in the shell).
@@ -783,6 +866,24 @@
         doc.head.insertBefore(seedTag, baseTag.nextSibling);
       else doc.head.appendChild(seedTag);
       injectChromium56Polyfills(doc);
+      // JEL-401 v1.0.11: install runtime <script src=> interceptor so plugin
+      // sub-modules loaded dynamically (theme-selector.js etc.) get
+      // transpiled too. Must run AFTER polyfills (so interceptor + transpiled
+      // code both have allSettled/fromEntries/etc) and BEFORE any plugin or
+      // jellyfin-web script that might inject dynamic scripts.
+      if (isLegacyChromium()) {
+        var interceptorTag = doc.createElement("script");
+        interceptorTag.setAttribute("data-shell-interceptor", "1");
+        interceptorTag.textContent = buildScriptInterceptorSeed();
+        var polyTag = doc.querySelector("script[data-shell-polyfill]");
+        if (polyTag && polyTag.nextSibling) {
+          doc.head.insertBefore(interceptorTag, polyTag.nextSibling);
+        } else if (polyTag) {
+          doc.head.appendChild(interceptorTag);
+        } else {
+          doc.head.insertBefore(interceptorTag, doc.head.firstChild);
+        }
+      }
       return transpileLegacyScripts(doc, baseUrl).then(function () {
         window.__jellyfinShellBootDone = true;
         document.open("text/html", "replace");
