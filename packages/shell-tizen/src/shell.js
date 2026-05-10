@@ -484,6 +484,55 @@
   //   Array.prototype.flat/flatMap — Chrome 69; data-pipeline helpers
   //   queueMicrotask      — Chrome 71; async scheduling in plugins
   //   globalThis          — Chrome 71; module compat shim
+  // ---- Shell diagnostic HUD (JEL-401 followup) -------------------------
+  // Q60R retail TVs lock down `sdb dlog` (secure_protocol) and the Web
+  // Inspector port (no debug-launch path on production firmware), so we
+  // cannot read JS errors from the host. This injects an always-on overlay
+  // that captures `error`, `unhandledrejection`, and `console.error/warn`
+  // and renders the last few entries top-left so the board can screenshot
+  // an actual error name instead of guessing at the next polyfill.
+  function buildDiagSeedScript(shellVersion) {
+    return [
+      "(function(){",
+      "if(window.__shellDiag)return;",
+      "var MAX=30;",
+      'window.__shellDiag={errors:[],warns:[],stats:{ua:(navigator.userAgent||"").slice(0,80),scriptsFound:0,transpiled:0,transpileFailed:0,skipped:0}};',
+      'function fmt(s){s=String(s==null?"":s);return s.length>140?s.slice(0,140)+"…":s;}',
+      'function trimUrl(u){u=String(u||"");var m=/\\/([^\\/?#]+)(\\?|#|$)/.exec(u);return m?m[1]:u.slice(-30);}',
+      "function pushErr(rec){var d=window.__shellDiag;if(d.errors.length>=MAX)d.errors.shift();d.errors.push(rec);}",
+      "function pushWarn(rec){var d=window.__shellDiag;if(d.warns.length>=MAX)d.warns.shift();d.warns.push(rec);}",
+      'window.addEventListener("error",function(e){pushErr({f:trimUrl(e.filename),l:e.lineno||0,m:fmt((e.message)||(e.error&&e.error.message))});},true);',
+      'window.addEventListener("unhandledrejection",function(e){var r=e.reason;pushErr({f:"reject",l:0,m:fmt(r&&(r.message||r.toString&&r.toString())||r)});});',
+      "var origErr=console.error,origWarn=console.warn;",
+      'console.error=function(){try{pushErr({f:"console",l:0,m:fmt(Array.prototype.join.call(arguments," "))});}catch(_){}return origErr.apply(this,arguments);};',
+      'console.warn=function(){try{pushWarn({f:"console",l:0,m:fmt(Array.prototype.join.call(arguments," "))});}catch(_){}return origWarn.apply(this,arguments);};',
+      "function render(){",
+      "  if(!document.body)return;",
+      '  var el=document.getElementById("__shell_diag");',
+      "  if(!el){",
+      '    el=document.createElement("div");',
+      '    el.id="__shell_diag";',
+      '    el.style.cssText="position:fixed;top:0;left:0;z-index:2147483647;background:rgba(0,0,0,0.85);color:#0f0;font:11px/1.2 monospace;padding:4px 6px;max-width:55vw;max-height:90vh;overflow:hidden;white-space:pre;pointer-events:none;border-bottom-right-radius:4px;";',
+      "    document.body.appendChild(el);",
+      "  }",
+      "  var d=window.__shellDiag,s=d.stats,init=window.__shellDiagInit||{};",
+      '  var lines=["shell v' +
+        shellVersion +
+        ' legacy="+(init.legacy?"1":"0")+" babel="+(init.babel?"1":"0")+" poly="+(init.polyfilled?"1":"0"),',
+      '    "plugins found="+(init.scriptsFound||0)+" tr="+(init.transpiled||0)+" fail="+(init.transpileFailed||0)+" skip="+(init.skipped||0),',
+      '    "err="+d.errors.length+" warn="+d.warns.length+" ua="+s.ua.slice(0,40)];',
+      "  var es=d.errors.slice(-8);",
+      '  for(var i=0;i<es.length;i++){lines.push("E "+es[i].f+":"+es[i].l+" "+es[i].m);}',
+      "  var ws=d.warns.slice(-3);",
+      '  for(var j=0;j<ws.length;j++){lines.push("W "+ws[j].f+":"+ws[j].l+" "+ws[j].m);}',
+      '  el.textContent=lines.join("\\n");',
+      "}",
+      "function start(){try{render();}catch(_){}setInterval(function(){try{render();}catch(_){}},800);}",
+      'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start);}else{start();}',
+      "})();",
+    ].join("\n");
+  }
+
   function injectChromium56Polyfills(doc) {
     if (!isLegacyChromium()) return;
     var polyfillTag = doc.createElement("script");
@@ -614,15 +663,29 @@
       return Promise.resolve();
     }
     var scripts = Array.prototype.slice.call(doc.querySelectorAll("script"));
+    var counts = (window.__shellDiagInit = window.__shellDiagInit || {});
+    counts.legacy = legacy;
+    counts.babel = hasBabel;
+    counts.polyfilled = true;
+    counts.scriptsFound = 0;
+    counts.transpiled = 0;
+    counts.transpileFailed = 0;
+    counts.skipped = 0;
     var jobs = scripts.map(function (s) {
       if (s.getAttribute("data-shell-seed") === "1") return null;
+      if (s.getAttribute("data-shell-diag") === "1") return null;
       var src = s.getAttribute("src");
       if (src) {
-        if (isJellyfinWebBundle(src)) return null;
+        if (isJellyfinWebBundle(src)) {
+          counts.skipped++;
+          return null;
+        }
+        counts.scriptsFound++;
         var url;
         try {
           url = new URL(src, baseUrl).href;
         } catch (_) {
+          counts.skipped++;
           return null;
         }
         return fetch(url, { cache: "no-store", credentials: "omit" })
@@ -632,7 +695,11 @@
           })
           .then(function (code) {
             var out = babelTranspile(code);
-            if (out == null) return;
+            if (out == null) {
+              counts.transpileFailed++;
+              return;
+            }
+            counts.transpiled++;
             // Inline the transpiled code instead of swapping `src` to a blob:
             // URL. Two reasons (JEL-401 follow-up):
             //   1. Chromium 56's document.open()/document.write() handoff can
@@ -656,6 +723,7 @@
             shellLog("transpiled+inlined", url);
           })
           .catch(function (e) {
+            counts.transpileFailed++;
             try {
               console.warn("shell: skip transpile", url, e && e.message);
             } catch (_) {}
@@ -696,6 +764,16 @@
       var baseTag = doc.createElement("base");
       baseTag.href = baseUrl;
       doc.head.insertBefore(baseTag, doc.head.firstChild);
+      // Diagnostic HUD seed runs before EVERYTHING else so it can capture
+      // parse-time errors from polyfills, plugins, and jellyfin-web itself.
+      window.__shellDiagInit = window.__shellDiagInit || {};
+      window.__shellDiagInit.legacy = isLegacyChromium();
+      window.__shellDiagInit.babel = typeof window.Babel !== "undefined";
+      window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy;
+      var diagTag = doc.createElement("script");
+      diagTag.setAttribute("data-shell-diag", "1");
+      diagTag.textContent = buildDiagSeedScript("1.0.10");
+      doc.head.insertBefore(diagTag, baseTag);
       // Seed config.json BEFORE any jellyfin-web script runs so the
       // user only enters the server URL once (in the shell).
       var seedTag = doc.createElement("script");
