@@ -53,8 +53,17 @@ echo ">> "$TIZEN_CLI" build-web"
 # Tizen build-web emits .buildResult under the input dir.
 BUILD_RESULT="$STAGE_DIR/.buildResult"
 
-echo ">> "$TIZEN_CLI" package -t wgt"
-( cd "$BUILD_RESULT" && "$TIZEN_CLI" package -t wgt -o "$DIST_DIR" -- . )
+# Allow overriding the signing profile (SDK certs for general distribution
+# vs. TV certs for a specific device). Defaults to the active profile.
+SIGNING_PROFILE="${SIGNING_PROFILE:-}"
+PACKAGE_ARGS=( "package" "-t" "wgt" "-o" "$DIST_DIR" )
+if [[ -n "$SIGNING_PROFILE" ]]; then
+  PACKAGE_ARGS+=( "-s" "$SIGNING_PROFILE" )
+fi
+PACKAGE_ARGS+=( "--" "." )
+
+echo ">> $TIZEN_CLI ${PACKAGE_ARGS[*]}"
+( cd "$BUILD_RESULT" && "$TIZEN_CLI" "${PACKAGE_ARGS[@]}" )
 
 # Tizen names the output after <name> in config.xml; rename to a stable
 # filename so CI/QA always look in the same place.

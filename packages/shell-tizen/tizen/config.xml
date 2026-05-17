@@ -1,28 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Tizen application config for jellyfin-tv-shell.
-
-  Folded in from the JEL-3 prototype (`jellyfin-tizen-shell`) that PASSed QA
-  parity against jellyfin-web 10.11.8 on T-samsung-10.0-x86_64. Adjust the
-  application id / package and signing profile when promoting to production.
--->
-<widget xmlns="http://www.w3.org/ns/widgets"
-        xmlns:tizen="http://tizen.org/ns/widgets"
-        id="http://jellyfin.org/JellyfinShell"
-        version="1.0.11"
-        viewmodes="fullscreen">
+<widget xmlns:tizen="http://tizen.org/ns/widgets" xmlns="http://www.w3.org/ns/widgets" id="http://jellyfin.org/JellyfinShell" version="1.0.73" viewmodes="fullscreen">
     <access origin="*" subdomains="true"></access>
     <tizen:application id="JelShellTV.Jellyfin" package="JelShellTV" required_version="2.3"/>
     <author href="http://jellyfin.org" email="apps@jellyfin.org">Jellyfin</author>
     <content src="index.html"/>
-    <description>Jellyfin Tizen browser-shell. Loads the live Jellyfin web client so server plugins work 1:1.</description>
+    <description>Jellyfin Tizen browser-shell. Loads the Jellyfin web client 1:1 so server plugins work on TV.</description>
     <feature name="http://tizen.org/feature/screen.size.all"/>
     <icon src="icon.png"/>
-    <name>Jellyfin Shell</name>
     <tizen:metadata key="http://tizen.org/metadata/app_ui_type/base_screen_resolution" value="fullscreen"/>
-    <tizen:privilege name="http://tizen.org/privilege/internet"/>
-    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <name>Jellyfin Shell</name>
     <tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
     <tizen:profile name="tv"/>
     <tizen:setting screen-orientation="auto-rotation" context-menu="enable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
 </widget>

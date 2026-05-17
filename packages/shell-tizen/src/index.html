@@ -4,19 +4,124 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1920, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Jellyfin Shell</title>
+    <!-- QA-ONLY: seed server URL into localStorage so app auto-connects without UI.
+         Remove before production build.
+         JEL-1974 (v68): also seed `jellyfin.qa.bootMarks.enabled='1'` so the
+         boot-mark IIFE persists span-level timings. `babelPreload` flag is
+         the runtime switch between the optimized cold boot (`'1'`, default
+         for v68) and the v66-baseline reproduction (`'0'`, set by the
+         v66m WGT seed). Both flags are localStorage so QA can flip mid-
+         session via webapis if needed; production builds never trip them
+         because this seed block is removed before release. -->
+    <script>try{localStorage.setItem('jellyfin.shell.serverUrl','https://REDACTED-SERVER.example');localStorage.setItem('jellyfin.qa.overlay','1');localStorage.setItem('jellyfin.qa.bootMarks.enabled','1');localStorage.setItem('jellyfin.shell.legacy.babelPreload','__BABEL_PRELOAD_SEED__');localStorage.setItem('jellyfin.shell.indexCache','__INDEX_CACHE_SEED__');}catch(e){}</script>
+    <!-- JEL-1974 (v68): boot-mark IIFE captures shell-document spans so the
+         post-document.write beacon can measure babel preload critical
+         path (tBabelPreloadAppend, tBabelScriptAppend, tBabelReady) plus
+         /web/ fetch (tFirstWebFetchStart/End) and the document.open
+         moment (tDocumentWrite). Marks live in window.__qaMarks and are
+         persisted to localStorage['jellyfin.qa.bootMarks.current'] on
+         every mutation. Top of next boot rotates current->prior so the
+         beacon-side reader picks up the previous boot's full span set
+         as payload.priorBootMarks. Gated by
+         `jellyfin.qa.bootMarks.enabled='1'` so non-QA builds never even
+         allocate the buffer. -->
+    <script>(function(){try{var en=false;try{en=localStorage.getItem('jellyfin.qa.bootMarks.enabled')==='1';}catch(_){}if(!en){window.__qaMarks=null;return;}var now=function(){try{return performance.now();}catch(_){return 0;}};var prior=null;try{prior=localStorage.getItem('jellyfin.qa.bootMarks.current');}catch(_){}if(prior){try{localStorage.setItem('jellyfin.qa.bootMarks.prior',prior);}catch(_){}}var idx=0;try{var i=localStorage.getItem('jellyfin.qa.bootIndex');idx=(i?parseInt(i,10):0)+1;localStorage.setItem('jellyfin.qa.bootIndex',String(idx));}catch(_){}window.__qaMarks={bootIndex:idx,bootTs:Date.now(),tShellStart:now(),tBabelPreloadAppend:0,tBabelScriptAppend:0,tBabelReady:0,tFirstWebFetchStart:0,tFirstWebFetchEnd:0,tDocumentWrite:0};window.__qaMarksSave=function(){try{localStorage.setItem('jellyfin.qa.bootMarks.current',JSON.stringify(window.__qaMarks));}catch(_){}};window.__qaMarksSave();}catch(e){}})();</script>
+    <!-- JEL-1973 (v68): preload babel.min.js into HTTP cache + V8 code
+         cache on babel-needed legacy boot. Mirrors JEL-1967 pattern,
+         scoped to babel.min.js (3.13 MB / ~500-800 ms V8 parse on Tizen
+         5.5 Chromium 69 legacy). Second-or-later cold boot on a babel-
+         needed server (`legacy.babelNeeded='1'`, set by
+         transpileLegacyScriptsInner after the first slow-path Babel
+         transform) inserts <link rel=preload as=script href=babel.min.js>
+         so Chromium starts background V8 script-streaming parse +
+         populates the per-URL code cache. The post-document.write
+         <script src=babel.min.js> appendChild in __ensureBabel reuses
+         the warm cache and skips (or shrinks) main-thread parse.
+         Gated by `jellyfin.shell.legacy.babelPreload`: default '1' on
+         v68 builds, set to '0' on the v66m baseline WGT so QA can
+         compare cold-boot timing with vs without the optimization. -->
+    <script>(function(){try{window.__shellBabelPreload=0;var ua=navigator.userAgent||'';var m=/(?:Chrome|Chromium)\/(\d+)\./.exec(ua);var legacy=!!(m&&parseInt(m[1],10)<70);if(!legacy){try{new Function('var a={};return a?.b');}catch(e){legacy=true;}}if(!legacy)return;var needed=false;try{needed=localStorage.getItem('jellyfin.shell.legacy.babelNeeded')==='1';}catch(_){}if(!needed)return;var en='1';try{var v=localStorage.getItem('jellyfin.shell.legacy.babelPreload');if(v==='0'||v==='false')en='0';}catch(_){}if(en!=='1')return;/* JEL-1984: soft-skip preload when last >=2 transpile passes had full tx-cache coverage. Three-boot reseed (transpileLegacyScripts resets streak to 0 on first cache miss). __shellBabelPreload stays at 0 so QA can assert via window flag + DOM (no <link rel=preload href=babel.min.js>). */try{var st=parseInt(localStorage.getItem('jellyfin.shell.legacy.babelUnusedStreak')||'0',10)||0;if(st>=2)return;}catch(_){}try{var l=document.createElement('link');l.rel='preload';l.as='script';l.href='babel.min.js';document.head.appendChild(l);if(window.__qaMarks){window.__qaMarks.tBabelPreloadAppend=performance.now();if(window.__qaMarksSave)window.__qaMarksSave();}window.__shellBabelPreload=1;}catch(_){}}catch(e){}})();</script>
+    <!-- JEL-554 (v29): kick off /web/index.html + /web/config.json fetches BEFORE
+         shell.js is parsed/executed. Browser parallelizes network with JS parse
+         and Babel load. loadRemoteWebClient() picks up the in-flight promises
+         from window.__shellPrefetch instead of issuing fresh fetches. Saves a
+         full RTT pair on cold start. KEPT on fetch() because adoption requires
+         a Response object.
+         JEL-1289 (v55), JEL-1654, JEL-1924, JEL-1959: prefetched recorded
+         legacy-Chromium URLs (main bundle, plugin <script src>, secondary
+         .bundle.js, <link rel=stylesheet>) via fetch() to warm the HTTP cache.
+         JEL-1967 (v65): switch those four lists from fetch() to
+         <link rel=preload as=script|style>. Chromium starts a background V8
+         script-streaming parse on preload completion and populates the per-URL
+         code cache; when the post-document.write <script src=...> runs, V8
+         reuses the code cache and skips (or reduces) main-thread parse. fetch()
+         only warms HTTP cache; preload warms HTTP cache + V8 parse pipeline.
+         No SPA adoption (same as JEL-1924 / JEL-1959 — HTTP cache coalesces).
+         No crossOrigin attribute: Jellyfin web emits <script src> and
+         <link rel=stylesheet> without crossorigin, so the same-origin
+         credentialed request must match exactly for the V8 code cache + HTTP
+         cache to be reused on the post-document.write resolution. Setting
+         crossOrigin='anonymous' here would create a CORS-mode mismatch and
+         force a second fetch on legacy Chromium. Same-origin gate already
+         ensures all preloaded URLs sit on the server origin.
+         JEL-1415: legacy-detection mirrors shell.js isLegacyChromium() —
+         falls back to the optional-chaining probe when the UA regex misses
+         (Samsung Tizen 5.5 ships `69.0.3497.106/5.5` without `Chrome/`).
+         JEL-1580 (v58): origin-gate (server origin, not /web/ subpath) so
+         plugins served from /PluginName/... still match. -->
+    <script>(function(){try{var u=localStorage.getItem('jellyfin.shell.serverUrl');if(!u)return;u=String(u).replace(/\/+$/,'');var b=u+'/web/';var o=u+'/';var init={credentials:'omit'};function idxFetch(){if(window.__qaMarks){window.__qaMarks.tFirstWebFetchStart=performance.now();if(window.__qaMarksSave)window.__qaMarksSave();}return fetch(b+'index.html',init).then(function(r){if(window.__qaMarks){window.__qaMarks.tFirstWebFetchEnd=performance.now();if(window.__qaMarksSave)window.__qaMarksSave();}return r;});}var pf={baseUrl:b,index:idxFetch(),config:fetch(b+'config.json',init)};function preload(href,as){try{var l=document.createElement('link');l.rel='preload';l.as=as;l.href=href;document.head.appendChild(l);return 1;}catch(_){return 0;}}var ua=navigator.userAgent||'';var m=/(?:Chrome|Chromium)\/(\d+)\./.exec(ua);var legacy=!!(m&&parseInt(m[1],10)<70);if(!legacy){try{new Function('var a={};return a?.b');}catch(e){legacy=true;}}if(legacy){var plS=0,plB=0,plC=0;var bu=localStorage.getItem('jellyfin.shell.bundleUrl');if(bu&&bu.indexOf(b)===0){plS+=preload(bu,'script');}try{var pluRaw=localStorage.getItem('jellyfin.shell.pluginUrls');if(pluRaw){var plus=JSON.parse(pluRaw);if(plus&&plus.length){var pluSeen={};var pluN=0;for(var pi=0;pi<plus.length&&pluN<100;pi++){var pu=plus[pi];if(typeof pu!=='string')continue;if(pu.indexOf(o)!==0)continue;if(pluSeen[pu])continue;pluSeen[pu]=1;plS+=preload(pu,'script');pluN++;}}}}catch(_){}try{var sbRaw=localStorage.getItem('jellyfin.shell.secondaryBundleUrls');if(sbRaw){var sbs=JSON.parse(sbRaw);if(sbs&&sbs.length){var sbSeen={};var sbN=0;for(var si=0;si<sbs.length&&sbN<20;si++){var su=sbs[si];if(typeof su!=='string')continue;if(su.indexOf(o)!==0)continue;if(sbSeen[su])continue;sbSeen[su]=1;plB+=preload(su,'script');sbN++;}}}}catch(_){}try{var ssRaw=localStorage.getItem('jellyfin.shell.stylesheetUrls');if(ssRaw){var sss=JSON.parse(ssRaw);if(sss&&sss.length){var ssSeen={};var ssN=0;for(var ssi=0;ssi<sss.length&&ssN<20;ssi++){var ssu=sss[ssi];if(typeof ssu!=='string')continue;if(ssu.indexOf(o)!==0)continue;if(ssSeen[ssu])continue;ssSeen[ssu]=1;plC+=preload(ssu,'style');ssN++;}}}}catch(_){}window.__shellPreloadScripts=plS;window.__shellPreloadSecondaries=plB;window.__shellPreloadStylesheets=plC;}window.__shellPrefetch=pf;}catch(e){}})();</script>
     <!-- JEL-401: Tizen 5.0 / 5.5 ship Chromium 56 / 69 which cannot parse
          ES2020+ syntax (?., ??, ||=, private fields, etc.). Server-installed
          Jellyfin plugins (Editor's Choice, JellyfinEnhanced, NotifySync, ...)
          are served raw and frequently use modern syntax. Vendoring
          @babel/standalone lets the shell transpile those plugin scripts at
          load time before document.write, so they parse and run on old
-         WebViews. Loaded conditionally to avoid the ~3 MB cost on newer TVs. -->
-    <script>(function(){var ua=navigator.userAgent||'';var m=/(?:Chrome|Chromium)\/(\d+)\./.exec(ua);var legacy=!!(m&&parseInt(m[1],10)<70);if(!legacy){try{new Function('var a={};return a?.b');}catch(e){legacy=true;}}if(legacy){document.write('<script src="babel.min.js"><\/script>');document.write('<script>try{console.log("[shell] babel loaded:",typeof Babel!=="undefined","ua:",navigator.userAgent);}catch(_){}<\/script>');}})();</script>
+         WebViews. Loaded conditionally to avoid the ~3 MB cost on newer TVs.
+         JEL-930 (v50): replaced document.write with dynamic appendChild +
+         window.__babelReady promise. document.write of a 3 MB external
+         script was head-parse-blocking until babel.min.js had both
+         downloaded AND parsed on every legacy boot.
+         JEL-1034 (v53): defer babel network load until a plugin actually
+         needs transpile. window.__ensureBabel() is the lazy loader; on
+         plugin-light servers (every plugin hits MODERN_SYNTAX_RE fast path)
+         babel is never fetched, saving ~3.13 MB + ~500 ms parse on legacy
+         cold boot. loadRemoteWebClient() primes the loader speculatively
+         when isLegacyChromium() so the babel fetch overlaps the /web/
+         RTT for plugin-heavy legacy servers; the per-script call site in
+         transpileLegacyScriptsInner still awaits before Babel.transform(). -->
+    <script>(function(){var ua=navigator.userAgent||'';var m=/(?:Chrome|Chromium)\/(\d+)\./.exec(ua);var legacy=!!(m&&parseInt(m[1],10)<70);if(!legacy){try{new Function('var a={};return a?.b');}catch(e){legacy=true;}}window.__isLegacyChromium=legacy;if(!legacy){window.__ensureBabel=function(){return Promise.resolve();};window.__babelReady=Promise.resolve();return;}var promise=null;window.__ensureBabel=function(){if(promise)return promise;var s=document.createElement('script');s.src='babel.min.js';s.async=false;promise=new Promise(function(res){s.onload=function(){if(window.__qaMarks){window.__qaMarks.tBabelReady=performance.now();if(window.__qaMarksSave)window.__qaMarksSave();}try{console.log('[shell] babel loaded (lazy):',typeof Babel!=='undefined','ua:',navigator.userAgent);}catch(_){}res();};s.onerror=function(){try{console.warn('[shell] babel load failed');}catch(_){}res();};});document.head.appendChild(s);if(window.__qaMarks){window.__qaMarks.tBabelScriptAppend=performance.now();if(window.__qaMarksSave)window.__qaMarksSave();}window.__babelReady=promise;return promise;};/* JEL-1973 (v68) step 3: eagerly kick __ensureBabel from head IIFE on babel-needed legacy boots (preload flag on), starting V8 parse pipeline ~one shell.min.js-parse interval earlier. Off-by-default on first boot of a new server (no babelNeeded flag yet) so plugin-light servers never eat the 3.13 MB cost. */try{if(localStorage.getItem('jellyfin.shell.legacy.babelNeeded')==='1'&&localStorage.getItem('jellyfin.shell.legacy.babelPreload')!=='0'){window.__ensureBabel();}}catch(_){}})();</script>
     <!-- Boot script registers Tizen TV remote keys, exposes window.NativeShell,
          then either shows the connect screen or loads ${server}/web/.
          All flow stays on widget origin so tizen.* / webapis.* remain available. -->
-    <script src="shell.js"></script>
-    <link rel="stylesheet" href="connect/connect.css" />
+    <!-- JEL-740 / JEL-925 (v49): ship esbuild-minified shell.min.js instead of
+         the 135 KB unminified source. Same code (no mangle, ES5 target, syntax
+         + whitespace minify only) so boot logs and stack traces stay readable.
+         Cuts head-blocking parse from ~135 KB to ~67 KB. -->
+    <script src="shell.min.js"></script>
+    <!-- JEL-739: connect.css is needed only when the connect form is shown
+         (first launch, before a server URL is stored). Warm boot with stored
+         server replaces #boot-root via document.write before paint, so the
+         stylesheet is fetched + parsed but never used. attachConnectForm()
+         injects the <link> dynamically when the form actually renders. -->
+    <!-- JEL-934 (v51): hide #boot-root by default so warm boot (stored
+         server URL) never paints the unstyled connect-form HTML while
+         loadRemoteWebClient awaits the /web/ RTT. connect.css is now
+         lazy (JEL-739), so without this rule the form renders as
+         browser-default-styled jumble for the full RTT (200-500 ms on
+         TV networks) before document.write swaps the page. attachConnectForm
+         sets display back to block when the form actually needs to render
+         (first launch + saved-server failure recovery). -->
+    <!-- JEL-1025 (v52): paint #101010 (jellyfin-web .preload bg, also
+         connect.css body bg) from frame 1 so cold/warm boot is a single
+         seamless dark surface instead of a white flash → blank → web
+         splash. /web/index.html sets `.preload{background-color:#101010}`
+         on its body and renders `.splashLogo` over it; matching the same
+         color in the shell removes the perceived load-time gap during
+         the /web/ RTT (200-500 ms on TV networks) and during the
+         document.open + document.write transition. connect.css already
+         sets the same color but only after attachConnectForm injects it,
+         too late to cover the first paint. -->
+    <style>html,body{background:#101010;margin:0}#boot-root{display:none}</style>
 </head>
 <body>
     <!-- Connect screen container. Replaced by remote web client on successful connect. -->
