@@ -1,7 +1,7 @@
 # Hosted Shell Bootstrap v2.0.0 (unsigned)
 
-`JellyfinShellBootstrap_v2.0.0.wgt` — 579,500 bytes, sha256
-`62d738c4b89aef5ecc09f75282dffcc782186678bc195d41c1ef84392094de1f`.
+`JellyfinShellBootstrap_v2.0.0.wgt` — 579,601 bytes, sha256
+`45d3092c05b0cd1170abfa65e0e07e54b3f4e11ecded93a226ab99f0a5f0ef94`.
 
 **Unsigned.** Sign with Tizen Studio Certificate Manager (same author profile
 used for previous JellyfinShell WGTs) before installing on a TV. The bootstrap

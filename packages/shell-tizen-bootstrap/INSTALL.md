@@ -15,8 +15,10 @@ sdbd `shell:` channel.
 1. Pre-flight on the Windows host:
    - Tizen Studio with the TV Extension installed.
    - The TV in Dev Mode, Host PC IP authorized, IP visible in Smart Hub Dev menu.
-   - Build the bootstrap WGT: `python3 _jel2040_bootstrap_src/build_bootstrap.py`.
-     Output: `JellyfinShellBootstrap_v<ver>.wgt` at the tree root.
+   - Build the bootstrap WGT: `python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py`.
+     Output: `packages/shell-tizen-bootstrap/dist/JellyfinShellBootstrap_v<ver>.wgt`.
+     Alternatively `cd packages/shell-tizen-bootstrap/src && tizen package -t wgt -- .`
+     produces a signed `JellyfinShell.wgt` in that dir.
    - Sign the WGT (Tizen Studio Certificate Manager → use the same TV profile
      as v80 builds). Confirm `author-signature.xml` and `signature1.xml` are
      embedded.
@@ -36,7 +38,7 @@ sdbd `shell:` channel.
 
 ### Verification
 
-Launch the app on the TV (remote → Apps → Jellyfin Shell).
+Launch the app on the TV (remote → Apps → JellyfinShell).
 
 Expected (server reachable):
 - HUD/log eventually reports `__hsbShellUrl=https://<server>/shell/shell.min.js?v=<sha>`.
