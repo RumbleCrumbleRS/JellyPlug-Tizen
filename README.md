@@ -72,7 +72,7 @@ not the bootstrap — repackage from `packages\shell-tizen-bootstrap\src`.
 
 ### First launch
 
-Open **Jellyfin Shell** on the TV. You should see one of:
+Open **JellyfinShell** on the TV. You should see one of:
 
 - A connect form (if no `serverUrl` is set in `localStorage`).
 - The Jellyfin web client (if the server has a populated `${server}/shell/`
