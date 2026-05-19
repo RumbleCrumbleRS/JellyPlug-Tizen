@@ -15,11 +15,20 @@ file swap — no `sdb shell`, no `pkgcmd`, no re-signing the WGT per release.
 
 You need:
 
-- Tizen Studio installed (Tizen CLI on `PATH`).
+- Tizen Studio installed.
+- `tizen` CLI on `PATH` (the installer adds `C:\tizen-studio\tools\ide\bin\`).
+- `sdb` CLI on `PATH` — **the installer does NOT add this by default**.
+  Append `C:\tizen-studio\tools\` to `PATH` so `sdb` resolves directly. One-line PowerShell:
+  ```powershell
+  [Environment]::SetEnvironmentVariable("Path", "$([Environment]::GetEnvironmentVariable('Path','User'));C:\tizen-studio\tools", "User")
+  ```
+  Close + reopen the terminal afterwards.
 - A signed TV certificate profile in **Tizen Studio → Certificate Manager**.
   Same profile used to sign any other `.wgt` you've put on this TV.
 - TV in **Developer Mode** with the host IP set, and reachable via `sdb connect`.
 - TV target name (e.g. `QN82Q60RAFXZA`) — `sdb devices` will list it.
+
+If `tizen install` fails with `Can not transfer ... package` and `sdb devices` is not on PATH, that means `sdb`'s connection state is bad — but you also can't diagnose it without the binary. Add it to PATH first.
 
 ### Build + install — one copy-paste block
 
