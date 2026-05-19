@@ -11,7 +11,21 @@
          Fallback: if the server-hosted shell is unreachable, load the
          baked-in boot-shell.min.js (last-known-good at WGT build time)
          so the TV is never stranded. -->
-    <style>html,body{background:#101010;margin:0;color:#eee;font-family:sans-serif}#boot-root{display:none}.boot-shell{padding:60px;text-align:center}.boot-shell h1{font-size:48px;margin:0 0 24px}#server-form input{width:600px;padding:12px;font-size:20px}#server-form button{padding:12px 24px;font-size:20px;margin-left:8px}.boot-hint{opacity:0.6;margin-top:24px}.boot-error{color:#ff7070}</style>
+    <style>html,body{background:#101010;margin:0;color:#eee;font-family:sans-serif}#boot-root{display:none}.boot-shell{padding:60px;text-align:center}.boot-shell h1{font-size:48px;margin:0 0 24px}#server-form input{width:600px;padding:12px;font-size:20px}#server-form button{padding:12px 24px;font-size:20px;margin-left:8px}.boot-hint{opacity:0.6;margin-top:24px}.boot-error{color:#ff7070}
+    /* JEL-2046 AC3 diagnostic overlay. Renders bootstrap state on screen so
+       verification works without Web Inspector (Q60 has appcmd_support:disabled
+       and intershell_support:disabled, both required for debug-launch).
+       Enabled by default in v2.0.x; disable post-AC3 by setting
+       localStorage.setItem('jellyfin.shell.hsbDebug','0'). */
+    #hsb-status{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;
+        background:rgba(0,0,0,0.85);color:#0f0;font-family:Consolas,monospace;
+        font-size:22px;padding:14px 24px;line-height:1.3;
+        border-top:3px solid #0f0;white-space:pre-wrap;word-break:break-all}
+    #hsb-status.hsb-warn{color:#ff0;border-top-color:#ff0}
+    #hsb-status.hsb-err{color:#f55;border-top-color:#f55}
+    #hsb-status.hsb-ok{color:#0f0;border-top-color:#0f0}
+    #hsb-status .hsb-tag{font-weight:700;letter-spacing:1px;font-size:26px}
+    #hsb-status.hsb-hidden{display:none}</style>
 </head>
 <body>
     <div id="boot-root">
@@ -26,6 +40,7 @@
             <p class="boot-hint">Press the BACK key to exit.</p>
         </div>
     </div>
+    <div id="hsb-status" class="hsb-hidden"></div>
     <script>
         // JEL-2040 HSB bootloader.
         // Order:
@@ -42,7 +57,48 @@
             var SERVER_KEY = 'jellyfin.shell.serverUrl';
             var HSB_VER_KEY = 'jellyfin.shell.hsbCachedVer';
             var HSB_HASH_KEY = 'jellyfin.shell.hsbCachedHash';
+            var HSB_DEBUG_KEY = 'jellyfin.shell.hsbDebug';
+            var HSB_VERSION = '2.0.1-ac3';
             var BOOT_BUDGET_MS = 4000;
+
+            // --- AC3 diagnostic overlay -------------------------------------
+            var hsbState = { version: HSB_VERSION, ts: new Date().toISOString(),
+                             phase: 'boot', server: null, manifestUrl: null,
+                             manifestSha: null, shellUrl: null, fallback: null,
+                             errors: [] };
+            var hsbDebugOn = (function(){
+                try { return localStorage.getItem(HSB_DEBUG_KEY) !== '0'; }
+                catch(_) { return true; }
+            })();
+            function renderHsb(level) {
+                window.__hsbState = hsbState;
+                if (!hsbDebugOn) return;
+                var el = document.getElementById('hsb-status');
+                if (!el) return;
+                el.classList.remove('hsb-hidden');
+                el.className = 'hsb-' + (level || 'ok');
+                while (el.firstChild) el.removeChild(el.firstChild);
+                var tag = document.createElement('span');
+                tag.className = 'hsb-tag';
+                tag.textContent = 'HSB ' + HSB_VERSION + ' / ' + (hsbState.phase || '?');
+                el.appendChild(tag);
+                el.appendChild(document.createTextNode('\n' + hsbLine().join('\n')));
+            }
+            function hsbLine() {
+                var out = [];
+                if (hsbState.server)      out.push('server      = ' + hsbState.server);
+                if (hsbState.manifestUrl) out.push('manifestUrl = ' + hsbState.manifestUrl);
+                if (hsbState.manifestSha) out.push('manifestSha = ' + hsbState.manifestSha);
+                if (hsbState.shellUrl)    out.push('shellUrl    = ' + hsbState.shellUrl);
+                if (hsbState.fallback)    out.push('fallback    = ' + hsbState.fallback);
+                if (hsbState.errors.length) out.push('errors      = ' + hsbState.errors.join(' | '));
+                return out;
+            }
+            function hsbPhase(phase, level) {
+                hsbState.phase = phase;
+                renderHsb(level || 'ok');
+            }
+            hsbPhase('boot', 'ok');
 
             function showConnectForm(msg) {
                 var root = document.getElementById('boot-root');
@@ -74,13 +130,22 @@
             function loadBakedFallback(reason) {
                 try { console.warn('[hsb] falling back to baked shell:', reason); } catch(_){}
                 window.__hsbFallback = reason || 'unknown';
-                appendScript('boot-shell.min.js', null, function(){
-                    showConnectForm('Shell load failed (' + reason + '). Check server URL.');
-                });
+                hsbState.fallback = reason || 'unknown';
+                hsbPhase('fallback', 'warn');
+                appendScript('boot-shell.min.js',
+                    function(){ hsbPhase('baked-shell-loaded', 'warn'); },
+                    function(){
+                        hsbState.errors.push('baked-load-failed');
+                        hsbPhase('baked-load-failed', 'err');
+                        showConnectForm('Shell load failed (' + reason + '). Check server URL.');
+                    });
             }
 
             function loadHostedShell(server) {
                 var base = server.replace(/\/+$/, '') + '/shell/';
+                hsbState.server = server;
+                hsbState.manifestUrl = base + 'manifest.json';
+                hsbPhase('fetch-manifest', 'ok');
                 var done = false;
                 var timer = setTimeout(function(){
                     if (done) return;
@@ -91,9 +156,21 @@
                 // Manifest probe is best-effort; if it fails fast, jump directly
                 // to the unversioned shell.min.js with a cache-buster.
                 function loadShellAt(url) {
+                    hsbState.shellUrl = url;
+                    hsbPhase('load-shell', 'ok');
                     appendScript(url,
-                        function(){ if (done) return; done = true; clearTimeout(timer); window.__hsbShellUrl = url; },
-                        function(){ if (done) return; done = true; clearTimeout(timer); loadBakedFallback('script-error'); }
+                        function(){
+                            if (done) return;
+                            done = true; clearTimeout(timer);
+                            window.__hsbShellUrl = url;
+                            hsbPhase('shell-loaded', 'ok');
+                        },
+                        function(){
+                            if (done) return;
+                            done = true; clearTimeout(timer);
+                            hsbState.errors.push('script-error:' + url);
+                            loadBakedFallback('script-error');
+                        }
                     );
                 }
 
@@ -111,17 +188,23 @@
                                 }
                                 if (m && typeof m.sha256 === 'string') {
                                     try { localStorage.setItem(HSB_HASH_KEY, m.sha256); } catch(_){}
+                                    hsbState.manifestSha = m.sha256;
                                 }
                                 var u = (m && typeof m.shellUrl === 'string' && m.shellUrl) || (base + 'shell.min.js');
                                 var v = (m && m.sha256) ? ('?v=' + encodeURIComponent(m.sha256)) : ('?t=' + Date.now());
                                 loadShellAt(u + v);
                                 return;
-                            } catch(_){}
+                            } catch(e){
+                                hsbState.errors.push('manifest-parse:' + (e && e.message || e));
+                            }
+                        } else {
+                            hsbState.errors.push('manifest-http-' + xhr.status);
                         }
                         loadShellAt(base + 'shell.min.js?t=' + Date.now());
                     };
                     xhr.onerror = xhr.ontimeout = function(){
                         if (done) return;
+                        hsbState.errors.push('manifest-' + (xhr.status === 0 ? 'neterr' : 'timeout'));
                         loadShellAt(base + 'shell.min.js?t=' + Date.now());
                     };
                     xhr.send();
@@ -133,6 +216,7 @@
             var server;
             try { server = localStorage.getItem(SERVER_KEY); } catch(_){}
             if (!server) {
+                hsbPhase('no-server-url', 'warn');
                 showConnectForm();
                 return;
             }
