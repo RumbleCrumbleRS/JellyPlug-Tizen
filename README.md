@@ -21,37 +21,40 @@ You need:
 - TV in **Developer Mode** with the host IP set, and reachable via `sdb connect`.
 - TV target name (e.g. `QN82Q60RAFXZA`) — `sdb devices` will list it.
 
-### Build the bootstrap WGT
+### Build + install — one copy-paste block
+
+Replace `<tv-target>` with your TV name (`sdb devices` will list it, e.g. `QN82Q60RAFXZA`):
 
 ```powershell
 git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
-cd JellyPlug-Tizen
-cd packages\shell-tizen-bootstrap\src
+cd JellyPlug-Tizen\packages\shell-tizen-bootstrap\src
+tizen package -t wgt -- .
+tizen install -n JellyfinShell.wgt -t <tv-target>
+```
+
+Run all four lines from start to finish — **do not `cd` back to the repo root between package and install**. The output WGT is `JellyfinShell.wgt` (~580 KB) and lives in the same `src\` dir, so the install command must run from there too.
+
+Filename is literally `JellyfinShell.wgt` — one word, capital `J` and `S`, no space, no period before `Shell`. If you type `Jellyfin.wgt` you'll get `There is no package with named Jellyfin.wgt.`
+
+### Alternative — Device Manager GUI
+
+```powershell
+git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
+cd JellyPlug-Tizen\packages\shell-tizen-bootstrap\src
 tizen package -t wgt -- .
 ```
 
-That produces `JellyfinShell.wgt` (~580 KB) in the same directory, signed with
-your default certificate profile.
+Then **Tizen Studio → Device Manager → right-click TV → Install Application → pick `JellyfinShell.wgt`** from `packages\shell-tizen-bootstrap\src\`.
 
-Don't want to build? An unsigned prebuilt WGT lives in the repo at:
+### Alternative — skip build, use prebuilt unsigned WGT
 
 ```
 release-artifacts\bootstrap\v2.0.0\JellyfinShellBootstrap_v2.0.0.wgt
 ```
 
-You still need to sign it before installing (Tizen Studio → Certificate
-Manager → right-click profile → re-sign WGT), but you skip the package step.
+Sign it via **Tizen Studio → Certificate Manager → right-click profile → re-sign WGT**, then `tizen install -n <signed-path> -t <tv-target>`.
 
-### Install on the TV
-
-```powershell
-sdb connect <tv-ip>:26101
-sdb devices                                           # confirm TV is listed
-tizen install -n JellyfinShell.wgt -t <tv-target>     # e.g. -t QN82Q60RAFXZA
-```
-
-Or use the GUI: **Tizen Studio → Device Manager → right-click TV →
-Install Application → pick the WGT**.
+### Expected install output
 
 The TV may report `Failed to install Tizen application.` from the CLI while
 the app icon **still appears on the launcher**. That's a known spurious
