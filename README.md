@@ -37,11 +37,21 @@ Replace `<tv-target>` with your TV name (`sdb devices` will list it, e.g. `QN82Q
 ```powershell
 git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
 cd JellyPlug-Tizen\packages\shell-tizen-bootstrap\src
+if (Test-Path JellyfinShell.wgt) { Remove-Item JellyfinShell.wgt }
 tizen package -t wgt -- .
 tizen install -n JellyfinShell.wgt -t <tv-target>
 ```
 
-Run all four lines from start to finish — **do not `cd` back to the repo root between package and install**. The output WGT is `JellyfinShell.wgt` (~580 KB) and lives in the same `src\` dir, so the install command must run from there too.
+Run all five lines from start to finish — **do not `cd` back to the repo root between package and install**. The output WGT is `JellyfinShell.wgt` (~580 KB) and lives in the same `src\` dir, so the install command must run from there too.
+
+**The `Remove-Item JellyfinShell.wgt` line matters on rebuilds.** `tizen package -t wgt -- .` packages every file in the CWD, so any prior build's `JellyfinShell.wgt` left sitting in `src\` will get bundled inside the new WGT. The TV signature verifier then fails at `installing[17]` and aborts the install. Delete the stale file before each repackage.
+
+If you're **upgrading an already-installed bootstrap** and the install still aborts at `installing[17]` even after the clean repackage, the on-device upgrade check is rejecting the new author signature. Uninstall first, then install fresh:
+
+```powershell
+tizen uninstall -p JelShellTV.Jellyfin -t <tv-target>
+tizen install -n JellyfinShell.wgt -t <tv-target>
+```
 
 Filename is literally `JellyfinShell.wgt` — one word, capital `J` and `S`, no space, no period before `Shell`. If you type `Jellyfin.wgt` you'll get `There is no package with named Jellyfin.wgt.`
 
