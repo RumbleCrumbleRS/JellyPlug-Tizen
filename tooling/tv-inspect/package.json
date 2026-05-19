@@ -1,0 +1,9 @@
+{
+  "name": "@jellyfin-tv/tv-inspect",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote inspection of a Tizen TV web app via Chrome DevTools Protocol.",
+  "scripts": {
+    "inspect": "python tv-inspect.py"
+  }
+}
