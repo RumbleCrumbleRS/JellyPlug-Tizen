@@ -1,0 +1,5 @@
+# Minified/vendor bundles — not human-authored, not formatter-checked
+**/*.min.js
+
+# Generated lockfile
+pnpm-lock.yaml
