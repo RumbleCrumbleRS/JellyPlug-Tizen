@@ -129,19 +129,33 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # Tizen encrypts security-profile passwords through libsecret/gnome-keyring
+      # over D-Bus. A headless runner has neither, so `security-profiles add`
+      # silently fails to persist the passwords (it records .pwd paths it never
+      # writes) and `tizen package` then signs with an empty password, dying with
+      # "CertificationException: Invaild password". Provide a keyring. (JEL-14)
+      - name: Install gnome-keyring for Tizen secure storage
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-1-0
+
       # `tizen package` always signs and fails without an active profile (there
       # is no unsigned mode), so mint a throwaway self-signed author cert for
       # the build. Deliberately decoupled from the release signing secrets: the
       # retail, TV-installable .wgt is bootstrap-sign.yml's job. The artifact
       # below is TEST-signed — good for verifying the build/package pipeline and
       # the emulator, not for installing on a retail TV.
-      - name: Configure ephemeral CI signing profile
-        run: tooling/ci/configure-tizen-ci-cert.sh
-
-      - name: Build .wgt
+      #
+      # Profile-add and packaging MUST share one D-Bus/keyring session for the
+      # encrypted passwords to round-trip, so run both inside a single
+      # dbus-run-session with an unlocked (empty-password) login keyring.
+      - name: Configure signing profile + build .wgt (keyring session)
         env:
           SIGNING_PROFILE: ci
-        run: pnpm --filter @jellyfin-tv/shell-tizen build
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            echo "" | gnome-keyring-daemon --unlock --components=secrets,pkcs11 >/dev/null 2>&1 || true
+            tooling/ci/configure-tizen-ci-cert.sh
+            pnpm --filter @jellyfin-tv/shell-tizen build
+          '
       # Tizen's signer writes its real error to cli.log, not stdout, so surface
       # the tail on failure to keep build/signing breakage diagnosable from the
       # Actions log alone (no key material is printed).
