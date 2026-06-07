@@ -168,6 +168,9 @@ tooling/
   eslint-config/             # shared eslint preset
   tsconfig-base/             # shared tsconfig
   ci/                        # shared GHA helpers
+  wgt-emulate/               # run+test the WGT in a desktop browser (no TV);
+                             # also documents the Tizen TV Emulator path
+  tv-inspect/                # remote CDP capture/verify on a real TV
 release-artifacts/
   bootstrap/v2.0.0/          # unsigned prebuilt bootstrap WGT
   v1.0.x/                    # historical shell-tizen WGTs (pre-HSB)
@@ -195,6 +198,28 @@ pnpm --filter @jellyfin-tv/shell-tizen-bootstrap build
 pnpm --filter @jellyfin-tv/shell-tizen-bootstrap test
 pnpm --filter @jellyfin-tv/server-shell-drop emit-manifest -- /path/to/server/shell
 ```
+
+## Emulating + testing the WGT
+
+You do **not** need a TV to exercise the WGT. The bootstrap is plain web, so the
+whole Hosted Shell Bootstrap flow runs in a desktop browser. Four tiers, fastest
+→ highest-fidelity (full guide in
+[`tooling/wgt-emulate/README.md`](./tooling/wgt-emulate/README.md)):
+
+```bash
+# Tier 1 — bootloader branch logic, headless, instant
+node packages/shell-tizen-bootstrap/scripts/selftest.cjs
+
+# Tier 2 — full HSB flow + visuals in a desktop browser (Python only)
+python3 tooling/wgt-emulate/serve.py        # then open http://localhost:8088/
+python3 tooling/wgt-emulate/serve.py --self-test   # headless CI check
+
+# Tier 3 — Tizen TV Emulator (real Tizen runtime + signature checks)
+# Tier 4 — real TV via sdb + tooling/tv-inspect
+```
+
+Tiers 3–4 (emulator setup, packaging/signing, on-device CDP capture) are
+documented in `tooling/wgt-emulate/README.md` and `tooling/tv-inspect/README.md`.
 
 ## Legacy thin-shell branch
 
