@@ -5,6 +5,7 @@
   "description": "Run and test the Tizen WGT in a desktop browser (HSB harness) without a TV, plus the documented Tizen TV Emulator path.",
   "scripts": {
     "serve": "python3 serve.py",
-    "test": "python3 serve.py --self-test --port 8090"
+    "test": "python3 serve.py --self-test --port 8090",
+    "test:e2e": "node e2e.cjs"
   }
 }

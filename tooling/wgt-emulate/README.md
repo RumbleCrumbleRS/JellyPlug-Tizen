@@ -105,6 +105,35 @@ python3 serve.py --self-test
 # or: pnpm --filter @jellyfin-tv/wgt-emulate test
 ```
 
+### Headless end-to-end check (DOM engine, no GUI browser)
+
+`--self-test` only asserts the **HTTP endpoint shape** — it never runs the
+bootloader. `e2e.cjs` closes that gap: it drives the **actual HSB boot flow**
+(`index.html` bootloader) inside a DOM engine (jsdom) against a live `serve.py`,
+so localStorage, the connect form, the manifest XHR, the hosted-shell `<script>`
+load, and both fallback branches all execute for real — headless, CI-friendly,
+no GUI browser.
+
+jsdom is intentionally **not** a committed dependency (Tier 2's default is
+"Python 3 + a browser"); this deeper check is opt-in and self-skips (exit 0) if
+jsdom isn't installed:
+
+```bash
+cd tooling/wgt-emulate
+npm install jsdom        # one-time, local (not committed to the workspace)
+node e2e.cjs             # or: npm run test:e2e
+# point at an existing copy instead: JSDOM_PATH=/path/to/jsdom node e2e.cjs
+```
+
+It validates four scenarios end to end and exits 0/1:
+
+| Scenario        | Asserts                                                              |
+| --------------- | ------------------------------------------------------------------- |
+| connect-form    | no serverUrl → form renders; submit trims `/`, saves, reloads       |
+| happy-path      | manifest 200 → hosted shell (`?v=<sha>`) → EMULATED SHELL LOADED     |
+| `--fail-manifest` | manifest 503 → shell still loads via `?t=` cache-buster            |
+| `--fail-shell`  | shell 503 → `<script>` onerror → baked `boot-shell.min.js` fallback  |
+
 ### Flags
 
 | Flag                | Effect                                                       |
