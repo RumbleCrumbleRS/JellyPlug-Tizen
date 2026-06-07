@@ -5,6 +5,13 @@
 # physical-device validation and JEL-8's signed-release guard both depend on.
 #
 # Pipeline (the three scripts landed in 4370dec, this just wires them):
+#   0. Install the Tizen Studio Web CLI on the runner so `tizen`
+#      (security-profiles, package) is on PATH. We install the official
+#      Samsung Web CLI directly on ubuntu-latest rather than relying on a
+#      prebuilt container image — the canonical jellyfin-tizen project ships
+#      no CI image, and the community builders (e.g. jeppevinkel) install the
+#      Web CLI the same way. (JEL-11: the old `ghcr.io/jellyfin/tizen-studio`
+#      image reference never existed, so every run failed at container init.)
 #   1. tooling/ci/configure-tizen-signing.sh   builds the Tizen security
 #      profile "jellyfin" from the 4 CI secrets (set per JEL-9, Option 1).
 #   2. build_bootstrap.py --sign-profile jellyfin   signs the .wgt.
@@ -33,12 +40,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    container:
-      # Same Tizen Studio CLI image as the build-tizen CI job, so `tizen`
-      # (security-profiles, package) is on PATH.
-      image: ghcr.io/jellyfin/tizen-studio:latest
+    env:
+      TIZEN_STUDIO_VER: "5.6"
     steps:
       - uses: actions/checkout@v4
+
+      # Tizen Studio's CLI runs on the JVM; pin a JDK the tooling supports
+      # rather than relying on whatever the runner image defaults to.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Tizen Studio Web CLI
+        run: |
+          set -euo pipefail
+          ver="${TIZEN_STUDIO_VER}"
+          url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
+          echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
+          curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          chmod +x tizen-installer.bin
+          # --accept-license is required for unattended install.
+          ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
+          rm -f tizen-installer.bin
+          # Persist the CLI on PATH for every subsequent step.
+          echo "${HOME}/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
+
+      - name: Verify tizen CLI is on PATH
+        run: tizen version
 
       - name: Configure Tizen signing profile
         env:
