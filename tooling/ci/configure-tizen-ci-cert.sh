@@ -111,6 +111,30 @@ tizen security-profiles add \
   -a "$author_p12" \
   -p "$CERT_PW"
 
+# In headless CI, Tizen's secure storage can't encrypt the profile passwords, so
+# `add` only records .pwd password-file PATHS in profiles.xml without ever
+# writing the files — leaving `tizen package` to sign with an empty password and
+# fail with "Invaild password". Materialise the password files ourselves at the
+# exact paths profiles.xml expects (parsed from it, with sane fallbacks). The
+# bundled distributor's password is Tizen's well-known constant. (JEL-14)
+profiles_xml="$HOME/tizen-studio-data/profile/profiles.xml"
+write_pwd() {  # <pwd-file-path> <password>
+  local path="$1" pw="$2"
+  [[ -z "$path" ]] && return 0
+  mkdir -p "$(dirname "$path")"
+  printf '%s' "$pw" > "$path"
+  echo ">> wrote password file: $path"
+}
+if [[ -f "$profiles_xml" ]]; then
+  author_pwd_path="$(grep -o 'distributor="0"[^>]*password="[^"]*"' "$profiles_xml" | grep -o 'password="[^"]*"' | sed 's/password="//; s/"$//' | head -1)"
+  dist_pwd_path="$(grep -o 'distributor="1"[^>]*password="[^"]*"' "$profiles_xml" | grep -o 'password="[^"]*"' | sed 's/password="//; s/"$//' | head -1)"
+else
+  author_pwd_path=""
+  dist_pwd_path=""
+fi
+write_pwd "${author_pwd_path:-$CERT_DIR/author.pwd}" "$CERT_PW"
+write_pwd "${dist_pwd_path:-$HOME/tizen-studio-data/tools/certificate-generator/certificates/distributor/tizen-distributor-signer.pwd}" "tizenpkcs12passfordsigner"
+
 # DIAG (JEL-14): confirm the author .p12 genuinely opens with CERT_PW, so we can
 # tell a real password mismatch apart from a profiles.xml encryption round-trip
 # bug when `tizen package` later reports "Invaild password".
