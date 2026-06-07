@@ -134,16 +134,16 @@ if tizen security-profiles list 2>/dev/null | grep -qw "$PROFILE_NAME"; then
   tizen security-profiles remove -n "$PROFILE_NAME" || true
 fi
 
-# Author certificate establishes the package author identity.
+# Add the profile with BOTH certs in one call. The author cert establishes the
+# package author identity; the distributor cert (-d/-dp) is the second signature
+# a retail TV validates on install — without it the package is author-only and a
+# TV rejects it. There is no separate `security-profiles add-distributor`
+# subcommand (the Tizen CLI only exposes list/add/set-active/remove); the
+# distributor is registered via the -d/-dp flags of `add` itself. (JEL-15)
 tizen security-profiles add \
   -n "$PROFILE_NAME" \
   -a "$author_p12" \
-  -p "$AUTHOR_PW"
-
-# Distributor certificate is what a retail TV validates on install. Without
-# this second signature the package is author-only and a TV rejects it.
-tizen security-profiles add-distributor \
-  -n "$PROFILE_NAME" \
+  -p "$AUTHOR_PW" \
   -d "$dist_p12" \
   -dp "$DIST_PW"
 
