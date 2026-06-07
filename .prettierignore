@@ -3,3 +3,6 @@
 
 # Generated lockfile
 pnpm-lock.yaml
+
+# Frozen published release snapshots — versioned artifacts, not source
+release-artifacts/

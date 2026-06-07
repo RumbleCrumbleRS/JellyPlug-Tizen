@@ -61,7 +61,7 @@ In `./out/`:
 - `tv-screenshot-<ts>.png` — PNG capture of the WebView at probe time.
 - `tv-globals-<ts>.json` — JSON dict of probed JS globals.
 
-When `--issue-id` is passed and PAPERCLIP_* env is present, both files are
+When `--issue-id` is passed and PAPERCLIP\_\* env is present, both files are
 uploaded as attachments on the issue.
 
 ## Exit codes
@@ -87,8 +87,8 @@ in front of the screen.
 
 ## Caveat: signed vs unsigned WGT
 
-`tizen run --debug` only works on a WGT signed with a *development* profile.
-A WGT signed with a *distributor* profile launches but refuses to expose the
+`tizen run --debug` only works on a WGT signed with a _development_ profile.
+A WGT signed with a _distributor_ profile launches but refuses to expose the
 inspector. If you signed the v2.0.0 bootstrap with the same profile used for
 v80 builds (which were developer-signed for sideload), you're fine.
 

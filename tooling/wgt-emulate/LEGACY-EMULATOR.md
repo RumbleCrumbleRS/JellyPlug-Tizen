@@ -29,17 +29,17 @@ That engine — not the Tizen API level — is what breaks the hosted Jellyfin w
 client. Samsung's
 [Web Engine Specifications](https://developer.samsung.com/smarttv/develop/specifications/web-engine-specifications.html):
 
-| Tizen | Model year | Web engine    | Notes for us                                                      |
-| ----- | ---------- | ------------- | ---------------------------------------------------------------- |
-| 2.3   | 2015       | WebKit r152340| pre-Chromium; oldest target our `required_version="2.3"` allows  |
-| 2.4   | 2016       | WebKit r152340|                                                                  |
-| 3.0   | 2017       | Chromium M47  |                                                                  |
-| 4.0   | 2018       | Chromium M56  | **this is the "Chromium-56 polyfills" the repo carries**         |
-| 5.0   | 2019       | Chromium M63  | **JEL-5 target**                                                 |
-| 5.5   | 2020       | Chromium M69  | **JEL-5 target**                                                 |
-| 6.0   | 2021       | Chromium M76  |                                                                  |
-| 6.5   | 2022       | Chromium M85  | roughly what the default Tier-3 image (`tv-6.5`/`7.0`) gives you |
-| 7.0   | 2023       | Chromium M94  |                                                                  |
+| Tizen | Model year | Web engine     | Notes for us                                                     |
+| ----- | ---------- | -------------- | ---------------------------------------------------------------- |
+| 2.3   | 2015       | WebKit r152340 | pre-Chromium; oldest target our `required_version="2.3"` allows  |
+| 2.4   | 2016       | WebKit r152340 |                                                                  |
+| 3.0   | 2017       | Chromium M47   |                                                                  |
+| 4.0   | 2018       | Chromium M56   | **this is the "Chromium-56 polyfills" the repo carries**         |
+| 5.0   | 2019       | Chromium M63   | **JEL-5 target**                                                 |
+| 5.5   | 2020       | Chromium M69   | **JEL-5 target**                                                 |
+| 6.0   | 2021       | Chromium M76   |                                                                  |
+| 6.5   | 2022       | Chromium M85   | roughly what the default Tier-3 image (`tv-6.5`/`7.0`) gives you |
+| 7.0   | 2023       | Chromium M94   |                                                                  |
 
 The default Tier-3 emulator image (whatever the current Package Manager ships,
 ~M85+) does **not** reproduce M56/M63/M69 behaviour. If a 2019/2020 TV renders
@@ -53,11 +53,11 @@ keeps old ones on the
 [TV Extension archive](https://developer.samsung.com/smarttv/develop/tools/tv-extension/archive.html).
 As of this investigation the archive's floor is:
 
-| TV Extension     | Released     | Platform image it carries |
-| ---------------- | ------------ | ------------------------- |
-| 10.0.0 … 6.5.x   | 2026 … 2022  | Tizen 8.0 … 6.5           |
-| **6.0**          | Jan 2021     | **Tizen 6.0**             |
-| **5.5.0**        | **Dec 2019** | **Tizen 5.5** ← floor     |
+| TV Extension   | Released     | Platform image it carries |
+| -------------- | ------------ | ------------------------- |
+| 10.0.0 … 6.5.x | 2026 … 2022  | Tizen 8.0 … 6.5           |
+| **6.0**        | Jan 2021     | **Tizen 6.0**             |
+| **5.5.0**      | **Dec 2019** | **Tizen 5.5** ← floor     |
 
 So:
 
@@ -83,7 +83,7 @@ Modern Tizen Studio + the archived 5.5.0 extension. This is the clean path.
 
 1. Install **Tizen Studio** (current is fine for 5.5; for 5.0 use 3.x — see B).
 2. **Package Manager → drop in the archived extension.** Download
-   *TV Extension 5.5.0* (Dec 2019) for your OS from the archive page above.
+   _TV Extension 5.5.0_ (Dec 2019) for your OS from the archive page above.
    Package Manager → ⚙ **Extension SDK** → add the local package / extra repo,
    then install the **Samsung TV** tools it provides.
 3. **Emulator Manager → Create** → device template **TV**, platform
@@ -147,11 +147,11 @@ writeup:
 This is **Tier 3, pinned to an old image**. Relative to the rest of the strategy
 ([`README.md`](./README.md)):
 
-- **Tier 2 (`wgt-emulate`)** runs the bootstrap flow in *desktop* Chromium —
+- **Tier 2 (`wgt-emulate`)** runs the bootstrap flow in _desktop_ Chromium —
   always a modern engine. It can fake an old UA but **cannot** reproduce M63/M69
   engine quirks. (It already can't fully boot the hosted shell on modern headless
   Chromium — that's the documented Tier-2 limit.)
-- **This legacy Tier 3** is the *only* no-hardware way to run the genuine
+- **This legacy Tier 3** is the _only_ no-hardware way to run the genuine
   2019/2020 WebView. Reach for it when Tier 2 is green but a 5.0/5.5-era TV
   misbehaves, to tell "old-engine regression" apart from "our bug."
 - **Tier 4 (real 2019/2020 TV)** remains the final word, but the emulator catches
@@ -160,7 +160,7 @@ This is **Tier 3, pinned to an old image**. Relative to the rest of the strategy
 ## Escalation — what still needs a real machine
 
 This sandbox has **no Tizen Studio, no GUI, and no HW virtualization**, so the
-image could not be *booted* here and our WGT could not be installed on it. The
+image could not be _booted_ here and our WGT could not be installed on it. The
 procedure above is verified against Samsung's archive + engine specs and the repo
 packaging rules, but the live confirmation step — boot `tv-samsung-5.5-x86`,
 `tizen install` our `JellyfinShell.wgt`, confirm the hosted shell renders the

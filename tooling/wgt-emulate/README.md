@@ -127,12 +127,12 @@ node e2e.cjs             # or: npm run test:e2e
 
 It validates four scenarios end to end and exits 0/1:
 
-| Scenario        | Asserts                                                              |
-| --------------- | ------------------------------------------------------------------- |
-| connect-form    | no serverUrl → form renders; submit trims `/`, saves, reloads       |
-| happy-path      | manifest 200 → hosted shell (`?v=<sha>`) → EMULATED SHELL LOADED     |
-| `--fail-manifest` | manifest 503 → shell still loads via `?t=` cache-buster            |
-| `--fail-shell`  | shell 503 → `<script>` onerror → baked `boot-shell.min.js` fallback  |
+| Scenario          | Asserts                                                             |
+| ----------------- | ------------------------------------------------------------------- |
+| connect-form      | no serverUrl → form renders; submit trims `/`, saves, reloads       |
+| happy-path        | manifest 200 → hosted shell (`?v=<sha>`) → EMULATED SHELL LOADED    |
+| `--fail-manifest` | manifest 503 → shell still loads via `?t=` cache-buster             |
+| `--fail-shell`    | shell 503 → `<script>` onerror → baked `boot-shell.min.js` fallback |
 
 ### Flags
 

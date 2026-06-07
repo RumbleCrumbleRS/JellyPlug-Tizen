@@ -49,12 +49,13 @@ No TV-side install required. `intershell_support` can be `disabled` for years.
 
 ```json
 {
-  "version": "1.2.3",                  // shell semver (from shell.min.js header)
+  "version": "1.2.3", // shell semver (from shell.min.js header)
   "sha256": "<sha256 of shell.min.js>", // cache-buster + integrity
-  "shellUrl": null,                    // optional override, defaults to "shell.min.js"
-  "babelSha256": "<sha256 of babel>",  // optional, lets shell warm-cache key
-  "minBootstrapVersion": "2.0.0",      // refuse to drive bootstraps older than this
-  "bootstrapWgt": {                    // optional, advertised to Device Manager
+  "shellUrl": null, // optional override, defaults to "shell.min.js"
+  "babelSha256": "<sha256 of babel>", // optional, lets shell warm-cache key
+  "minBootstrapVersion": "2.0.0", // refuse to drive bootstraps older than this
+  "bootstrapWgt": {
+    // optional, advertised to Device Manager
     "filename": "JellyfinShellBootstrap_v2.0.0.wgt",
     "sha256": "..."
   }

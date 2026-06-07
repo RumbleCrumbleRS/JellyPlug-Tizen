@@ -13,11 +13,11 @@ The `.github/workflows/bootstrap-sign.yml` workflow produces the signed
    `TIZEN_AUTHOR_P12_BASE64`, `TIZEN_AUTHOR_PASSWORD`,
    `TIZEN_DISTRIBUTOR_P12_BASE64`, `TIZEN_DISTRIBUTOR_PASSWORD`.
 2. Run it one of two ways:
-   - **On demand:** Actions tab → **bootstrap-sign** → *Run workflow*. The
+   - **On demand:** Actions tab → **bootstrap-sign** → _Run workflow_. The
      signed `.wgt` (+ `manifest.bootstrap.json`) is attached to the run as the
      `jellyfin-shell-bootstrap-<sha>` artifact.
    - **Tagged release:** push a `bootstrap-v*` tag (e.g. `git tag bootstrap-v2.0.1
-     && git push origin bootstrap-v2.0.1`). The same signed `.wgt` is published
+&& git push origin bootstrap-v2.0.1`). The same signed `.wgt` is published
      as a GitHub Release for the tag.
 3. The workflow runs inside the Tizen Studio CLI image and chains the three
    scripts from commit `4370dec`:
@@ -74,10 +74,12 @@ sdbd `shell:` channel.
 Launch the app on the TV (remote → Apps → JellyfinShell).
 
 Expected (server reachable):
+
 - HUD/log eventually reports `__hsbShellUrl=https://<server>/shell/shell.min.js?v=<sha>`.
 - App renders the Jellyfin web client identically to today's v80 build.
 
 Expected (server unreachable):
+
 - `[hsb] falling back to baked shell: timeout`.
 - App renders via WGT-baked `boot-shell.min.js` (same code as v80, just with
   no /shell/ pull). TV is **never stranded**.
@@ -113,6 +115,7 @@ it requires physical access to the TV.
 ## What if `intershell_support:disabled` blocks B1 too?
 
 That would be a much rarer firmware regression. If observed:
+
 - Capture the Device Manager log pane (it surfaces the failed channel).
 - File a follow-up under JEL-2040 referencing the channel name.
 - Use B2 or B3 to land the bootstrap WGT.
