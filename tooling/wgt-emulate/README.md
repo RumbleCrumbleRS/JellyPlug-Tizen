@@ -211,6 +211,13 @@ Notes / gotchas:
 This is the tier to reach for when Tier 2 looks fine but the TV doesn't:
 native-API breakage, old-Chromium engine quirks, packaging/signing failures.
 
+> **Testing OLD TVs (Tizen 5.0 / 5.5 — 2019 / 2020 panels):** the Package
+> Manager only offers the latest image (~Chromium M85+), which does not
+> reproduce the M63 / M69 WebView those models run. To pin the emulator to an
+> old engine, see [`LEGACY-EMULATOR.md`](./LEGACY-EMULATOR.md) (JEL-5) — which
+> archived TV Extension carries each platform, how to side-load a legacy image,
+> and the Chrome-63 / HW-virtualization gotchas.
+
 ---
 
 ## Tier 4 — real TV (`sdb` + `tv-inspect`)
