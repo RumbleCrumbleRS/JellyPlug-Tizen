@@ -122,6 +122,14 @@ jobs:
         env:
           SIGNING_PROFILE: ci
         run: pnpm --filter @jellyfin-tv/shell-tizen build
+      # Tizen's signer writes its real error to cli.log, not stdout, so surface
+      # the tail on failure to keep build/signing breakage diagnosable from the
+      # Actions log alone (no key material is printed).
+      - name: Dump tizen cli.log on failure
+        if: failure()
+        run: |
+          tizen security-profiles list || true
+          find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
           name: jellyfin-tv-shell-tizen-${{ github.sha }}
