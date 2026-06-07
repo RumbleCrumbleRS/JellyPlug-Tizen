@@ -74,13 +74,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Tizen Studio's CLI runs on the JVM; pin a JDK the tooling supports
-      # rather than relying on whatever the runner image defaults to.
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+      # NB: we deliberately do NOT pin Temurin JDK 17 here. `tizen package`
+      # reads Tizen's bundled distributor signer (tizen-distributor-signer.p12),
+      # a legacy-format PKCS#12. Modern JDKs (17) can't read that legacy
+      # algorithm and fail signing with a misleading
+      # "CertificationException: Invaild password" — regardless of the author
+      # cert. The Tizen CLI must run on the Java it ships with (Java 8 vintage),
+      # which is wired up below after install. (JEL-14)
 
       # Install the official Samsung Web CLI directly on ubuntu-latest. The old
       # prebuilt container image never existed (manifest unknown / 404), so this
@@ -99,8 +99,28 @@ jobs:
           # Persist the CLI on PATH for every subsequent step.
           echo "${HOME}/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
 
-      - name: Verify tizen CLI is on PATH
-        run: tizen version
+      # Point the toolchain at Tizen Studio's OWN bundled JRE. This is the Java
+      # the signer was built/tested against, so it reads the legacy distributor
+      # p12 that JDK 17 chokes on. Locate java robustly (path varies by version)
+      # and export JAVA_HOME for every later step.
+      - name: Use Tizen's bundled JRE
+        run: |
+          set -euo pipefail
+          java_bin="$(find "${HOME}/tizen-studio/jdk" -type f -name java -path '*/bin/java' 2>/dev/null | head -1)"
+          if [[ -z "$java_bin" ]]; then
+            echo "ERROR: could not locate Tizen's bundled JRE under tizen-studio/jdk" >&2
+            find "${HOME}/tizen-studio" -name java -path '*/bin/*' 2>/dev/null | head || true
+            exit 1
+          fi
+          java_home="$(dirname "$(dirname "$java_bin")")"
+          echo "Using bundled JRE at: $java_home"
+          echo "JAVA_HOME=${java_home}" >> "$GITHUB_ENV"
+          echo "${java_home}/bin" >> "$GITHUB_PATH"
+
+      - name: Verify tizen CLI + bundled Java
+        run: |
+          java -version
+          tizen version
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
