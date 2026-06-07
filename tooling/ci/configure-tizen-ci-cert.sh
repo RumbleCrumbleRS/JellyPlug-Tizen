@@ -90,6 +90,16 @@ if [[ ! -s "$author_p12" ]]; then
   exit 1
 fi
 
+# `security-profiles add` persists each cert password to a sibling `.pwd` file
+# whose path it records in profiles.xml. For the bundled distributor it targets
+# the tizen-studio-DATA certificate tree — which a headless, CLI-only install
+# never creates. The missing directory makes the .pwd write fail, so NO password
+# files are written (author's included), and `tizen package` then signs with an
+# empty password and dies with "CertificationException: Invaild password".
+# Pre-create the expected data-dir tree so the password files can be written.
+# (JEL-14: this, not the cert format or the JDK, was the real Build .wgt blocker.)
+mkdir -p "$HOME/tizen-studio-data/tools/certificate-generator/certificates/distributor"
+
 # Recreate idempotently (CI runners may be reused).
 if tizen security-profiles list 2>/dev/null | grep -qw "$PROFILE_NAME"; then
   echo "Profile '$PROFILE_NAME' already exists; recreating."
