@@ -70,20 +70,49 @@ jobs:
       - name: Verify tizen CLI is on PATH
         run: tizen version
 
-      - name: Configure Tizen signing profile
+      # Tizen encrypts security-profile passwords through libsecret/gnome-keyring
+      # over D-Bus. A headless runner has neither, so `security-profiles add`
+      # silently fails to persist the passwords (it records .pwd paths it never
+      # writes) and `tizen package` then signs with an empty password, dying with
+      # "CertificationException: Invaild password" — the exact symptom JEL-11
+      # misattributed to a wrong TIZEN_AUTHOR_PASSWORD secret. Provide a keyring.
+      # (JEL-15; mirrors the ci.yml build-tizen fix from JEL-14, 423558f.)
+      - name: Install gnome-keyring for Tizen secure storage
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-1-0
+
+      # `configure-tizen-signing.sh` (security-profiles add) and the signing
+      # build (`tizen package` via build_bootstrap.py) MUST share one D-Bus /
+      # keyring session for the encrypted profile passwords to round-trip — run
+      # both inside a single dbus-run-session with an unlocked (empty-password)
+      # login keyring. Previously these were two separate, keyring-less steps,
+      # so the author/distributor passwords never persisted and signing failed.
+      - name: Configure signing profile + build signed .wgt (keyring session)
         env:
           TIZEN_AUTHOR_P12_BASE64: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
           TIZEN_AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
           TIZEN_DISTRIBUTOR_P12_BASE64: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
           TIZEN_DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
           TIZEN_PROFILE_NAME: jellyfin
-        run: tooling/ci/configure-tizen-signing.sh
-
-      - name: Build signed bootstrap .wgt
         run: |
-          python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py \
-            --sign-profile jellyfin \
-            --out dist/
+          dbus-run-session -- bash -euo pipefail -c '
+            echo "" | gnome-keyring-daemon --unlock --components=secrets,pkcs11 >/dev/null 2>&1 || true
+            tooling/ci/configure-tizen-signing.sh
+            python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py \
+              --sign-profile jellyfin \
+              --out dist/
+          '
+
+      # Tizen's signer writes its real error to cli.log, not stdout, so surface
+      # the tail on failure to keep signing breakage diagnosable from the Actions
+      # log alone. profiles.xml is NOT dumped here (unlike ci.yml) because this
+      # job uses the real release certs — only non-secret signer logs are shown.
+      - name: Dump tizen cli.log on failure
+        if: failure()
+        run: |
+          echo "=== security-profiles list ==="
+          tizen security-profiles list || true
+          echo "=== cli.log tail ==="
+          find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
 
       - name: Verify .wgt is signed (JEL-8 guard)
         # A Tizen TV refuses to install an unsigned package. Fail before
