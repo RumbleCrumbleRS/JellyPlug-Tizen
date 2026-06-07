@@ -152,8 +152,8 @@ jobs:
           tizen security-profiles list || true
           echo "=== cli-config (profiles.path etc.) ==="
           tizen cli-config --list || true
-          echo "=== profiles.xml (throwaway CI cert; no real secrets) ==="
-          find "$HOME" -name profiles.xml -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || true
+          echo "=== profiles.xml (base64; throwaway CI cert, decode to inspect) ==="
+          find "$HOME" -path '*tizen-studio-data/profile/profiles.xml' -exec echo "--- {} ---" \; -exec base64 -w0 {} \; -exec echo \; 2>/dev/null || true
           echo "=== cli.log tail ==="
           find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
       - uses: actions/upload-artifact@v4
