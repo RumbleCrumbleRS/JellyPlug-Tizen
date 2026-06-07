@@ -4,6 +4,33 @@ This is the **once-per-TV** install of the Hosted Shell Bootstrap WGT. After thi
 lands on a TV, every subsequent shell update is a server-side file swap; no TV
 reinstall, no `sdb shell`.
 
+## Getting a signed WGT from CI (recommended) — JEL-10
+
+The `.github/workflows/bootstrap-sign.yml` workflow produces the signed
+`.wgt` so you don't need a Tizen signing profile on your own host:
+
+1. Ensure the 4 Tizen signing secrets are set on the repo (JEL-9, Option 1):
+   `TIZEN_AUTHOR_P12_BASE64`, `TIZEN_AUTHOR_PASSWORD`,
+   `TIZEN_DISTRIBUTOR_P12_BASE64`, `TIZEN_DISTRIBUTOR_PASSWORD`.
+2. Run it one of two ways:
+   - **On demand:** Actions tab → **bootstrap-sign** → *Run workflow*. The
+     signed `.wgt` (+ `manifest.bootstrap.json`) is attached to the run as the
+     `jellyfin-shell-bootstrap-<sha>` artifact.
+   - **Tagged release:** push a `bootstrap-v*` tag (e.g. `git tag bootstrap-v2.0.1
+     && git push origin bootstrap-v2.0.1`). The same signed `.wgt` is published
+     as a GitHub Release for the tag.
+3. The workflow runs inside the Tizen Studio CLI image and chains the three
+   scripts from commit `4370dec`:
+   - `tooling/ci/configure-tizen-signing.sh` builds the `jellyfin` security
+     profile from the 4 secrets.
+   - `build_bootstrap.py --sign-profile jellyfin --out dist/` signs the package.
+   - `tooling/ci/verify-wgt-signed.sh dist/*.wgt` fails the run if the output
+     is missing `author-signature.xml` / `signature1.xml`, so an unsigned
+     package can never be published.
+
+Download the artifact (or release asset) and skip to step 2 of the Device
+Manager flow below. To build the signed `.wgt` locally instead, follow step 1.
+
 ## Primary path — Samsung Device Manager GUI (B1)
 
 **Works while `intershell_support:disabled`** because Device Manager talks to

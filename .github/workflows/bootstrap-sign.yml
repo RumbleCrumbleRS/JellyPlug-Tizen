@@ -1,0 +1,80 @@
+# Sign + release the HSB bootstrap WGT (JEL-10).
+#
+# Produces a SIGNED JellyfinShellBootstrap_v<ver>.wgt (author-signature.xml +
+# signature1.xml) that a retail Tizen TV will install — the artifact JEL-7's
+# physical-device validation and JEL-8's signed-release guard both depend on.
+#
+# Pipeline (the three scripts landed in 4370dec, this just wires them):
+#   1. tooling/ci/configure-tizen-signing.sh   builds the Tizen security
+#      profile "jellyfin" from the 4 CI secrets (set per JEL-9, Option 1).
+#   2. build_bootstrap.py --sign-profile jellyfin   signs the .wgt.
+#   3. tooling/ci/verify-wgt-signed.sh   fails the run if the output is
+#      unsigned, so we can never publish an uninstallable package.
+#
+# Triggers:
+#   - workflow_dispatch  — sign on demand from the Actions tab.
+#   - push tag bootstrap-v*  — sign + publish a GitHub Release for the tag.
+#
+# Requires the 4 secrets below. Without TIZEN_AUTHOR_P12_BASE64 the configure
+# step is a no-op and the verify step then fails the run (by design) rather
+# than silently shipping an unsigned package.
+
+name: bootstrap-sign
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "bootstrap-v*"
+
+jobs:
+  sign:
+    name: sign bootstrap .wgt
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      # Same Tizen Studio CLI image as the build-tizen CI job, so `tizen`
+      # (security-profiles, package) is on PATH.
+      image: ghcr.io/jellyfin/tizen-studio:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Tizen signing profile
+        env:
+          TIZEN_AUTHOR_P12_BASE64: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
+          TIZEN_AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          TIZEN_DISTRIBUTOR_P12_BASE64: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
+          TIZEN_DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+          TIZEN_PROFILE_NAME: jellyfin
+        run: tooling/ci/configure-tizen-signing.sh
+
+      - name: Build signed bootstrap .wgt
+        run: |
+          python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py \
+            --sign-profile jellyfin \
+            --out dist/
+
+      - name: Verify .wgt is signed (JEL-8 guard)
+        # A Tizen TV refuses to install an unsigned package. Fail before
+        # publishing if the artifact lacks author + distributor signatures.
+        run: tooling/ci/verify-wgt-signed.sh dist/*.wgt
+
+      - name: Upload signed .wgt artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-shell-bootstrap-${{ github.sha }}
+          path: |
+            dist/*.wgt
+            packages/shell-tizen-bootstrap/manifest.bootstrap.json
+
+      - name: Publish GitHub Release
+        # Only when launched from a bootstrap-v* tag; workflow_dispatch runs
+        # stop at the uploaded artifact above.
+        if: startsWith(github.ref, 'refs/tags/bootstrap-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Bootstrap ${{ github.ref_name }}"
+          files: dist/*.wgt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
