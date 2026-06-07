@@ -69,20 +69,58 @@ jobs:
     name: build shell-tizen
     runs-on: ubuntu-latest
     needs: [build-core]
-    container:
-      # Pre-built image with Tizen Studio CLI 5.5+ already configured.
-      # Maintained by the Jellyfin community (existing jellyfin-tizen uses it).
-      # Replace with the canonical image once we confirm a maintained source.
-      image: ghcr.io/jellyfin/tizen-studio:latest
+    env:
+      TIZEN_STUDIO_VER: "5.6"
     steps:
       - uses: actions/checkout@v4
+
+      # Tizen Studio's CLI runs on the JVM; pin a JDK the tooling supports
+      # rather than relying on whatever the runner image defaults to.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Install the official Samsung Web CLI directly on ubuntu-latest. The old
+      # prebuilt container image never existed (manifest unknown / 404), so this
+      # job had never passed. Mirrors bootstrap-sign.yml (JEL-11 / 721c65b).
+      - name: Install Tizen Studio Web CLI
+        run: |
+          set -euo pipefail
+          ver="${TIZEN_STUDIO_VER}"
+          url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
+          echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
+          curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          chmod +x tizen-installer.bin
+          # --accept-license is required for unattended install.
+          ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
+          rm -f tizen-installer.bin
+          # Persist the CLI on PATH for every subsequent step.
+          echo "${HOME}/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
+
+      - name: Verify tizen CLI is on PATH
+        run: tizen version
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # `tizen package` always signs and fails without an active profile (there
+      # is no unsigned mode), so mint a throwaway self-signed author cert for
+      # the build. Deliberately decoupled from the release signing secrets: the
+      # retail, TV-installable .wgt is bootstrap-sign.yml's job. The artifact
+      # below is TEST-signed — good for verifying the build/package pipeline and
+      # the emulator, not for installing on a retail TV.
+      - name: Configure ephemeral CI signing profile
+        run: tooling/ci/configure-tizen-ci-cert.sh
+
       - name: Build .wgt
+        env:
+          SIGNING_PROFILE: ci
         run: pnpm --filter @jellyfin-tv/shell-tizen build
       - uses: actions/upload-artifact@v4
         with:
