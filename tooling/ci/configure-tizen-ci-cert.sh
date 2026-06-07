@@ -56,13 +56,20 @@ echo ">> generating ephemeral self-signed author certificate"
 openssl req -x509 -newkey rsa:2048 -keyout "$key_pem" -out "$cert_pem" \
   -days 3650 -nodes -subj "/CN=JellyPlug CI/O=JellyPlug/C=US" 2>/dev/null
 
-# openssl 3 emits AES-based p12s by default; Tizen's bundled openssl path is
-# happier with the legacy RC2/3DES algorithms. Prefer -legacy, fall back if the
-# running openssl doesn't support it.
+# Tizen's signer runs on an old Java/BouncyCastle that only reads PKCS#12 files
+# built with a SHA1 MAC and PBE-SHA1 (3DES) encryption. openssl 3 defaults to a
+# SHA256 MAC + AES, which Tizen rejects at `tizen package` time as
+# "CertificationException: Invaild password" (a misleading message — the
+# password is fine, the MAC/cipher are unreadable). Force the full legacy
+# algorithm set. -macalg is the critical flag; -legacy/-*pbe make the cipher
+# match too. Fall back for openssl 1.x, which has no -legacy but already
+# defaults to these algorithms.
+legacy_args=(-legacy -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1)
 if ! openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
-       -passout "pass:$CERT_PW" -name "JellyPlug CI" -legacy 2>/dev/null; then
+       -passout "pass:$CERT_PW" -name "JellyPlug CI" "${legacy_args[@]}" 2>/dev/null; then
   openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
-    -passout "pass:$CERT_PW" -name "JellyPlug CI"
+    -passout "pass:$CERT_PW" -name "JellyPlug CI" \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
 fi
 chmod 600 "$author_p12"
 
