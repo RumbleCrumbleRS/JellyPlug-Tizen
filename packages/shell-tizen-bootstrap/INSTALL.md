@@ -15,13 +15,19 @@ sdbd `shell:` channel.
 1. Pre-flight on the Windows host:
    - Tizen Studio with the TV Extension installed.
    - The TV in Dev Mode, Host PC IP authorized, IP visible in Smart Hub Dev menu.
-   - Build the bootstrap WGT: `python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py`.
+   - Build a **signed** bootstrap WGT (requires a Tizen signing profile on the
+     host — same TV profile as v80 builds):
+     `python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py --sign-profile <profile>`.
      Output: `packages/shell-tizen-bootstrap/dist/JellyfinShellBootstrap_v<ver>.wgt`.
-     Alternatively `cd packages/shell-tizen-bootstrap/src && tizen package -t wgt -- .`
-     produces a signed `JellyfinShell.wgt` in that dir.
-   - Sign the WGT (Tizen Studio Certificate Manager → use the same TV profile
-     as v80 builds). Confirm `author-signature.xml` and `signature1.xml` are
-     embedded.
+     Running the script **without** `--sign-profile` produces a raw, UNSIGNED
+     zip that a TV will refuse to install — that mode is for the wgt-emulate
+     Tier-2 harness only (JEL-8).
+   - Confirm the package is signed before installing:
+     `tooling/ci/verify-wgt-signed.sh packages/shell-tizen-bootstrap/dist/JellyfinShellBootstrap_v<ver>.wgt`
+     (must print `OK ... signed (author + distributor)`; it checks for
+     `author-signature.xml` + `signature1.xml`). In CI the release pipeline
+     configures the profile via `tooling/ci/configure-tizen-signing.sh` and
+     runs this same guard before publishing.
 2. Launch **Tizen Studio → Device Manager** (or `tizen-studio/tools/device-manager/bin/device-manager.exe`).
 3. Confirm TV row shows the right IP and `Connected` state.
    - If listed as `Disconnected`, click **Remote Device Manager** in the

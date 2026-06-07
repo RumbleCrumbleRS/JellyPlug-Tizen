@@ -41,6 +41,12 @@ jobs:
             echo "wgt_path=${wgts[0]}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify .wgt is signed (JEL-8 guard)
+        # A Tizen TV refuses to install an unsigned package. Fail the release
+        # before it is published if the artifact lacks author + distributor
+        # signatures, so we never ship an uninstallable .wgt again.
+        run: tooling/ci/verify-wgt-signed.sh "${{ steps.resolve.outputs.wgt_path }}"
+
       - name: Create Release + attach .wgt
         uses: softprops/action-gh-release@v2
         with:
