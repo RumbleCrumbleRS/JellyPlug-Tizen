@@ -154,6 +154,11 @@ jobs:
           tizen cli-config --list || true
           echo "=== profiles.xml (base64; throwaway CI cert, decode to inspect) ==="
           find "$HOME" -path '*tizen-studio-data/profile/profiles.xml' -exec echo "--- {} ---" \; -exec base64 -w0 {} \; -exec echo \; 2>/dev/null || true
+          echo "=== .pwd files present ==="
+          find "$HOME/tizen-studio" "$HOME/tizen-studio-data" "$HOME/.tizen-ci-cert" -name '*.pwd' 2>/dev/null | while read -r f; do echo "EXISTS: $f"; done
+          echo "=== distributor dirs ==="
+          ls -la "$HOME/tizen-studio/tools/certificate-generator/certificates/distributor/" 2>/dev/null || echo "(install distributor dir missing)"
+          ls -la "$HOME/tizen-studio-data/tools/certificate-generator/certificates/distributor/" 2>/dev/null || echo "(data distributor dir missing)"
           echo "=== cli.log tail ==="
           find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
       - uses: actions/upload-artifact@v4
