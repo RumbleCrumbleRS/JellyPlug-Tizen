@@ -69,22 +69,34 @@ decode_p12() {
   fi
 }
 
-# Confirm the decoded .p12 actually opens with the supplied password before
-# handing it to tizen, so a bad cert/password produces a clear diagnostic
-# (and we distinguish "wrong base64" from "wrong password"). openssl 3 needs
-# -legacy for the RC2/3DES p12s Tizen tooling emits, so try both.
-validate_p12() {
-  local p12="$1" pw="$2" label="$3"
-  command -v openssl >/dev/null 2>&1 || return 0
-  if openssl pkcs12 -in "$p12" -passin "pass:$pw" -nokeys -noout >/dev/null 2>&1; then
-    return 0
+# Returns (on stdout) the password variant that actually opens the .p12, so a
+# trailing newline/CR on a pasted password secret doesn't masquerade as a
+# wrong-password failure. We try the password as-given and with trailing
+# CR/LF stripped; openssl 3 needs -legacy for the RC2/3DES p12s Tizen tooling
+# emits, so each variant is tried both ways. If none open the file we fail
+# with a precise diagnostic — at that point the cert/password pair itself is
+# wrong and only whoever set the secrets can fix it.
+_p12_opens() {  # p12, password -> 0 if openable
+  openssl pkcs12 -in "$1" -passin "pass:$2" -nokeys -noout >/dev/null 2>&1 ||
+  openssl pkcs12 -legacy -in "$1" -passin "pass:$2" -nokeys -noout >/dev/null 2>&1
+}
+resolve_password() {
+  local p12="$1" pw="$2" label="$3" cleaned
+  if ! command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$pw"; return 0   # can't validate here; let tizen be the judge
   fi
-  if openssl pkcs12 -legacy -in "$p12" -passin "pass:$pw" -nokeys -noout >/dev/null 2>&1; then
-    return 0
-  fi
-  echo "ERROR: $label — openssl could not open the .p12 with the given password." >&2
-  echo "       The decoded file is either not a valid PKCS#12 cert or the" >&2
-  echo "       password secret does not match it. Re-check the cert/password pair." >&2
+  cleaned="$(printf '%s' "$pw" | tr -d '\r\n')"
+  local cand
+  for cand in "$pw" "$cleaned"; do
+    if _p12_opens "$p12" "$cand"; then
+      printf '%s' "$cand"; return 0
+    fi
+  done
+  echo "ERROR: $label — openssl could not open the .p12 with the given password" >&2
+  echo "       (tried it as-is and with trailing newlines stripped, with and" >&2
+  echo "       without openssl -legacy). The decoded file is either not a valid" >&2
+  echo "       PKCS#12 cert or the password secret does not match it. Re-check" >&2
+  echo "       the cert/password pair stored in the CI secrets." >&2
   exit 1
 }
 
@@ -92,8 +104,9 @@ decode_p12 "$TIZEN_AUTHOR_P12_BASE64"      "$author_p12" "TIZEN_AUTHOR_P12_BASE6
 decode_p12 "$TIZEN_DISTRIBUTOR_P12_BASE64" "$dist_p12"   "TIZEN_DISTRIBUTOR_P12_BASE64"
 chmod 600 "$author_p12" "$dist_p12"
 
-validate_p12 "$author_p12" "$TIZEN_AUTHOR_PASSWORD"      "author cert (TIZEN_AUTHOR_PASSWORD)"
-validate_p12 "$dist_p12"   "$TIZEN_DISTRIBUTOR_PASSWORD" "distributor cert (TIZEN_DISTRIBUTOR_PASSWORD)"
+# Resolve the effective passwords (newline-tolerant) and use them downstream.
+AUTHOR_PW="$(resolve_password "$author_p12" "$TIZEN_AUTHOR_PASSWORD"      "author cert (TIZEN_AUTHOR_PASSWORD)")"
+DIST_PW="$(resolve_password   "$dist_p12"   "$TIZEN_DISTRIBUTOR_PASSWORD" "distributor cert (TIZEN_DISTRIBUTOR_PASSWORD)")"
 
 # Recreate the profile idempotently (CI runners may be reused).
 if tizen security-profiles list 2>/dev/null | grep -qw "$PROFILE_NAME"; then
@@ -105,14 +118,14 @@ fi
 tizen security-profiles add \
   -n "$PROFILE_NAME" \
   -a "$author_p12" \
-  -p "$TIZEN_AUTHOR_PASSWORD"
+  -p "$AUTHOR_PW"
 
 # Distributor certificate is what a retail TV validates on install. Without
 # this second signature the package is author-only and a TV rejects it.
 tizen security-profiles add-distributor \
   -n "$PROFILE_NAME" \
   -d "$dist_p12" \
-  -dp "$TIZEN_DISTRIBUTOR_PASSWORD"
+  -dp "$DIST_PW"
 
 echo "Tizen signing profile '$PROFILE_NAME' configured (author + distributor)."
 echo "Pass it to packaging with: tizen package -t wgt -s $PROFILE_NAME -- ."
