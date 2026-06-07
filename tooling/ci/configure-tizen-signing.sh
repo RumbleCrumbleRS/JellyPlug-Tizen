@@ -80,6 +80,26 @@ _p12_opens() {  # p12, password -> 0 if openable
   openssl pkcs12 -in "$1" -passin "pass:$2" -nokeys -noout >/dev/null 2>&1 ||
   openssl pkcs12 -legacy -in "$1" -passin "pass:$2" -nokeys -noout >/dev/null 2>&1
 }
+# Print a NON-SECRET structural diagnosis of a decoded .p12 so a failure tells
+# the secret owner exactly which knob is wrong (no key material is revealed —
+# only the leading bytes / file shape).
+diagnose_p12() {
+  local p12="$1" magic
+  magic="$(head -c 4 "$p12" | od -An -tx1 | tr -d ' \n')"
+  echo "       diagnostic: first bytes = ${magic}, size = $(stat -c%s "$p12" 2>/dev/null) bytes" >&2
+  case "$magic" in
+    3082*) echo "       -> header is DER SEQUENCE (a valid PKCS#12 starts 3082): the file" >&2
+           echo "          looks like a real .p12, so the PASSWORD secret is the mismatch." >&2 ;;
+    2d2d2d*) echo "       -> starts with '---' (PEM): the secret is a PEM cert/key, not a" >&2
+             echo "          PKCS#12. Build one: openssl pkcs12 -export -inkey k.pem -in c.pem -out cert.p12" >&2 ;;
+    *) if head -c 64 "$p12" | LC_ALL=C grep -qE '^[A-Za-z0-9+/=[:space:]]+$'; then
+         echo "       -> decoded bytes look like base64 TEXT, not binary DER: the secret is" >&2
+         echo "          probably DOUBLE base64-encoded. Encode the raw .p12 once: base64 -w0 cert.p12" >&2
+       else
+         echo "       -> unrecognized header: the secret is likely not a PKCS#12 file at all." >&2
+       fi ;;
+  esac
+}
 resolve_password() {
   local p12="$1" pw="$2" label="$3" cleaned
   if ! command -v openssl >/dev/null 2>&1; then
@@ -94,9 +114,9 @@ resolve_password() {
   done
   echo "ERROR: $label — openssl could not open the .p12 with the given password" >&2
   echo "       (tried it as-is and with trailing newlines stripped, with and" >&2
-  echo "       without openssl -legacy). The decoded file is either not a valid" >&2
-  echo "       PKCS#12 cert or the password secret does not match it. Re-check" >&2
-  echo "       the cert/password pair stored in the CI secrets." >&2
+  echo "       without openssl -legacy). Re-check the cert/password pair stored" >&2
+  echo "       in the CI secrets." >&2
+  diagnose_p12 "$p12"
   exit 1
 }
 
