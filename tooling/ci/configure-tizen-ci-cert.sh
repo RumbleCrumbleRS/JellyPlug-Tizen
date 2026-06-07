@@ -41,35 +41,47 @@ if ! command -v tizen >/dev/null 2>&1; then
   echo "       before this step (see ci.yml build-tizen)." >&2
   exit 1
 fi
-if ! command -v openssl >/dev/null 2>&1; then
-  echo "ERROR: openssl not found; cannot mint the CI author certificate." >&2
-  exit 1
-fi
-
 mkdir -p "$CERT_DIR"
 chmod 700 "$CERT_DIR"
-key_pem="$CERT_DIR/author-key.pem"
-cert_pem="$CERT_DIR/author-cert.pem"
 author_p12="$CERT_DIR/author.p12"
+rm -f "$author_p12"
 
-echo ">> generating ephemeral self-signed author certificate"
-openssl req -x509 -newkey rsa:2048 -keyout "$key_pem" -out "$cert_pem" \
-  -days 3650 -nodes -subj "/CN=JellyPlug CI/O=JellyPlug/C=US" 2>/dev/null
-
-# Tizen's signer runs on an old Java/BouncyCastle that only reads PKCS#12 files
-# built with a SHA1 MAC and PBE-SHA1 (3DES) encryption. openssl 3 defaults to a
-# SHA256 MAC + AES, which Tizen rejects at `tizen package` time as
-# "CertificationException: Invaild password" (a misleading message — the
-# password is fine, the MAC/cipher are unreadable). Force the full legacy
-# algorithm set. -macalg is the critical flag; -legacy/-*pbe make the cipher
-# match too. Fall back for openssl 1.x, which has no -legacy but already
-# defaults to these algorithms.
-legacy_args=(-legacy -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1)
-if ! openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
-       -passout "pass:$CERT_PW" -name "JellyPlug CI" "${legacy_args[@]}" 2>/dev/null; then
-  openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
-    -passout "pass:$CERT_PW" -name "JellyPlug CI" \
-    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+# Primary path: let Tizen mint its own author cert. `tizen certificate` emits a
+# PKCS#12 in exactly the format Tizen's own signer reads back at `tizen package`
+# time, so there is no cross-toolchain (openssl 3 vs. old Java/BouncyCastle)
+# algorithm mismatch to trip over. This is the canonical CI recipe.
+echo ">> generating ephemeral self-signed author certificate (tizen certificate)"
+if tizen certificate \
+     --alias JellyPlugCI \
+     --password "$CERT_PW" \
+     --name "JellyPlug CI" \
+     --organization JellyPlug \
+     --country US \
+     --filename author \
+     -- "$CERT_DIR" 2>/dev/null && [[ -s "$author_p12" ]]; then
+  echo ">> minted author.p12 via tizen certificate"
+else
+  # Fallback: mint with openssl. Tizen's signer runs on an old Java/BouncyCastle
+  # that reads PKCS#12 files built with a SHA1 MAC + PBE-SHA1 (3DES). openssl 3
+  # otherwise defaults to a SHA256 MAC + AES (and `-legacy` alone falls back to
+  # 40-bit RC2, which JDK 17 restricts) — either is rejected at package time as
+  # the misleading "CertificationException: Invaild password". Force the full
+  # legacy/3DES set; -macalg sha1 is the critical knob.
+  echo ">> 'tizen certificate' unavailable/failed; falling back to openssl (3DES p12)"
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "ERROR: 'tizen certificate' failed and openssl is absent; cannot mint cert." >&2
+    exit 1
+  fi
+  key_pem="$CERT_DIR/author-key.pem"
+  cert_pem="$CERT_DIR/author-cert.pem"
+  openssl req -x509 -newkey rsa:2048 -keyout "$key_pem" -out "$cert_pem" \
+    -days 3650 -nodes -subj "/CN=JellyPlug CI/O=JellyPlug/C=US" 2>/dev/null
+  pbe_args=(-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1)
+  if ! openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
+         -passout "pass:$CERT_PW" -name "JellyPlug CI" "${pbe_args[@]}" -legacy 2>/dev/null; then
+    openssl pkcs12 -export -inkey "$key_pem" -in "$cert_pem" -out "$author_p12" \
+      -passout "pass:$CERT_PW" -name "JellyPlug CI" "${pbe_args[@]}"
+  fi
 fi
 chmod 600 "$author_p12"
 
