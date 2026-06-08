@@ -119,7 +119,7 @@ def build_wgt_signed(out_dir: Path, ver: str, profile: str, tizen_cli: str) -> P
             if not src.exists():
                 raise RuntimeError(f"bootstrap payload missing: {src}")
             shutil.copy2(src, stage_dir / src.name)
-        cmd = [tizen_cli, "package", "-t", "wgt", "-s", profile, "-o", str(out_dir), "--", "."]
+        cmd = [tizen_cli, "package", "-t", "wgt", "-s", profile, "-o", str(out_dir.resolve()), "--", "."]
         print(f">> {' '.join(cmd)}  (cwd={stage_dir})")
         subprocess.run(cmd, cwd=stage_dir, check=True)
 
