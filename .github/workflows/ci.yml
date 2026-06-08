@@ -47,6 +47,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
 
+  verify-artifacts:
+    name: verify committed .wgt are signed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every committed .wgt must be signed (JEL-8 guard)
+        # A retail Tizen TV refuses to install an unsigned package. Fail CI if
+        # any committed widget lacks author + distributor signatures, so we can
+        # never re-commit an unsigned .wgt the way the HSB bootstrap once was.
+        run: |
+          shopt -s globstar nullglob
+          wgts=(release-artifacts/**/*.wgt)
+          if [[ ${#wgts[@]} -eq 0 ]]; then
+            echo "No committed .wgt found — nothing to verify."
+            exit 0
+          fi
+          tooling/ci/verify-wgt-signed.sh "${wgts[@]}"
+
   build-core:
     name: build shell-core
     runs-on: ubuntu-latest

@@ -1,10 +1,14 @@
-# Hosted Shell Bootstrap v2.0.1 — AC3 verify build (unsigned)
+# Hosted Shell Bootstrap v2.0.1 — AC3 verify build (signed)
 
-`JellyfinShellBootstrap_v2.0.1.wgt` — 580,775 bytes, sha256
-`49767b6eb820acee59aa61ffddfd80aeec2ae5ec3a8ec970dafa951878f40a0d`.
+`JellyfinShellBootstrap_v2.0.1.wgt` — 580,197 bytes, sha256
+`8d6297d44eaae09b82ad89e5aad0cdc7f511415aa6bec52f2c40cdbaaeee5ebb`.
 
-**Unsigned.** Sign with Tizen Studio Certificate Manager (same author profile
-used for previous JellyfinShell WGTs) before installing on a TV.
+**Signed (author + distributor).** Produced by the `bootstrap-sign` GitHub
+Actions workflow from `main` (`configure-tizen-signing.sh` → `build_bootstrap.py
+--sign-profile jellyfin` → `tizen package -t wgt -s jellyfin`) and verified by
+`tooling/ci/verify-wgt-signed.sh` (embeds `author-signature.xml` +
+`signature1.xml`). Installable on a retail Tizen TV via Samsung Device Manager —
+no manual Certificate Manager step required (JEL-8).
 
 ## What this build adds
 
