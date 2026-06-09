@@ -30,6 +30,11 @@ const SERVE = path.join(HERE, 'serve.py');
 const SERVER_KEY = 'jellyfin.shell.serverUrl';
 
 // --- locate jsdom (local install or JSDOM_PATH); skip cleanly if absent ------
+// ResourceLoader was a named export in older jsdom (<=16) but was dropped in
+// newer releases (jsdom 29 exposes only JSDOM/VirtualConsole/CookieJar/…). We
+// treat it as optional: when present we use it to relax strictSSL, otherwise we
+// fall back to `resources: 'usable'`, which is enough to load the http://
+// localhost manifest/shell that this harness serves.
 let JSDOM, ResourceLoader, VirtualConsole;
 try {
   const mod = process.env.JSDOM_PATH ? require(process.env.JSDOM_PATH) : require('jsdom');
@@ -70,7 +75,9 @@ async function startServer(port, extraArgs) {
 // the serverUrl (simulating a post-connect reload). Returns the final hsbState.
 async function bootInBrowser(port, { seedServer } = {}) {
   const base = `http://127.0.0.1:${port}`;
-  const resources = new ResourceLoader({ strictSSL: false });
+  const resources = typeof ResourceLoader === 'function'
+    ? new ResourceLoader({ strictSSL: false })
+    : 'usable';
   // jsdom raises "Not implemented: navigation" when the bootloader calls
   // location.reload() — capture that as proof the reload was invoked.
   const navAttempts = { count: 0 };
@@ -96,14 +103,27 @@ async function bootInBrowser(port, { seedServer } = {}) {
   const terminal = new Set([
     'shell-loaded', 'baked-shell-loaded', 'baked-load-failed', 'no-server-url',
   ]);
+  // JEL-32: sample #boot-root visibility and the phase sequence across the whole
+  // boot so warm-boot scenarios can prove the connect form never flickers in,
+  // not merely that it is hidden at the terminal phase.
+  const phasesSeen = [];
+  let bootRootEverVisible = false;
+  function sampleBootRoot() {
+    const root = win.document.getElementById('boot-root');
+    if (root && win.getComputedStyle(root).display !== 'none') bootRootEverVisible = true;
+    const p = win.__hsbState && win.__hsbState.phase;
+    if (p && phasesSeen[phasesSeen.length - 1] !== p) phasesSeen.push(p);
+  }
   const deadline = Date.now() + 12000;
   let phase = null;
   while (Date.now() < deadline) {
+    sampleBootRoot();
     phase = win.__hsbState && win.__hsbState.phase;
     if (phase && terminal.has(phase)) break;
-    await sleep(50);
+    await sleep(10);
   }
-  return { dom, win, state: win.__hsbState || {}, phase, navAttempts };
+  sampleBootRoot();
+  return { dom, win, state: win.__hsbState || {}, phase, navAttempts, phasesSeen, bootRootEverVisible };
 }
 
 const results = [];
@@ -148,6 +168,44 @@ async function scenarioHappyPath(port) {
   } finally { proc.kill(); }
 }
 
+// 2b. Warm boot (JEL-32): a saved serverUrl auto-connects WITHOUT ever painting
+//     the connect screen. #boot-root must stay display:none for the entire boot
+//     (no connect-form flicker), the bootloader must never enter the
+//     'no-server-url' phase, and the hosted shell (which document.writes
+//     ${server}/web/index.html) must load. The bootstrap uses no Tizen APIs, so
+//     this path is byte-identical on desktop browser and the Tizen 5.0 WebView.
+async function scenarioWarmBoot(port) {
+  const proc = await startServer(port, []);
+  try {
+    const { dom, win, state, phase, phasesSeen, bootRootEverVisible, navAttempts } =
+      await bootInBrowser(port, { seedServer: `http://127.0.0.1:${port}` });
+    const root = win.document.getElementById('boot-root');
+    check('warm-boot: #boot-root never painted (no connect flicker)',
+      bootRootEverVisible === false, `everVisible=${bootRootEverVisible}`);
+    check('warm-boot: #boot-root hidden at end (display:none)',
+      root && win.getComputedStyle(root).display === 'none',
+      `display=${root && win.getComputedStyle(root).display}`);
+    check('warm-boot: no inline display set on #boot-root (showConnectForm never ran)',
+      root && (root.style.display === '' || root.style.display === 'none'),
+      `inline=${JSON.stringify(root && root.style.display)}`);
+    check('warm-boot: bootloader never entered no-server-url phase',
+      !phasesSeen.includes('no-server-url'), `phases=${phasesSeen.join('>')}`);
+    check('warm-boot: no location.reload() (already warm, no submit)',
+      navAttempts.count === 0, `navAttempts=${navAttempts.count}`);
+    check('warm-boot: went straight to manifest fetch (loadHostedShell, not connect form)',
+      phasesSeen[0] === 'fetch-manifest', `phases=${phasesSeen.join('>')}`);
+    check('warm-boot: hosted /shell/shell.min.js was selected for load',
+      /\/shell\/shell\.min\.js/.test(state.shellUrl || ''), `shellUrl=${state.shellUrl}`);
+    check('warm-boot: reaches shell-loaded (hosted shell took over)',
+      phase === 'shell-loaded', `phase=${phase}`);
+    check('warm-boot: shell that performs the /web/ document.write executed',
+      win.__emulatedShell === true);
+    check('warm-boot: no boot errors recorded',
+      (state.errors || []).length === 0, `errors=${(state.errors || []).join('|')}`);
+    dom.window.close();
+  } finally { proc.kill(); }
+}
+
 // 3. manifest 503 -> bootloader still loads shell.min.js with ?t= cache-buster.
 async function scenarioFailManifest(port) {
   const proc = await startServer(port, ['--fail-manifest']);
@@ -177,6 +235,7 @@ async function scenarioFailShell(port) {
   void REPO_ROOT; // (kept for clarity / future use)
   await scenarioConnectForm(8101);
   await scenarioHappyPath(8102);
+  await scenarioWarmBoot(8105);
   await scenarioFailManifest(8103);
   await scenarioFailShell(8104);
 
