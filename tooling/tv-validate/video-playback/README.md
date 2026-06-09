@@ -32,7 +32,7 @@ getDeviceProfile: function (profileBuilder) {
 }
 ```
 
-So the only TV-vs-browser difference the *shell* can introduce is those two
+So the only TV-vs-browser difference the _shell_ can introduce is those two
 flags. Everything else is jellyfin-web's `browserDeviceProfile`, which is driven
 by (a) UA-gated branches (`browser.tizen` / `tizenVersion`) and (b) the running
 engine's `MediaSource.isTypeSupported` / `video.canPlayType`.
@@ -42,18 +42,19 @@ engine's `MediaSource.isTypeSupported` / `video.canPlayType`.
   a `NativeShell` shim whose `getDeviceProfile` flags are byte-extracted from
   `shell.js` at runtime, so apphost routes through the exact flags the WGT ships.
   (The shim is injected with `Page.addScriptToEvaluateOnNewDocument`; the login
-  navigation is routed through `about:blank` so it lands on a *new document* and
+  navigation is routed through `about:blank` so it lands on a _new document_ and
   the shim actually fires — a same-URL hash nav is same-document and would skip it.)
 
 **What this reproduces faithfully:** jellyfin-web 10.11's Tizen codec additions
-are **UA-gated** — when `browser.tizen` is true it *asserts* the Samsung
+are **UA-gated** — when `browser.tizen` is true it _asserts_ the Samsung
 hardware-decoder format list (HEVC, VC1, MPEG-2, WMV/ASF, AVI, MPEG-TS, …)
 rather than probing the engine. That list is engine-independent, so the Tizen UA
-+ shim here produces the same DirectPlayProfiles the real TV sends (31 vs the
-browser's 18 in `last-run.json`), and the **server-side direct-play/transcode
-decision** is the genuine one for real media.
 
-**Limitation (not hidden):** the UA-gated list is jellyfin-web *claiming*
+- shim here produces the same DirectPlayProfiles the real TV sends (31 vs the
+  browser's 18 in `last-run.json`), and the **server-side direct-play/transcode
+  decision** is the genuine one for real media.
+
+**Limitation (not hidden):** the UA-gated list is jellyfin-web _claiming_
 Samsung HW support; whether the TV's Chromium-63 webview + AVPlay actually
 decodes and renders a given file can only be confirmed on the physical set
 (REST / `__shellDiag` — no framebuffer capture is possible, see the JEL-7
