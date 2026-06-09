@@ -498,8 +498,8 @@
   }
   var AppInfo = {
       deviceId: getDeviceId(),
-      deviceName: "Samsung Smart TV",
-      appName: "Jellyfin Shell for Tizen",
+      deviceName: "Tizen TV",
+      appName: "Jellyfin for Tizen",
     },
     SupportedFeatures = [
       "exit",
@@ -516,12 +516,39 @@
       "subtitleappearancesettings",
       "subtitleburnsettings",
     ];
+  // Resolve deviceName from the TV's BUILD model; fall back to the "Tizen TV"
+  // constant on any failure. Runs in parallel with getSystemInfo() before init
+  // resolves. Mirrors shell.js.
+  var deviceNameResolved = null;
+  function resolveDeviceName() {
+    if (deviceNameResolved) return deviceNameResolved;
+    if (!hasTizen || !tizen.systeminfo)
+      return (deviceNameResolved = Promise.resolve(AppInfo.deviceName));
+    return (deviceNameResolved = new Promise(function (resolve) {
+      try {
+        tizen.systeminfo.getPropertyValue(
+          "BUILD",
+          function (info) {
+            if (info && info.model) AppInfo.deviceName = info.model;
+            resolve(AppInfo.deviceName);
+          },
+          function () {
+            resolve(AppInfo.deviceName);
+          },
+        );
+      } catch (e) {
+        resolve(AppInfo.deviceName);
+      }
+    }));
+  }
   window.NativeShell = {
     AppHost: {
       init: function () {
-        return getSystemInfo().then(function () {
-          return AppInfo;
-        });
+        return Promise.all([getSystemInfo(), resolveDeviceName()]).then(
+          function () {
+            return AppInfo;
+          },
+        );
       },
       appName: function () {
         return AppInfo.appName;
