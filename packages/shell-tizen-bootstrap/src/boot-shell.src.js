@@ -362,6 +362,25 @@
       localStorage.removeItem(SERVER_URL_KEY);
     } catch (e) {}
   }
+  var BOOT_FETCH_TIMEOUT_MS = 15000;
+  function withBootTimeout(p, label) {
+    return new Promise(function (resolve, reject) {
+      var settled = !1,
+        timer = setTimeout(function () {
+          settled ||
+            ((settled = !0),
+            reject(new Error("Timed out reaching server (" + label + ")")));
+        }, BOOT_FETCH_TIMEOUT_MS);
+      Promise.resolve(p).then(
+        function (v) {
+          settled || ((settled = !0), clearTimeout(timer), resolve(v));
+        },
+        function (e) {
+          settled || ((settled = !0), clearTimeout(timer), reject(e));
+        },
+      );
+    });
+  }
   function normalizeServerUrl(input) {
     var url = String(input || "").trim();
     return url
@@ -2556,14 +2575,18 @@
       } catch (_) {}
     var pf = window.__shellPrefetch,
       fetchOpts = { credentials: "omit" },
-      indexFetch =
+      indexFetch = withBootTimeout(
         pf && pf.baseUrl === baseUrl && pf.index
           ? pf.index
           : fetch(baseUrl + "index.html", fetchOpts),
-      configFetch =
+        "web client",
+      ),
+      configFetch = withBootTimeout(
         pf && pf.baseUrl === baseUrl && pf.config
           ? pf.config
-          : fetch(baseUrl + "config.json", fetchOpts);
+          : fetch(baseUrl + "config.json", fetchOpts),
+        "web config",
+      );
     ((window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
       (window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0),
       (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0));
@@ -2727,36 +2750,40 @@
     rootEl && (rootEl.style.display = "block");
     var form = document.getElementById("server-form"),
       input = document.getElementById("server-input");
-    !form ||
-      !input ||
-      form.addEventListener("submit", function (ev) {
-        ev.preventDefault();
-        var url = normalizeServerUrl(input.value);
-        if (!url) {
-          showError("Please enter a server URL.");
-          return;
-        }
-        (showError(""),
-          validateServer(url)
-            .then(function () {
-              return (saveServerUrl(url), loadRemoteWebClient(url));
-            })
-            .catch(function (err) {
-              showError(
-                "Could not reach server: " +
-                  (err && err.message ? err.message : "unknown error"),
-              );
-            }));
-      });
+    if (!form || !input) return;
+    if (!input.value) {
+      var saved = loadServerUrl();
+      saved && (input.value = saved);
+    }
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var url = normalizeServerUrl(input.value);
+      if (!url) {
+        showError("Please enter a server URL.");
+        return;
+      }
+      (showError(""),
+        validateServer(url)
+          .then(function () {
+            return (saveServerUrl(url), loadRemoteWebClient(url));
+          })
+          .catch(function (err) {
+            showError(
+              "Could not reach server: " +
+                (err && err.message ? err.message : "unknown error"),
+            );
+          }));
+    });
   }
   function bootstrap() {
     (registerRemoteKeys(), installBackHandler());
     var stored = loadServerUrl();
     stored
       ? loadRemoteWebClient(stored).catch(function () {
-          (clearServerUrl(),
-            attachConnectForm(),
-            showError("Saved server is unreachable. Enter a new address."));
+          (attachConnectForm(),
+            showError(
+              "Could not reach saved server. Check your network and try again.",
+            ));
         })
       : attachConnectForm();
   }
