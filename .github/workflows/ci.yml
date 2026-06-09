@@ -1,8 +1,8 @@
-# CI: lint + typecheck + per-platform build matrix.
+# CI: format gate + Tizen test/build.
 #
-# Triggered on PRs and pushes to main. Path filters keep webOS/Android jobs
-# from running on Tizen-only changes (and vice versa). shell-core changes
-# fan out to all platforms.
+# Triggered on PRs and pushes to main. This repo is Tizen-only: the format
+# gate covers the whole tree, the test gate runs every package's test script,
+# and build-tizen packages + signs the .wgt.
 #
 # This workflow is drafted but NOT enabled - it has no remote yet (see
 # repo-structure section 9). Once the repo is pushed to GitHub it activates
@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: lint
+  format:
+    name: format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,11 +31,10 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run lint
       - run: pnpm run format:check
 
-  typecheck:
-    name: typecheck
+  test:
+    name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +44,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run typecheck
+      - run: pnpm run test
 
   verify-artifacts:
     name: verify committed .wgt are signed
@@ -81,28 +80,10 @@ jobs:
         # so an edit to one without the other can never silently ship again.
         run: python3 packages/shell-tizen-bootstrap/scripts/verify_boot_shell_src.py
 
-  build-core:
-    name: build shell-core
-    runs-on: ubuntu-latest
-    needs: [lint, typecheck]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @jellyfin-tv/shell-core build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: shell-core-dist
-          path: packages/shell-core/dist
-
   build-tizen:
     name: build shell-tizen
     runs-on: ubuntu-latest
-    needs: [build-core]
+    needs: [format, test]
     env:
       TIZEN_STUDIO_VER: "5.6"
     steps:
@@ -213,46 +194,3 @@ jobs:
         with:
           name: jellyfin-tv-shell-tizen-${{ github.sha }}
           path: packages/shell-tizen/dist/*.wgt*
-
-  build-webos:
-    name: build shell-webos
-    runs-on: ubuntu-latest
-    needs: [build-core]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Install ares-cli
-        run: npm i -g @webosose/ares-cli
-      - name: Build .ipk
-        run: pnpm --filter @jellyfin-tv/shell-webos build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jellyfin-tv-shell-webos-${{ github.sha }}
-          path: packages/shell-webos/dist/*.ipk*
-
-  build-android:
-    name: build shell-android
-    runs-on: ubuntu-latest
-    needs: [lint] # Android build is independent of TS workspace
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: android-actions/setup-android@v3
-      - name: Build debug APK
-        working-directory: packages/shell-android
-        run: |
-          # Stubbed until M5 lands the real Gradle project.
-          mkdir -p app/build/outputs/apk/debug
-          echo "android build placeholder - M5" > app/build/outputs/apk/debug/jellyfin-tv-shell.apk.placeholder
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jellyfin-tv-shell-android-${{ github.sha }}
-          path: packages/shell-android/app/build/outputs/apk/debug/*
