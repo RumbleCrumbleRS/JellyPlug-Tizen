@@ -363,14 +363,15 @@
     } catch (e) {}
   }
   var BOOT_FETCH_TIMEOUT_MS = 15000;
-  function withBootTimeout(p, label) {
+  var CONNECT_FETCH_TIMEOUT_MS = 5000;
+  function withBootTimeout(p, label, ms) {
     return new Promise(function (resolve, reject) {
       var settled = !1,
         timer = setTimeout(function () {
           settled ||
             ((settled = !0),
             reject(new Error("Timed out reaching server (" + label + ")")));
-        }, BOOT_FETCH_TIMEOUT_MS);
+        }, ms || BOOT_FETCH_TIMEOUT_MS);
       Promise.resolve(p).then(
         function (v) {
           settled || ((settled = !0), clearTimeout(timer), resolve(v));
@@ -389,19 +390,24 @@
       : "";
   }
   function validateServer(serverUrl) {
-    return fetch(serverUrl + "/System/Info/Public", {
-      method: "GET",
-      credentials: "omit",
-      cache: "no-store",
-    })
-      .then(function (resp) {
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        return resp.json();
+    return withBootTimeout(
+      fetch(serverUrl + "/System/Info/Public", {
+        method: "GET",
+        credentials: "omit",
+        cache: "no-store",
       })
-      .then(function (info) {
-        if (!info || !info.Id) throw new Error("Not a Jellyfin server");
-        return info;
-      });
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          return resp.json();
+        })
+        .then(function (info) {
+          if (!info || !info.Id || !info.Version)
+            throw new Error("Not a Jellyfin server");
+          return info;
+        }),
+      "connect",
+      CONNECT_FETCH_TIMEOUT_MS,
+    );
   }
   function registerRemoteKeys() {
     if (!(!hasTizen || !tizen.tvinputdevice)) {
