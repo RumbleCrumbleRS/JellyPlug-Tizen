@@ -19,11 +19,11 @@ or burns it into the video.
 
 ## Render path per codec (what actually differs)
 
-| Subtitle codec | Server delivery (TV & browser) | Client render path |
-|---|---|---|
-| `subrip` / SRT (text) | **External** | jellyfin-web HTML text overlay |
-| `ass` / `ssa` (SSA) | **External** (because `enableSsaRender:true`) | **SubtitlesOctopus** (libass-WASM) `<canvas>` |
-| `pgssub`, `dvdsub` (bitmap) | **Encode** (server burns into the transcoded video) | none — pixels are in the video |
+| Subtitle codec              | Server delivery (TV & browser)                      | Client render path                            |
+| --------------------------- | --------------------------------------------------- | --------------------------------------------- |
+| `subrip` / SRT (text)       | **External**                                        | jellyfin-web HTML text overlay                |
+| `ass` / `ssa` (SSA)         | **External** (because `enableSsaRender:true`)       | **SubtitlesOctopus** (libass-WASM) `<canvas>` |
+| `pgssub`, `dvdsub` (bitmap) | **Encode** (server burns into the transcoded video) | none — pixels are in the video                |
 
 The server treats the TV and the browser **identically** for every codec; the
 only divergence vector is the client render engine (M63/Chrome 63 vs desktop V8).
@@ -34,6 +34,7 @@ All three are runnable in this sandbox. Set `JELLYFIN_URL`, `JELLYFIN_USER`,
 `JELLYFIN_PASS` (the live Test test server).
 
 ### `subtitle-delivery.mjs` — server delivery matrix (no browser)
+
 Authoritative. Auto-discovers one real item per codec, then asks the server
 (`/Items/{id}/PlaybackInfo`) for the `DeliveryMethod` under the shell's TV
 profile (`enableSsaRender:true`) vs a no-SSA profile. Proves the table above and
@@ -45,6 +46,7 @@ node subtitle-delivery.mjs
 ```
 
 ### `octopus-worker-syntax.cjs` — M63 parse-safety guard for the ASS renderer
+
 ASS rendering loads `subtitles-octopus-worker.js` via `new Worker(url)`, which
 **bypasses the shell's Babel transpile** (the shell only transpiles `<script>`
 tags + plugin specs). If that worker bundle ever ships ES2020+ syntax, the M63
@@ -59,6 +61,7 @@ node octopus-worker-syntax.cjs
 ```
 
 ### `subtitle-render-capture.mjs` — browser-side render baseline (CDP)
+
 Drives headless Chrome-for-Testing (bring it up once with
 `../dpad-nav-test/bootstrap-chromium.sh`), logs in, plays an item, opens the
 subtitle selector, switches tracks, and records the render path + screenshots.
