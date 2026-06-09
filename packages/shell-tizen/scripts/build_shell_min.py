@@ -34,7 +34,20 @@ BABEL_FPR_PLACEHOLDER = "__BABEL_FPR__"
 SHELL_VER_PLACEHOLDER = "__SHELL_VER__"
 QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 
-TARGET_BYTES = 100000  # JEL-1977 v69: raised 94000 -> 100000 for /web/ body cache helpers
+# HARD_CAP is the deployed-blob ceiling (100 KiB) enforced by the assert in
+# main(). JEL-1977 raised the budget 94000 -> 100000; the hard cap is 102400.
+HARD_CAP = 102400
+# MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
+# `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
+MIN_JEL_LINES = 80
+# JEL-91: budget the breadcrumb manifest against HARD_CAP, not a fixed 100000.
+# The old TARGET (100000) had drifted *below* the minified base size (~101.3 KB
+# after accumulated feature growth, incl. JEL-90's resolveDeviceName model read),
+# so build_manifest computed a negative budget and emitted every breadcrumb
+# unbounded — overflowing the cap (~102994 B). The manifest now trims breadcrumbs
+# from the tail to fit under HARD_CAP while preserving the MIN_JEL_LINES floor, so
+# future code growth self-corrects here instead of failing the build.
+TARGET_BYTES = HARD_CAP  # manifest budget tracks the hard cap (was 100000)
 BASE_BYTES_PLACEHOLDER = 0  # filled at runtime after esbuild pass
 
 ESBUILD = shutil.which("esbuild") or "esbuild"
@@ -206,6 +219,24 @@ def build_manifest(base_size: int, breadcrumbs) -> str:
     budget = TARGET_BYTES - base_size - len(header) - len(footer)
 
     lines = ["*" + " ".join(refs) + "\n" for refs, _ in breadcrumbs]
+
+    # JEL-91: trim breadcrumbs from the tail (source order) until the bare lines
+    # fit the byte budget, but never drop below the MIN_JEL_LINES grep floor.
+    # base_size now sits close to HARD_CAP, so the full breadcrumb set no longer
+    # fits; shedding tail entries holds the deployed blob under the cap without
+    # bloating it. Trimming is deterministic, so the output is reproducible.
+    kept = len(lines)
+    while kept > MIN_JEL_LINES and sum(len(l) for l in lines[:kept]) > budget:
+        kept -= 1
+    dropped = len(lines) - kept
+    if dropped:
+        print(
+            f"manifest: trimmed {dropped} of {len(lines)} breadcrumb lines "
+            f"to fit {budget} B budget (kept {kept}, floor {MIN_JEL_LINES})"
+        )
+    lines = lines[:kept]
+    breadcrumbs = breadcrumbs[:kept]
+
     bare = sum(len(l) for l in lines)
     remaining = budget - bare
 
@@ -244,8 +275,15 @@ def main() -> int:
         f"babel_fpr={babel_fingerprint()}  shell_ver={shell_version()}"
     )
 
-    assert len(out) <= 102400, f"size {len(out)} > 100 KiB"  # JEL-1977 v69: 96→100 KiB for /web/ body cache helpers
-    assert jel_lines >= 80, f"jel_lines {jel_lines} < 80"
+    # JEL-91: if even the MIN_JEL_LINES floor can't fit under HARD_CAP, the
+    # minified code itself has outgrown the budget — a real cap bump is owed
+    # (precedent: JEL-1977). Fail loudly rather than ship an oversized blob.
+    assert len(out) <= HARD_CAP, (
+        f"size {len(out)} > {HARD_CAP} (100 KiB cap): minified base "
+        f"{base_size} B leaves no room for the {MIN_JEL_LINES}-line breadcrumb "
+        "floor — trim shell.js or raise HARD_CAP with justification (JEL-1977)"
+    )
+    assert jel_lines >= MIN_JEL_LINES, f"jel_lines {jel_lines} < {MIN_JEL_LINES}"
     return 0
 
 
