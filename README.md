@@ -123,8 +123,8 @@ Server hosting notes and the manifest schema are in
 
 ```sh
 pnpm install
-pnpm run lint
-pnpm run typecheck
+pnpm run format:check
+pnpm run test
 pnpm run build
 ```
 
@@ -146,15 +146,14 @@ The full emulator/on-device testing guide is in
 
 ```
 packages/
-  shell-core/                shared TS: connect screen, key maps, validation
   shell-tizen/               Samsung shell.min.js source (swappable via server)
   shell-tizen-bootstrap/     Hosted Shell Bootstrap WGT (installed once)
   server-shell-drop/         server-side /shell/ layout + manifest emitter
-  shell-webos/               LG webOS .ipk (scaffold)
-  shell-android/             Android TV .apk (scaffold)
 tooling/
   wgt-emulate/               run + test the WGT in a desktop browser
   tv-inspect/                remote CDP capture/verify on a real TV
+  tv-validate/               on-device behaviour verification harnesses
+  ci/                        CI helpers (wgt signing checks, cert setup)
 ```
 
 ## Legacy thin-shell

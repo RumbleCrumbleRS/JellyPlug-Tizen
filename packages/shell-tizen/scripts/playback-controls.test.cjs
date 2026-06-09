@@ -59,14 +59,6 @@ const TV_SHELL_MIN = path.join(
   "src",
   "shell.min.js",
 );
-const INPUT_TS = path.join(
-  REPO,
-  "packages",
-  "shell-core",
-  "src",
-  "input",
-  "index.ts",
-);
 
 // The jellyfin-web playback command contract: KeyName -> { code, command }.
 // `command` is null where jellyfin-web has no dedicated keyboard command case.
@@ -113,7 +105,6 @@ function fnBody(src, name) {
 
 const tvSrc = fs.readFileSync(TV_SHELL, "utf8");
 const minSrc = fs.readFileSync(TV_SHELL_MIN, "utf8");
-const inputSrc = fs.readFileSync(INPUT_TS, "utf8");
 
 // --- 1. The shell asks the firmware to deliver every playback key -----------
 // Without this, controls (1)/(2)/(4)/(5) never reach jellyfin-web on the TV at
@@ -137,17 +128,6 @@ check(
   missingFromMin.length === 0,
   "missing=[" + missingFromMin + "]",
 );
-
-// --- 3. StandardKey union + TIZEN_KEYMAP declare every playback key ----------
-// shell-core's translator is currently dead code (the shell registers by name
-// and native keyCodes reach jellyfin-web directly), but it documents the
-// canonical contract, so it must still name every playback key.
-for (const k of PLAYBACK_NAMES) {
-  check(
-    "shell-core StandardKey union declares " + k,
-    new RegExp('"' + k + '"').test(inputSrc),
-  );
-}
 
 // --- 4. The shell never SWALLOWS a playback key -----------------------------
 // jellyfin-web only runs a command if the keydown survives to its handler. The

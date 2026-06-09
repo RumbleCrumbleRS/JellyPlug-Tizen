@@ -5,14 +5,13 @@
 // registers each one via tizen.tvinputdevice.registerKey (otherwise Tizen
 // swallows them at the firmware level). Once registered, Tizen delivers a DOM
 // keydown carrying a numeric keyCode, and jellyfin-web's focus engine resolves
-// that keyCode through its own KeyNames table into a command. Three things must
-// therefore agree on exactly which 12 keys — and their keycodes — are in play:
+// that keyCode through its own KeyNames table into a command. The canonical
+// 12-key keycode->name contract is the EXPECTED table below; two things must
+// agree with it on exactly which 12 keys — and their keycodes — are in play:
 //
 //   1. packages/shell-tizen/src/shell.js  registerRemoteKeys()  — what we ASK
 //      the platform to deliver (also mirrored into the shipped shell.min.js).
-//   2. packages/shell-core/src/input/index.ts  TIZEN_KEYMAP  — our canonical
-//      keycode->name table (exported as the shared dispatch translator).
-//   3. jellyfin-web's KeyNames table — the actual consumer (see EVIDENCE).
+//   2. jellyfin-web's KeyNames table — the actual consumer (see EVIDENCE).
 //
 // EVIDENCE — captured live from $JELLYFIN_URL/web/main.jellyfin.bundle.js
 // (jellyfin-web 10.11.10) on 2026-06-09 while verifying JEL-35. This is the
@@ -53,14 +52,6 @@ const TV_SHELL_MIN = path.join(
   "shell-tizen",
   "src",
   "shell.min.js",
-);
-const INPUT_TS = path.join(
-  REPO,
-  "packages",
-  "shell-core",
-  "src",
-  "input",
-  "index.ts",
 );
 const STUB_JS = path.join(REPO, "tooling", "wgt-emulate", "tizen-stub.js");
 
@@ -110,30 +101,7 @@ function fnBody(src, name) {
   throw new Error(name + ": unbalanced braces");
 }
 
-// Parse `<code>: "<Name>"` pairs out of a named object-literal in TS/JS source.
-function parseKeymap(src, mapName) {
-  const start = src.indexOf(mapName);
-  if (start === -1) throw new Error(mapName + " not found");
-  const open = src.indexOf("{", start);
-  let depth = 0;
-  let end = open;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  const body = src.slice(open, end + 1);
-  const map = {};
-  const re = /(\d+)\s*:\s*"([A-Za-z0-9]+)"/g;
-  let m;
-  while ((m = re.exec(body)) !== null) map[Number(m[1])] = m[2];
-  return map;
-}
-
 const tvSrc = fs.readFileSync(TV_SHELL, "utf8");
-const inputSrc = fs.readFileSync(INPUT_TS, "utf8");
 const minSrc = fs.readFileSync(TV_SHELL_MIN, "utf8");
 const stubSrc = fs.readFileSync(STUB_JS, "utf8");
 
@@ -166,30 +134,7 @@ check(
   "missing=[" + missingFromMin + "]",
 );
 
-// --- 3. Dispatch table: TIZEN_KEYMAP matches the live jellyfin-web ground truth
-const tizen = parseKeymap(inputSrc, "TIZEN_KEYMAP");
-for (const name of EXPECTED_NAMES) {
-  const code = EXPECTED[name];
-  check(
-    "TIZEN_KEYMAP[" +
-      code +
-      "] === " +
-      name +
-      " (matches jellyfin-web KeyNames)",
-    tizen[code] === name,
-    "keymap=" + tizen[code],
-  );
-}
-
-// --- 4. StandardKey union exposes all 12 canonical names --------------------
-for (const k of EXPECTED_NAMES) {
-  check(
-    "StandardKey union declares " + k,
-    new RegExp('"' + k + '"').test(inputSrc),
-  );
-}
-
-// --- 5. Browser-harness parity: wgt-emulate stub mirrors the same 12 + codes -
+// --- 3. Browser-harness parity: wgt-emulate stub mirrors the same 12 + codes -
 // The stub uses `{ name: "X", code: N }` object form, so parse that shape.
 function parseStubKeys(src) {
   const start = src.indexOf("getSupportedKeys");
@@ -215,7 +160,7 @@ for (const name of EXPECTED_NAMES) {
   );
 }
 
-// --- 6. The stub absorbs every registerKey() call shell.js makes at boot -----
+// --- 4. The stub absorbs every registerKey() call shell.js makes at boot -----
 (function execStubRegistration() {
   const vm = require("vm");
   const sandbox = { window: {}, console: { log() {}, warn() {} } };
@@ -235,7 +180,7 @@ for (const name of EXPECTED_NAMES) {
   );
 })();
 
-// --- 7. Optional: round-trip all 12 as real browser keydown events ----------
+// --- 5. Optional: round-trip all 12 as real browser keydown events ----------
 // Confirms the identical keys/keycodes deliver to a window keydown handler the
 // way jellyfin-web binds them — the browser side of TV<->browser parity. jsdom
 // is opt-in (resolved from tooling/wgt-emulate if installed there); skip clean.

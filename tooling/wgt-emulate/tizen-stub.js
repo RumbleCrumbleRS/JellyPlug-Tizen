@@ -46,9 +46,9 @@
       // nothing throws; real key delivery is the browser's own keydown events.
       _registered: [],
       getSupportedKeys: function () {
-        // Codes MUST match the canonical TIZEN_KEYMAP in
-        // packages/shell-core/src/input/index.ts. (JEL-35) The earlier list was
-        // incomplete (no MediaPlayPause / MediaTrackPrevious / MediaTrackNext).
+        // Codes MUST match the canonical 12-key contract pinned in
+        // packages/shell-tizen/scripts/media-keys.test.cjs. (JEL-35) The earlier
+        // list was incomplete (no MediaPlayPause / MediaTrackPrevious / MediaTrackNext).
         // Note 412/417 are Rewind/FastForward and 10232/10233 are TrackPrevious/
         // TrackNext — verified against the Samsung Tizen remote keycodes and
         // jellyfin-web 10.11.10's live KeyNames table. Keep in lockstep with the

@@ -39,31 +39,16 @@ const path = require("path");
 
 const REPO = path.join(__dirname, "..", "..", "..");
 const TV_SHELL = path.join(REPO, "packages", "shell-tizen", "src", "shell.js");
-const INPUT_TS = path.join(
-  REPO,
-  "packages",
-  "shell-core",
-  "src",
-  "input",
-  "index.ts",
-);
 
 // Canonical color keys, as the Samsung remote labels them and as jellyfin-web's
-// focus engine would name them off `KeyboardEvent.key`.
+// focus engine would name them off `KeyboardEvent.key`. The Tizen tvinputdevice
+// keycodes for these buttons (403..406) are pinned in media-keys.test.cjs.
 const COLOR_KEYS = [
   "ColorF0Red",
   "ColorF1Green",
   "ColorF2Yellow",
   "ColorF3Blue",
 ];
-// Tizen tvinputdevice keycodes for the color buttons.
-// https://docs.tizen.org/application/web/api/latest/device_api/tv/tizen/tvinputdevice.html
-const TIZEN_COLOR_CODES = {
-  403: "ColorF0Red",
-  404: "ColorF1Green",
-  405: "ColorF2Yellow",
-  406: "ColorF3Blue",
-};
 
 // EVIDENCE — captured live from $JELLYFIN_URL (Test Server, jellyfin-web
 // 10.11.10) on 2026-06-09 while verifying JEL-36:
@@ -90,7 +75,6 @@ function check(name, cond) {
 }
 
 const tvSrc = fs.readFileSync(TV_SHELL, "utf8");
-const inputSrc = fs.readFileSync(INPUT_TS, "utf8");
 
 // --- 1. Registration: shell.js must register all four color keys ------------
 // Extract the registerRemoteKeys() body so we assert against the actual
@@ -119,59 +103,7 @@ for (const k of COLOR_KEYS) {
   );
 }
 
-// --- 2. Keycode table: parse TIZEN_KEYMAP / WEBOS_KEYMAP / ANDROID_KEYMAP ----
-// Grab `<code>: "<Name>"` pairs from a named map literal in the TS source.
-function parseKeymap(src, mapName) {
-  const start = src.indexOf(mapName);
-  if (start === -1) throw new Error(mapName + " not found in input/index.ts");
-  const open = src.indexOf("{", start);
-  let depth = 0;
-  let end = open;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  const body = src.slice(open, end + 1);
-  const map = {};
-  const re = /(\d+)\s*:\s*"([A-Za-z0-9]+)"/g;
-  let m;
-  while ((m = re.exec(body)) !== null) map[Number(m[1])] = m[2];
-  return map;
-}
-
-const tizen = parseKeymap(inputSrc, "TIZEN_KEYMAP");
-const webos = parseKeymap(inputSrc, "WEBOS_KEYMAP");
-const android = parseKeymap(inputSrc, "ANDROID_KEYMAP");
-
-for (const [code, name] of Object.entries(TIZEN_COLOR_CODES)) {
-  check("TIZEN_KEYMAP[" + code + "] === " + name, tizen[Number(code)] === name);
-  // webOS uses the same 403..406 codes for color buttons — they must agree so a
-  // shared name reaches jellyfin-web regardless of platform.
-  check(
-    "WEBOS_KEYMAP[" + code + "] agrees with Tizen (" + name + ")",
-    webos[Number(code)] === name,
-  );
-}
-
-// Android TV remotes have no color buttons; the table must NOT invent codes for
-// them (documents the platform asymmetry rather than silently mapping garbage).
-check(
-  "ANDROID_KEYMAP has no color-button entries",
-  !Object.values(android).some((n) => COLOR_KEYS.includes(n)),
-);
-
-// --- 3. StandardKey union exposes the canonical color names -----------------
-for (const k of COLOR_KEYS) {
-  check(
-    "StandardKey union declares " + k,
-    new RegExp('"' + k + '"').test(inputSrc),
-  );
-}
-
-// --- 4. Comparison invariant the EVIDENCE above rests on --------------------
+// --- 2. Comparison invariant the EVIDENCE above rests on --------------------
 // The names the shell maps to are exactly the W3C `KeyboardEvent.key` strings
 // jellyfin-web would read off `e.key`. Since jellyfin-web 10.11.10 has neither a
 // keycode entry nor a command case for them, the TV press and a (nonexistent)

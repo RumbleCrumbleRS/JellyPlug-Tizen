@@ -1,7 +1,0 @@
-{
-  "files": [],
-  "references": [
-    { "path": "./packages/shell-core" },
-    { "path": "./packages/shell-webos" }
-  ]
-}
