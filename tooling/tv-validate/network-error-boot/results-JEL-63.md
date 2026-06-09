@@ -24,13 +24,13 @@ in both shells — `packages/shell-tizen/src/shell.js` (TV) and
 `packages/shell-tizen-bootstrap/src/boot-shell.src.js` (hosted/browser). There is
 no per-UA branch, so reqs (2), (3) and (5) already held on both platforms. But:
 
-| Req | Behaviour before | Status |
-|-----|------------------|--------|
-| (1) graceful timeout | `fetch(baseUrl+"index.html")` had **no timeout** → on an unreachable-but-routable host (SYN dropped) boot hung for the platform's default TCP connect timeout, which **differs** between Tizen Chromium and desktop Chrome. Not bounded, not parity-equal. | ❌ |
-| (2) error shown | `showError("Saved server is unreachable. Enter a new address.")` | ✅ |
-| (3) connect reappears | `attachConnectForm()` reveals `#boot-root` | ✅ |
-| (4) URL not cleared | `clearServerUrl()` was called in the catch → the saved URL **was wiped**, forcing a full retype. | ❌ |
-| (5) same text both platforms | single UA-independent literal | ✅ |
+| Req                          | Behaviour before                                                                                                                                                                                                                                           | Status |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| (1) graceful timeout         | `fetch(baseUrl+"index.html")` had **no timeout** → on an unreachable-but-routable host (SYN dropped) boot hung for the platform's default TCP connect timeout, which **differs** between Tizen Chromium and desktop Chrome. Not bounded, not parity-equal. | ❌     |
+| (2) error shown              | `showError("Saved server is unreachable. Enter a new address.")`                                                                                                                                                                                           | ✅     |
+| (3) connect reappears        | `attachConnectForm()` reveals `#boot-root`                                                                                                                                                                                                                 | ✅     |
+| (4) URL not cleared          | `clearServerUrl()` was called in the catch → the saved URL **was wiped**, forcing a full retype.                                                                                                                                                           | ❌     |
+| (5) same text both platforms | single UA-independent literal                                                                                                                                                                                                                              | ✅     |
 
 ## The fix (both shells, in lockstep)
 
@@ -43,12 +43,12 @@ no per-UA branch, so reqs (2), (3) and (5) already held on both platforms. But:
    `AbortController`. Applied to both the `index.html` and `config.json` boot
    fetches (covers the fresh-fetch and adopted-prefetch sources).
 2. **Do not clear the saved URL** — dropped `clearServerUrl()` from the
-   boot-failure catch. The host is often only *temporarily* unreachable (TV woke
+   boot-failure catch. The host is often only _temporarily_ unreachable (TV woke
    from standby, router rebooting, Wi-Fi reassociating).
 3. **One-press retry** — `attachConnectForm()` now pre-fills `#server-input` with
    the saved URL, so the user presses Connect once to retry the same host.
 4. **Error text** — unified to `"Could not reach saved server. Check your network
-   and try again."`, emitted from the single UA-independent catch → byte-identical
+and try again."`, emitted from the single UA-independent catch → byte-identical
    on both platforms.
 
 Files: `packages/shell-tizen/src/shell.js`,
@@ -90,6 +90,6 @@ bootstrap requires fresh **on-device validation** before the next bootstrap
 release cut. Repro on a physical TV: save a reachable server, confirm normal
 boot; then point the saved URL at an unreachable host (e.g. power off the server
 or set an unroutable address), reboot the app, and confirm — within ~15 s — the
-connect screen returns with the address pre-filled and the message *"Could not
-reach saved server. Check your network and try again."*, and that pressing
+connect screen returns with the address pre-filled and the message _"Could not
+reach saved server. Check your network and try again."_, and that pressing
 Connect retries the same host. No `.wgt` was cut or installed in this change.

@@ -15,9 +15,9 @@
       "2451554:2166756e6374696f6e2865297b696628766f696420303d3d3d652e70726f6365:6973262628676c6f62616c546869732e426162656c3d6a62292c6a627d28293b";
   function txFnv1a(s) {
     for (var h = 2166136261, i = 0; i < s.length; i++)
-      ((h ^= s.charCodeAt(i)),
+      (h ^= s.charCodeAt(i)),
         (h =
-          (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0));
+          (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0);
     return h.toString(36);
   }
   var TX_VER = txFnv1a(
@@ -61,7 +61,7 @@
       } catch (__) {}
     }
     if (rec.body) {
-      (delete rec.body, delete rec.patches);
+      delete rec.body, delete rec.patches;
       try {
         localStorage.setItem(BUNDLE_CACHE_KEY, JSON.stringify(rec));
       } catch (__) {}
@@ -225,8 +225,7 @@
     };
     try {
       return (
-        localStorage.setItem(STYLESHEET_BODIES_KEY, JSON.stringify(rec)),
-        !0
+        localStorage.setItem(STYLESHEET_BODIES_KEY, JSON.stringify(rec)), !0
       );
     } catch (_) {
       try {
@@ -282,9 +281,9 @@
             sz > biggestSize && ((biggestSize = sz), (biggestKey = keys[i]));
           }
           if (biggestKey === null) break;
-          (delete items[biggestKey],
+          delete items[biggestKey],
             (total -= biggestSize),
-            keys.splice(keys.indexOf(biggestKey), 1));
+            keys.splice(keys.indexOf(biggestKey), 1);
         }
         writeStylesheetBodies(serverOrigin, items);
       });
@@ -327,23 +326,23 @@
           item.body.indexOf("</style") < 0
         ) {
           var styleEl = doc.createElement("style");
-          (styleEl.setAttribute("data-shell-css-from-cache", "1"),
+          styleEl.setAttribute("data-shell-css-from-cache", "1"),
             styleEl.setAttribute("data-shell-css-url", url),
             (styleEl.textContent = item.body),
             ln.parentNode.replaceChild(styleEl, ln),
             hits++,
-            (bytes += item.body.length));
+            (bytes += item.body.length);
         } else misses++;
       }
     }
-    (hits > 0 &&
+    hits > 0 &&
       ((window.__shellCssInlineAdopted = 1),
       (window.__shellCssInlineHits = (window.__shellCssInlineHits || 0) + hits),
       (window.__shellCssInlineBytes =
         (window.__shellCssInlineBytes || 0) + bytes)),
       misses > 0 &&
         (window.__shellCssInlineMisses =
-          (window.__shellCssInlineMisses || 0) + misses));
+          (window.__shellCssInlineMisses || 0) + misses);
   }
   function loadServerUrl() {
     try {
@@ -430,7 +429,7 @@
     window.addEventListener("keydown", function (ev) {
       if (ev.keyCode === 10009) {
         if (window.__jellyfinShellBootDone) return;
-        (ev.preventDefault(), exitApp());
+        ev.preventDefault(), exitApp();
       }
     });
   }
@@ -480,18 +479,18 @@
                         webapis.productinfo.isUdPanelSupported() &&
                         (ratio = 2));
                 } catch (e) {}
-                ((systeminfo = {
+                (systeminfo = {
                   resolutionWidth: Math.floor(result.resolutionWidth * ratio),
                   resolutionHeight: Math.floor(result.resolutionHeight * ratio),
                 }),
-                  resolve(systeminfo));
+                  resolve(systeminfo);
               },
               function () {
-                ((systeminfo = {
+                (systeminfo = {
                   resolutionWidth: 1920,
                   resolutionHeight: 1080,
                 }),
-                  resolve(systeminfo));
+                  resolve(systeminfo);
               },
             );
           });
@@ -571,7 +570,7 @@
     },
     downloadFile: function () {},
     selectServer: function () {
-      (clearServerUrl(), window.location.replace("index.html"));
+      clearServerUrl(), window.location.replace("index.html");
     },
   };
   function buildSeedScript(serverUrl, upstreamCfg) {
@@ -1393,7 +1392,7 @@
       m = /(?:Chrome|Chromium)\/(\d+)\./.exec(ua);
     if (m && parseInt(m[1], 10) < 70) return !0;
     try {
-      return (new Function("var a={};return a?.b"), !1);
+      return new Function("var a={};return a?.b"), !1;
     } catch (e) {
       return !0;
     }
@@ -1414,7 +1413,7 @@
     if (SHELL_DEBUG)
       try {
         var args = Array.prototype.slice.call(arguments);
-        (args.unshift("[shell]"), console.log.apply(console, args));
+        args.unshift("[shell]"), console.log.apply(console, args);
       } catch (_) {}
   }
   function babelTranspile(src) {
@@ -1605,8 +1604,8 @@
   function injectChromium56Polyfills(doc) {
     if (isLegacyChromium()) {
       var polyfillTag = doc.createElement("script");
-      ((polyfillTag.textContent = chromium56PolyfillBody()),
-        polyfillTag.setAttribute("data-shell-polyfill", "1"));
+      (polyfillTag.textContent = chromium56PolyfillBody()),
+        polyfillTag.setAttribute("data-shell-polyfill", "1");
       var seedTag = doc.querySelector("script[data-shell-seed]");
       seedTag && seedTag.nextSibling
         ? doc.head.insertBefore(polyfillTag, seedTag.nextSibling)
@@ -1622,9 +1621,9 @@
     var body = qaBeaconBody();
     if (!(!body || body === "__QA_BEACON_BODY__")) {
       var beaconTag = doc.createElement("script");
-      (beaconTag.setAttribute("data-shell-beacon", "1"),
+      beaconTag.setAttribute("data-shell-beacon", "1"),
         (beaconTag.textContent = body),
-        doc.head.appendChild(beaconTag));
+        doc.head.appendChild(beaconTag);
     }
   }
   var BABEL_NEEDED_KEY = "jellyfin.shell.legacy.babelNeeded",
@@ -1644,8 +1643,8 @@
       var v = localStorage.getItem(TX_PFX + txKey(url));
       if (v == null) {
         var miss = window.__shellTxCacheMissUrlsStatic;
-        (miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
-          miss.length < 10 && miss.push(url));
+        miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
+          miss.length < 10 && miss.push(url);
       }
       return v;
     } catch (_) {
@@ -1737,7 +1736,7 @@
     );
     var scripts = Array.prototype.slice.call(doc.querySelectorAll("script")),
       counts = (window.__shellDiagInit = window.__shellDiagInit || {});
-    ((counts.legacy = legacy),
+    (counts.legacy = legacy),
       (counts.babel = typeof window.Babel != "undefined"),
       (counts.polyfilled = !0),
       (counts.scriptsFound = 0),
@@ -1748,7 +1747,7 @@
       (counts.fastPath = 0),
       (counts.babelLazyTriggered = 0),
       (counts.pluginBabelLazy = 0),
-      (counts.pluginPrefetchAdopted = 0));
+      (counts.pluginPrefetchAdopted = 0);
     for (
       var pluginPrefetch = window.__shellPluginPrefetch || null,
         pluginUrlsForNextBoot = [],
@@ -1873,10 +1872,10 @@
       )
         return null;
       if (s.getAttribute("data-shell-bundle-patched"))
-        return (counts.skipped++, null);
+        return counts.skipped++, null;
       var src = s.getAttribute("src");
       if (src) {
-        if (isJellyfinWebBundle(src)) return (counts.skipped++, null);
+        if (isJellyfinWebBundle(src)) return counts.skipped++, null;
         counts.scriptsFound++;
         var url;
         try {
@@ -1912,13 +1911,13 @@
             })
             .then(function (code) {
               if (!needsTranspile(code)) {
-                (s.removeAttribute("src"),
+                s.removeAttribute("src"),
                   s.removeAttribute("defer"),
                   s.removeAttribute("async"),
-                  s.removeAttribute("type"));
+                  s.removeAttribute("type");
                 var gatedRaw = needsJQueryGate(code),
                   bodyRaw = gatedRaw ? wrapForJQuery(code) : code;
-                ((s.textContent = bodyRaw),
+                (s.textContent = bodyRaw),
                   s.setAttribute("data-shell-transpiled-from", url),
                   s.setAttribute("data-shell-fast-path", "1"),
                   gatedRaw && s.setAttribute("data-shell-jquery-gated", "1"),
@@ -1929,7 +1928,7 @@
                     "fast-path+inlined",
                     url,
                     gatedRaw ? "(jq-gated)" : "",
-                  ));
+                  );
                 return;
               }
               return (
@@ -1953,14 +1952,14 @@
                     counts.transpileFailed++;
                     return;
                   }
-                  (counts.transpiled++,
+                  counts.transpiled++,
                     s.removeAttribute("src"),
                     s.removeAttribute("defer"),
                     s.removeAttribute("async"),
-                    s.removeAttribute("type"));
+                    s.removeAttribute("type");
                   var gated = needsJQueryGate(out),
                     body = gated ? wrapForJQuery(out) : out;
-                  ((s.textContent = body),
+                  (s.textContent = body),
                     s.setAttribute("data-shell-transpiled-from", url),
                     gated && s.setAttribute("data-shell-jquery-gated", "1"),
                     txSetStatic(url, body),
@@ -1968,7 +1967,7 @@
                       "transpiled+inlined",
                       url,
                       gated ? "(jq-gated)" : "",
-                    ));
+                    );
                 })
               );
             })
@@ -2051,7 +2050,7 @@
       (window.__shellBundleCacheBodyHit = 0),
       !isLegacyChromium())
     )
-      return ((window.__shellBundlePatchSkipped = 1), Promise.resolve());
+      return (window.__shellBundlePatchSkipped = 1), Promise.resolve();
     var pfBundleUrl = prefetched && prefetched.url,
       pfBundleFetch = prefetched && prefetched.fetch;
     window.__shellBundlePrefetchAdopted = 0;
@@ -2105,12 +2104,12 @@
                   return r.text();
                 })
                 .then(function (code) {
-                  (window.__shellBundlesScanned++,
+                  window.__shellBundlesScanned++,
                     writeVendorsBundleState({
                       url,
                       needsPatch: !1,
                       body: code,
-                    }));
+                    });
                 })
                 .catch(function (e) {
                   try {
@@ -2123,13 +2122,13 @@
                 });
         if (cache && cache.url === url) {
           if (cache.body && cache.body.indexOf("</script") < 0) {
-            (s.removeAttribute("src"),
+            s.removeAttribute("src"),
               s.removeAttribute("defer"),
               s.removeAttribute("async"),
               s.removeAttribute("type"),
               (s.textContent = cache.body),
               s.setAttribute("data-shell-bundle-patched", url),
-              s.setAttribute("data-shell-bundle-from-cache", "1"));
+              s.setAttribute("data-shell-bundle-from-cache", "1");
             var cachedPatches =
               cache.needsPatch &&
               typeof cache.patches == "number" &&
@@ -2155,7 +2154,7 @@
               null
             );
           }
-          if (!cache.needsPatch) return (window.__shellBundleCacheHit++, null);
+          if (!cache.needsPatch) return window.__shellBundleCacheHit++, null;
         }
         var bundleFetch;
         return (
@@ -2190,7 +2189,7 @@
                 } catch (_) {}
                 return;
               }
-              (s.removeAttribute("src"),
+              s.removeAttribute("src"),
                 s.removeAttribute("defer"),
                 s.removeAttribute("async"),
                 s.removeAttribute("type"),
@@ -2209,7 +2208,7 @@
                   needsPatch: !0,
                   body: result.source,
                   patches: result.patches,
-                }));
+                });
               try {
                 console.log(
                   "shell: patched bundle",
@@ -2247,10 +2246,10 @@
         )
           return;
         if (alreadyRan()) {
-          ((window.__shellDeferWatchdogSkipped =
+          (window.__shellDeferWatchdogSkipped =
             (window.__shellDeferWatchdogSkipped || 0) + 1),
             (window.__shellDeferWatchdogSkipReason =
-              "regEl>" + (window.__shellRegElCalls || 0)));
+              "regEl>" + (window.__shellRegElCalls || 0));
           return;
         }
         var defers = document.querySelectorAll("script[defer][src]");
@@ -2264,16 +2263,16 @@
             "scripts",
           );
         } catch (_) {}
-        ((window.__shellDeferWatchdogFired = defers.length),
+        (window.__shellDeferWatchdogFired = defers.length),
           (window.__shellDeferWatchdogReason = reason),
-          (window.__shellDeferWatchdogAtMs = Date.now() - started));
+          (window.__shellDeferWatchdogAtMs = Date.now() - started);
         for (var i = 0; i < defers.length; i++) {
           var src = defers[i].getAttribute("src");
           if (src) {
             var s2 = document.createElement("script");
-            ((s2.src = src),
+            (s2.src = src),
               s2.setAttribute("data-shell-defer-watchdog", "1"),
-              document.head.appendChild(s2));
+              document.head.appendChild(s2);
           }
         }
       } catch (e) {
@@ -2324,8 +2323,8 @@
     VENDORS_FAST_RE =
       /<script\b[^>]*\bsrc\s*=\s*["']([^"']*vendors\.[^"']*\.bundle\.js[^"']*)["'][^>]*>\s*<\/script>/i;
   function maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg) {
-    (window.__shellFastPathHits || (window.__shellFastPathHits = 0),
-      window.__shellFastPathFallbacks || (window.__shellFastPathFallbacks = 0));
+    window.__shellFastPathHits || (window.__shellFastPathHits = 0),
+      window.__shellFastPathFallbacks || (window.__shellFastPathFallbacks = 0);
     function bail(reason) {
       return (
         window.__shellFastPathFallbacks++,
@@ -2389,10 +2388,10 @@
           return bail("vendorsScriptClose");
       } else return bail("vendorsBodyMissing");
     }
-    ((window.__shellDiagInit = window.__shellDiagInit || {}),
+    (window.__shellDiagInit = window.__shellDiagInit || {}),
       (window.__shellDiagInit.legacy = !0),
       (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
-      (window.__shellDiagInit.polyfilled = !0));
+      (window.__shellDiagInit.polyfilled = !0);
     var diagBody = buildDiagSeedScript("1.0.87"),
       seedBody = buildSeedScript(serverUrl, upstreamCfg),
       polyBody = chromium56PolyfillBody(),
@@ -2444,7 +2443,7 @@
         !replaced)
       )
         return bail("bundleReplaceFail");
-      (cachedPatches > 0 && (window.__shellBundlePatches += cachedPatches),
+      cachedPatches > 0 && (window.__shellBundlePatches += cachedPatches),
         window.__shellBundleCacheHit++,
         window.__shellBundleCacheBodyHit++,
         window.__shellBundlesPatchedFiles.push(
@@ -2453,7 +2452,7 @@
         (window.__shellMainBundleLSAdopted = 1),
         (window.__shellMainBundleInlineHits =
           (window.__shellMainBundleInlineHits || 0) + 1),
-        (window.__shellMainBundleLSBytes = inlineBundleBody.length));
+        (window.__shellMainBundleLSBytes = inlineBundleBody.length);
     } else bundleMatch && window.__shellBundleCacheHit++;
     if (inlineVendorsBody) {
       var vReplaced = !1;
@@ -2471,13 +2470,13 @@
         !vReplaced)
       )
         return bail("vendorsReplaceFail");
-      (window.__shellBundleCacheHit++,
+      window.__shellBundleCacheHit++,
         window.__shellBundleCacheBodyHit++,
         window.__shellBundlesPatchedFiles.push("fastpath:vcache0"),
         (window.__shellVendorsBundleLSAdopted = 1),
         (window.__shellVendorsBundleInlineHits =
           (window.__shellVendorsBundleInlineHits || 0) + 1),
-        (window.__shellVendorsBundleLSBytes = inlineVendorsBody.length));
+        (window.__shellVendorsBundleLSBytes = inlineVendorsBody.length);
     }
     if (!0) {
       var TX_SCRIPT_RE =
@@ -2490,6 +2489,7 @@
       for (
         TX_SCRIPT_RE.lastIndex = 0;
         (txMatch = TX_SCRIPT_RE.exec(patched)) !== null;
+
       ) {
         var rawSrc = txMatch[1];
         if (!isJellyfinWebBundle(rawSrc)) {
@@ -2512,7 +2512,7 @@
             txBail = "txScriptClose";
             break;
           }
-          ((txRewritten += patched.slice(txLastIdx, txMatch.index)),
+          (txRewritten += patched.slice(txLastIdx, txMatch.index)),
             (txRewritten +=
               '<script data-shell-transpiled-from="' +
               escAttr(txAbsUrl) +
@@ -2520,27 +2520,27 @@
               txBody +
               "</script>"),
             (txLastIdx = TX_SCRIPT_RE.lastIndex),
-            txInlines++);
+            txInlines++;
         }
       }
       if (txBail) return bail(txBail);
-      (txInlines > 0 &&
+      txInlines > 0 &&
         ((txRewritten += patched.slice(txLastIdx)), (patched = txRewritten)),
         (window.__shellFastPathTxInlines =
-          (window.__shellFastPathTxInlines || 0) + txInlines));
+          (window.__shellFastPathTxInlines || 0) + txInlines);
     }
-    return (window.__shellFastPathHits++, patched);
+    return window.__shellFastPathHits++, patched;
   }
   function markDocumentWrite() {
     try {
       if (!window.__qaMarks) return;
-      ((window.__qaMarks.tDocumentWrite = performance.now()),
+      (window.__qaMarks.tDocumentWrite = performance.now()),
         typeof window.__qaMarksSave == "function"
           ? window.__qaMarksSave()
           : localStorage.setItem(
               "jellyfin.qa.bootMarks.current",
               JSON.stringify(window.__qaMarks),
-            ));
+            );
     } catch (_) {}
   }
   function loadRemoteWebClient(serverUrl) {
@@ -2587,18 +2587,17 @@
           : fetch(baseUrl + "config.json", fetchOpts),
         "web config",
       );
-    ((window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
+    (window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
       (window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0),
-      (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0));
+      (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0);
     var cacheGateOn = webCacheEnabled(),
       cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null,
       cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null,
       indexCacheHit = !!(cachedIndex && cachedConfig);
     if (indexCacheHit) {
-      (window.__shellIndexCacheHits++,
-        (window.__shellWebIndexCacheAdopted = 1));
+      window.__shellIndexCacheHits++, (window.__shellWebIndexCacheAdopted = 1);
       var revalStart = typeof Date != "undefined" ? Date.now() : 0;
-      (indexFetch
+      indexFetch
         .then(function (r) {
           return r && r.ok ? r.text() : null;
         })
@@ -2625,7 +2624,7 @@
               txt !== cachedConfig.body &&
               writeWebConfigCache(serverUrl, txt);
           })
-          .catch(function () {}));
+          .catch(function () {});
     }
     var prefetchedBundle =
       pf && pf.baseUrl === baseUrl && pf.bundle && pf.bundleUrl
@@ -2679,28 +2678,28 @@
         upstreamCfg = results[1],
         fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
       if (fast) {
-        ((window.__jellyfinShellBootDone = !0),
+        (window.__jellyfinShellBootDone = !0),
           markDocumentWrite(),
           document.open("text/html", "replace"),
           document.write(fast),
           document.close(),
-          armDeferWatchdog());
+          armDeferWatchdog();
         return;
       }
       var doc = new DOMParser().parseFromString(html, "text/html"),
         existingBase = doc.querySelector("base");
       existingBase && existingBase.remove();
       var baseTag = doc.createElement("base");
-      ((baseTag.href = baseUrl),
+      (baseTag.href = baseUrl),
         doc.head.insertBefore(baseTag, doc.head.firstChild),
         (window.__shellDiagInit = window.__shellDiagInit || {}),
         (window.__shellDiagInit.legacy = isLegacyChromium()),
         (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
-        (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy));
+        (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy);
       var diagTag = doc.createElement("script");
-      (diagTag.setAttribute("data-shell-diag", "1"),
+      diagTag.setAttribute("data-shell-diag", "1"),
         (diagTag.textContent = buildDiagSeedScript("1.0.87")),
-        doc.head.insertBefore(diagTag, baseTag));
+        doc.head.insertBefore(diagTag, baseTag);
       var seedTag = doc.createElement("script");
       return (
         seedTag.setAttribute("data-shell-seed", "1"),
@@ -2721,12 +2720,12 @@
             } catch (_) {}
             rewriteStylesheetsFromCache(doc, baseUrl, ssOrigin);
           } catch (_) {}
-          ((window.__jellyfinShellBootDone = !0),
+          (window.__jellyfinShellBootDone = !0),
             markDocumentWrite(),
             document.open("text/html", "replace"),
             document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML),
             document.close(),
-            armDeferWatchdog());
+            armDeferWatchdog();
         })
       );
     });
@@ -2738,10 +2737,10 @@
   function injectConnectStylesheet() {
     if (!document.getElementById("shell-connect-css")) {
       var ln = document.createElement("link");
-      ((ln.id = "shell-connect-css"),
+      (ln.id = "shell-connect-css"),
         (ln.rel = "stylesheet"),
         (ln.href = "connect/connect.css"),
-        document.head.appendChild(ln));
+        document.head.appendChild(ln);
     }
   }
   function attachConnectForm() {
@@ -2762,28 +2761,28 @@
         showError("Please enter a server URL.");
         return;
       }
-      (showError(""),
+      showError(""),
         validateServer(url)
           .then(function () {
-            return (saveServerUrl(url), loadRemoteWebClient(url));
+            return saveServerUrl(url), loadRemoteWebClient(url);
           })
           .catch(function (err) {
             showError(
               "Could not reach server: " +
                 (err && err.message ? err.message : "unknown error"),
             );
-          }));
+          });
     });
   }
   function bootstrap() {
-    (registerRemoteKeys(), installBackHandler());
+    registerRemoteKeys(), installBackHandler();
     var stored = loadServerUrl();
     stored
       ? loadRemoteWebClient(stored).catch(function () {
-          (attachConnectForm(),
+          attachConnectForm(),
             showError(
               "Could not reach saved server. Check your network and try again.",
-            ));
+            );
         })
       : attachConnectForm();
   }
