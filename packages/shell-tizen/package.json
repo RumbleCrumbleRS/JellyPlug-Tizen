@@ -7,6 +7,6 @@
   "scripts": {
     "build": "bash scripts/build-wgt.sh",
     "clean": "rm -rf build dist",
-    "test": "node scripts/server-url-persistence.test.cjs && node scripts/playback-controls.test.cjs && node scripts/getdeviceprofile.test.cjs && node scripts/movie-details.test.cjs && node scripts/web-index-cache.test.cjs"
+    "test": "node scripts/server-url-persistence.test.cjs && node scripts/playback-controls.test.cjs && node scripts/getdeviceprofile.test.cjs && node scripts/movie-details.test.cjs && node scripts/web-index-cache.test.cjs && node scripts/bundle-patch.test.cjs"
   }
 }
