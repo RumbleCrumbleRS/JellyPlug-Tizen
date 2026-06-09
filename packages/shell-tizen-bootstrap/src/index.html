@@ -15,8 +15,10 @@
     /* JEL-2046 AC3 diagnostic overlay. Renders bootstrap state on screen so
        verification works without Web Inspector (Q60 has appcmd_support:disabled
        and intershell_support:disabled, both required for debug-launch).
-       Enabled by default in v2.0.x; disable post-AC3 by setting
-       localStorage.setItem('jellyfin.shell.hsbDebug','0'). */
+       OFF by default (JEL-22: we are past AC3 and doing real content/parity
+       testing, so a fresh retail install must not burn the green console onto
+       the home screen). Opt in for diagnostics with
+       localStorage.setItem('jellyfin.shell.hsbDebug','1'). */
     #hsb-status{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;
         background:rgba(0,0,0,0.85);color:#0f0;font-family:Consolas,monospace;
         font-size:22px;padding:14px 24px;line-height:1.3;
@@ -66,9 +68,12 @@
                              phase: 'boot', server: null, manifestUrl: null,
                              manifestSha: null, shellUrl: null, fallback: null,
                              errors: [] };
+            // JEL-22: opt-in, not opt-out. Overlay stays OFF on a fresh retail
+            // install (nothing in localStorage) and is shown only when an
+            // operator explicitly sets hsbDebug='1' for diagnostics.
             var hsbDebugOn = (function(){
-                try { return localStorage.getItem(HSB_DEBUG_KEY) !== '0'; }
-                catch(_) { return true; }
+                try { return localStorage.getItem(HSB_DEBUG_KEY) === '1'; }
+                catch(_) { return false; }
             })();
             function renderHsb(level) {
                 window.__hsbState = hsbState;
@@ -222,6 +227,50 @@
             }
             loadHostedShell(server);
         })();
+    </script>
+    <!-- JEL-18: wire the shipped babel.min.js into the shell's lazy transpile path.
+         boot-shell.min.js (and the hosted shell) call window.__ensureBabel() the
+         first time a server-injected plugin script needs transpiling for the legacy
+         Tizen 5.0 / Chromium M63 engine. Without this hook window.Babel stays
+         undefined and every plugin transpile is skipped ("babel not available,
+         skip transpile"), so plugins that run in a desktop browser silently fail
+         on the TV (M63 cannot run optional-chaining/nullish/spread raw). We inject
+         the baked-in babel.min.js (babel-standalone, ~2.4 MB) strictly ON DEMAND —
+         never at boot — so there is zero cost unless a legacy plugin actually needs
+         transpiling. Placed after the bootloader so the selftest's first-<script>
+         bootloader extraction is unaffected; all inline scripts execute
+         synchronously before the async-loaded shell ever calls this hook. ES5-only
+         so it parses on M63. -->
+    <script>
+    (function(){
+        var BABEL_SRC = 'babel.min.js'; // sibling of index.html inside the WGT
+        var pending = null;             // cached load promise: load babel at most once
+        window.__ensureBabel = function(){
+            // Already present (e.g. a prior call finished) -> nothing to do.
+            if (typeof window.Babel !== 'undefined') return Promise.resolve();
+            if (pending) return pending;
+            pending = new Promise(function(resolve){
+                try {
+                    var s = document.createElement('script');
+                    s.src = BABEL_SRC;
+                    s.onload = function(){
+                        try { console.warn('shell: babel loaded for legacy transpile'); } catch(_){}
+                        resolve();
+                    };
+                    s.onerror = function(){
+                        try { console.warn('shell: babel.min.js failed to load'); } catch(_){}
+                        pending = null; // allow a later retry
+                        resolve();      // resolve anyway; ensureBabelReady() re-checks window.Babel
+                    };
+                    document.head.appendChild(s);
+                } catch (e) {
+                    pending = null;
+                    resolve();
+                }
+            });
+            return pending;
+        };
+    })();
     </script>
 </body>
 </html>

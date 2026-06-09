@@ -65,6 +65,22 @@ jobs:
           fi
           tooling/ci/verify-wgt-signed.sh "${wgts[@]}"
 
+  verify-shell-source:
+    name: verify boot-shell source matches deployed artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: boot-shell.src.js must match boot-shell.min.js (JEL-24 guard)
+        # The deployed bootstrap shell (boot-shell.min.js) once had NO committed
+        # source, so it silently drifted ahead of the repo (JEL-23). JEL-24
+        # de-minified it into boot-shell.src.js. This guard proves the two stay
+        # semantically equivalent (both canonicalized through the same esbuild),
+        # so an edit to one without the other can never silently ship again.
+        run: python3 packages/shell-tizen-bootstrap/scripts/verify_boot_shell_src.py
+
   build-core:
     name: build shell-core
     runs-on: ubuntu-latest

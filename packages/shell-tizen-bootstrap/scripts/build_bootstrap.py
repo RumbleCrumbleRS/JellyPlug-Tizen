@@ -3,8 +3,12 @@ Build the JEL-2040 Hosted Shell Bootstrap WGT.
 
 Pipeline:
   1. Resolve bootstrap version from config.xml (single source of truth).
-  2. Re-bake boot-shell.min.js from the latest jel*_v80_src shell build.
-     (Caller passes --shell-src to override.)
+  2. Package the committed src/boot-shell.min.js as-is. This is the deployed,
+     on-device-validated bootstrap shell; its maintainable source of record is
+     src/boot-shell.src.js (JEL-24). To regenerate boot-shell.min.js from that
+     source, use scripts/build_boot_shell.py — NOT --shell-src (see below).
+     (--shell-src remains as a generic override to bake in some OTHER prebuilt
+     shell.min.js, e.g. a shell-tizen build.)
   3. Package {config.xml,index.html,icon.png,boot-shell.min.js,babel.min.js}
      into JellyfinShellBootstrap_v<ver>.wgt at the tree root.
        - With --sign-profile NAME (and the Tizen CLI on PATH): runs
@@ -26,7 +30,12 @@ before release.
 Usage:
   python3 build_bootstrap.py                       # raw zip (UNSIGNED, emulator only)
   python3 build_bootstrap.py --sign-profile jellyfin   # signed, installable
-  python3 build_bootstrap.py --shell-src ../_jel1963_v80_src --out ../
+  python3 build_bootstrap.py --shell-src ../some-prebuilt-shell --out ../
+
+NOTE (JEL-24): the historical `--shell-src ../_jel*_v80_src` flow is gone — that
+shell source tree was never committed and is lost. The deployed shell now has a
+committed source (src/boot-shell.src.js); regenerate the artifact with
+scripts/build_boot_shell.py and ship the validated src/boot-shell.min.js.
 """
 
 import argparse
@@ -162,7 +171,9 @@ def emit_manifest_stub(wgt: Path, ver: str) -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shell-src", type=Path, default=None,
-                    help="re-bake boot-shell.min.js + babel.min.js from this dir")
+                    help="override: bake boot-shell.min.js + babel.min.js from "
+                         "this dir's shell.min.js (the lost _jel*_v80_src tree is "
+                         "gone — to rebuild from source use build_boot_shell.py)")
     ap.add_argument("--out", type=Path, default=PKG_ROOT / "dist",
                     help="WGT output dir (default: <pkg>/dist)")
     ap.add_argument("--sign-profile", default=None,
