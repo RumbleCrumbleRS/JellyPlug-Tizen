@@ -4,10 +4,22 @@
   "item": "38434e613d4cb97c443cc4948f23e457 (300)",
   "play": "clicked:resume",
   "subtitleSelector": "opened:Subtitles",
-  "menu": ["0:Off","1:Chinese-PGS - PGSSUB","2:Danish-PGS - PGSSUB","3:Dutch-PGS - PGSSUB","4:English-SRT - ASS","5:English-PGS - PGSSUB","...PGS x10"],
+  "menu": [
+    "0:Off",
+    "1:Chinese-PGS - PGSSUB",
+    "2:Danish-PGS - PGSSUB",
+    "3:Dutch-PGS - PGSSUB",
+    "4:English-SRT - ASS",
+    "5:English-PGS - PGSSUB",
+    "...PGS x10"
+  ],
   "pickedTrack": "English-SRT - ASS",
   "render": {
-    "libassCanvas": { "w": 1280, "h": 533, "style": "display:block; position:absolute; width:1280px; height:533px; top:-266.5px; left:0; pointer-events:none;" },
+    "libassCanvas": {
+      "w": 1280,
+      "h": 533,
+      "style": "display:block; position:absolute; width:1280px; height:533px; top:-266.5px; left:0; pointer-events:none;"
+    },
     "parent": "div.libassjs-canvas-parent",
     "video.textTracks.length": 0,
     "interpretation": "ASS routed to client SubtitlesOctopus (libass-WASM) canvas overlay, NOT native <track>/::cue — confirms the shell's enableSsaRender:true path renders client-side in a real browser engine."

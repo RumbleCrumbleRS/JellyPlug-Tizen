@@ -42,7 +42,7 @@ openUrl: function (e, t) {
 - **In a plain desktop browser** `window.NativeShell` is `undefined` → the guard
   falls through to `window.open(url, target || "_blank")` and the link opens.
   **This is the "link behavior in browser" the ticket asks about.**
-- Our shell *loaded in a desktop browser* still no-ops — `NativeShell` is present
+- Our shell _loaded in a desktop browser_ still no-ops — `NativeShell` is present
   there too — so the TV-vs-(our-shell-in-)browser comparison is byte-identical by
   construction. The only place the link actually opens is a browser with **no**
   NativeShell, which is jellyfin-web's intended fallback.
@@ -70,7 +70,7 @@ rendered on the TV at all** — there is nothing to click.
 
 ### Layer 2 — handler gate (clicks never reach openUrl)
 
-For any link that *did* render with a `target` attribute, the click handler is:
+For any link that _did_ render with a `target` attribute, the click handler is:
 
 ```js
 function (e) {

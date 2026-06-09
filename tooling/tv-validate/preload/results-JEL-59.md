@@ -9,18 +9,18 @@ This ticket is **not** a server-data parity case like movie/series/search/
 settings. The preload pipeline is a **shell-internal load optimization** that
 runs **only on legacy Chromium** (M56/M63 Tizen WebViews). `<link rel=preload>`
 warms the HTTP cache + V8 script-streaming parse pipeline; it **never changes
-what renders**. So "TV vs browser" here is a *gating* question, and the parity
+what renders**. So "TV vs browser" here is a _gating_ question, and the parity
 proof is: the legacy (TV) path emits the right preloads, and the modern (browser)
 path emits **none** — leaving the rendered DOM identical by construction.
 
 ## The pipeline (two boots, four keys)
 
-| # | First boot WRITES (`shell.js` → `shell.min.js`) | localStorage key | cap |
-| - | --- | --- | --- |
-| 1 | main bundle URL (JEL-1289) | `jellyfin.shell.bundleUrl` | 1 |
-| 2 | plugin `<script src>` URLs (JEL-1654) | `jellyfin.shell.pluginUrls` | ≤100 |
-| 3 | secondary `*.bundle.js` URLs (JEL-1924) | `jellyfin.shell.secondaryBundleUrls` | ≤20 |
-| 4 | `<link rel=stylesheet>` URLs (JEL-1959) | `jellyfin.shell.stylesheetUrls` | ≤20 |
+| #   | First boot WRITES (`shell.js` → `shell.min.js`) | localStorage key                     | cap  |
+| --- | ----------------------------------------------- | ------------------------------------ | ---- |
+| 1   | main bundle URL (JEL-1289)                      | `jellyfin.shell.bundleUrl`           | 1    |
+| 2   | plugin `<script src>` URLs (JEL-1654)           | `jellyfin.shell.pluginUrls`          | ≤100 |
+| 3   | secondary `*.bundle.js` URLs (JEL-1924)         | `jellyfin.shell.secondaryBundleUrls` | ≤20  |
+| 4   | `<link rel=stylesheet>` URLs (JEL-1959)         | `jellyfin.shell.stylesheetUrls`      | ≤20  |
 
 On the **second** boot the `index.html` head IIFE (JEL-1967) reads those keys and,
 **only when the WebView is legacy Chromium**, injects:
@@ -116,7 +116,7 @@ PASS  B5 round-trip: the 4 keys WRITTEN on boot N are exactly the 4 keys READ on
   `navigator.userAgent`.
 - **Not pixel-timed on the physical TV.** Per the JEL-7 blockers, the locked M63
   TV cannot run an automated timing/inspector harness from the sandbox. The
-  on-device *effect* of preload (cache + V8 parse warm) is invisible to a DOM
+  on-device _effect_ of preload (cache + V8 parse warm) is invisible to a DOM
   assertion anyway; what is verifiable — and what could regress — is that the
   correct `<link rel=preload>` elements are emitted with the correct gates/caps,
   which this proves. The shell additionally exposes the same counters on the QA

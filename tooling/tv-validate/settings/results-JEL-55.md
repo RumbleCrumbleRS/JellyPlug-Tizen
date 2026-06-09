@@ -18,22 +18,23 @@ A `grep` of `shell.js` / `boot-shell.src.js` finds **zero** references to
 `DisplayPreferences`, user `Configuration`, `SubtitleLanguagePreference`,
 `AudioLanguagePreference`, subtitle size, or any settings form. The only
 localStorage keys the shell owns are shell-internal (`serverUrl`, bundle cache,
-`_deviceId2`, `layout="tv"`). Three things the shell *does* near Settings:
+`_deviceId2`, `layout="tv"`). Three things the shell _does_ near Settings:
 
-| Concern | Owner | TV vs browser |
-| --- | --- | --- |
-| Settings UI / forms (toggles, dropdowns) | jellyfin-web | Same bundle, identical |
-| D-pad navigation between categories/controls | jellyfin-web `focusManager` (+ shell JEL-1580 focus-rescue) | Identical traversal; rescue only lands the focus ring |
-| `__qaIsSettingsView()` | shell QA overlay (gated on `jellyfin.qa.overlay==="1"`) | Detector only — emits Settings field-id evidence for QA OCR |
+| Concern                                      | Owner                                                       | TV vs browser                                               |
+| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| Settings UI / forms (toggles, dropdowns)     | jellyfin-web                                                | Same bundle, identical                                      |
+| D-pad navigation between categories/controls | jellyfin-web `focusManager` (+ shell JEL-1580 focus-rescue) | Identical traversal; rescue only lands the focus ring       |
+| `__qaIsSettingsView()`                       | shell QA overlay (gated on `jellyfin.qa.overlay==="1"`)     | Detector only — emits Settings field-id evidence for QA OCR |
 
 ### Navigation
+
 Settings navigation is jellyfin-web's `focusManager`; the shell only intercepts
 BACK (`10009`) and is otherwise transparent to D-pad keys. On TV, post-hashchange
 the shell's **JEL-1580 body-focus-rescue + proactive auto-focuser** (validated
 under [JEL-33](/JEL/issues/JEL-33)) guarantees the first D-pad press lands on a
 focusable control instead of being swallowed while focus sits on `<body>`. It
-changes only *whether the focus ring appears*, never *which categories/controls
-exist or how they are traversed* — so every settings category is reachable by
+changes only _whether the focus ring appears_, never _which categories/controls
+exist or how they are traversed_ — so every settings category is reachable by
 D-pad exactly as in the browser.
 
 ## Why saved settings cannot diverge TV vs browser
@@ -42,9 +43,9 @@ Both persistence backends store under a **device-agnostic** key, so a value save
 on TV is byte-identical when read on the browser and survives an app restart (a
 restart is just a new login against the same server state):
 
-| Setting class (ticket example) | Endpoint | Why device-agnostic |
-| --- | --- | --- |
-| Preferred audio language, subtitle language/mode, play-default-audio | `POST /Users/{uid}/Configuration` | Stored on the **user**, no client/device key |
+| Setting class (ticket example)                                               | Endpoint                                            | Why device-agnostic                                                                              |
+| ---------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Preferred audio language, subtitle language/mode, play-default-audio         | `POST /Users/{uid}/Configuration`                   | Stored on the **user**, no client/device key                                                     |
 | Display / appearance: subtitle size, theme, skip lengths, next-video overlay | `POST /DisplayPreferences/usersettings?client=emby` | jellyfin-web **always** uses the fixed client literal `"emby"`, never the device `Client` header |
 
 The `"emby"` client key was verified against the **live 10.11.10 main bundle**:
@@ -99,6 +100,7 @@ PASS  DisplayPreferences restored (test key removed)  — restored
 ```
 
 ### What each check proves
+
 - **Detector true on settings routes / false elsewhere / body-class branch** —
   the on-TV `__qaIsSettingsView()` returns `true` on every real Settings page
   (this is the ticket's explicit "Check `__qaIsSettingsView()` returns true"
@@ -120,9 +122,10 @@ PASS  DisplayPreferences restored (test key removed)  — restored
   unchanged.
 
 ## Scope notes
+
 - **Not driven through a live D-pad on the physical TV.** Per the JEL-7
   blockers, the locked M63 TV cannot be driven by an automated input harness from
-  the sandbox. D-pad *mechanics* (first-press focus rescue + within/between
+  the sandbox. D-pad _mechanics_ (first-press focus rescue + within/between
   movement) were validated automatically in [JEL-33](/JEL/issues/JEL-33); this
   ticket validates settings **content/navigation parity** and **save/persistence
   correctness**, which are the parts that could plausibly differ TV vs browser.
@@ -130,7 +133,7 @@ PASS  DisplayPreferences restored (test key removed)  — restored
   forms POST to (`/Users/{uid}/Configuration`, `/DisplayPreferences/usersettings`).
   It does not click DOM toggles — the toggle/dropdown widgets are jellyfin-web's
   own controls (identical bundle on both platforms); what is platform-specific is
-  *where the saved value lands and whether it is shared/persisted*, which is what
+  _where the saved value lands and whether it is shared/persisted_, which is what
   this proves.
 - A scoped `jel55-*` CustomPref key is used for the display round-trip so a real
   user setting is never clobbered; it is deleted on restore.

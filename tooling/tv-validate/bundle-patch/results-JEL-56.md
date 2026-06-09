@@ -13,17 +13,17 @@ a modern browser never reaches the throw and needs no patch.
   `patchPlaybackBundles` under both UAs against a fake DOM/fetch/localStorage.
 - **47/47 static + behavioural checks** —
   `packages/shell-tizen/scripts/bundle-patch.test.cjs` exercises the real cache
-  + patcher functions and pins the boot wiring to `shell.js`, the deployed
-  `shell.min.js`, and the hosted `boot-shell.src.js`.
+  - patcher functions and pins the boot wiring to `shell.js`, the deployed
+    `shell.min.js`, and the hosted `boot-shell.src.js`.
 
 ## The four things the ticket asks us to prove
 
-| # | Ticket question | Result | Evidence |
-| - | --------------- | ------ | -------- |
-| 1 | `patchPlaybackBundles()` runs on the main bundle on TV **and** browser | Function is invoked on both; **scans the main bundle only on legacy Chromium** — modern UA early-returns (`__shellBundlePatchSkipped=1`, no fetch) | Scenario 1 vs 2 |
-| 2 | serverId=null patch (CM/PM regex scan) applied when needed | Patcher fires only when the body contains `item or serverId cannot be null`; injects the `window.ApiClient` fallback and preserves the original throw | Scenario 1 + `.cjs` PART 2 |
-| 3 | `BUNDLE_CACHE_KEY` written with `{v, url, needsPatch, body}` | Confirmed; patched records also carry `patches`; over-cap / quota paths drop `body` but keep the verdict | Scenario 1 + `.cjs` PART 1 |
-| 4 | Warm boot uses the cached patched body instead of re-fetching | Second legacy boot inlines the cached body, strips `<script src>`, tags `data-shell-bundle-from-cache="1"`, **zero network fetch** | Scenario 3 |
+| #   | Ticket question                                                        | Result                                                                                                                                                | Evidence                   |
+| --- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| 1   | `patchPlaybackBundles()` runs on the main bundle on TV **and** browser | Function is invoked on both; **scans the main bundle only on legacy Chromium** — modern UA early-returns (`__shellBundlePatchSkipped=1`, no fetch)    | Scenario 1 vs 2            |
+| 2   | serverId=null patch (CM/PM regex scan) applied when needed             | Patcher fires only when the body contains `item or serverId cannot be null`; injects the `window.ApiClient` fallback and preserves the original throw | Scenario 1 + `.cjs` PART 2 |
+| 3   | `BUNDLE_CACHE_KEY` written with `{v, url, needsPatch, body}`           | Confirmed; patched records also carry `patches`; over-cap / quota paths drop `body` but keep the verdict                                              | Scenario 1 + `.cjs` PART 1 |
+| 4   | Warm boot uses the cached patched body instead of re-fetching          | Second legacy boot inlines the cached body, strips `<script src>`, tags `data-shell-bundle-from-cache="1"`, **zero network fetch**                    | Scenario 3                 |
 
 ## (A) The TV-vs-browser split is a runtime gate, not a code fork
 

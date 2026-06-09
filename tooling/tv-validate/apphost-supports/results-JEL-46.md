@@ -2,8 +2,8 @@
 
 **Verdict: PARITY HOLDS.** Every feature gate jellyfin-web actually queries via
 `appHost.supports()` resolves consistently between the Tizen shell and the
-browser. The only two differences are an *intentional, beneficial* TV override
-(`exitmenu`) and an *inert* flag the browser sets but no code reads
+browser. The only two differences are an _intentional, beneficial_ TV override
+(`exitmenu`) and an _inert_ flag the browser sets but no code reads
 (`displaymode`). No feature gate diverges in a way that breaks or degrades the
 TV. Run `node tooling/tv-validate/apphost-supports/verify-apphost-supports.mjs`
 to reproduce (no network needed; exits non-zero on any undocumented drift).
@@ -30,12 +30,22 @@ TV implementation (`packages/shell-tizen/src/shell.js`, identical in
 
 ```js
 var SupportedFeatures = [
-  "exit", "exitmenu", "externallinkdisplay", "htmlaudioautoplay",
-  "htmlvideoautoplay", "physicalvolumecontrol", "displaylanguage",
-  "otherapppromotions", "targetblank", "screensaver", "multiserver",
-  "subtitleappearancesettings", "subtitleburnsettings",
+  "exit",
+  "exitmenu",
+  "externallinkdisplay",
+  "htmlaudioautoplay",
+  "htmlvideoautoplay",
+  "physicalvolumecontrol",
+  "displaylanguage",
+  "otherapppromotions",
+  "targetblank",
+  "screensaver",
+  "multiserver",
+  "subtitleappearancesettings",
+  "subtitleburnsettings",
 ];
-supports: cmd => !!cmd && SupportedFeatures.indexOf(String(cmd).toLowerCase()) !== -1
+supports: (cmd) =>
+  !!cmd && SupportedFeatures.indexOf(String(cmd).toLowerCase()) !== -1;
 ```
 
 ## The "browser version" baseline
@@ -45,10 +55,10 @@ computes for a Samsung Tizen TV web browser (`browser.tv === true`,
 `browser.tizen === true`). The harness re-implements the bundle's `S` builder
 verbatim for that environment. Decoded results for a Tizen TV browser:
 
-| pushed | reason |
-|---|---|
+| pushed                                                                                                                                                                                         | reason                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | exit, htmlaudioautoplay, htmlvideoautoplay, physicalvolumecontrol, displaylanguage, **displaymode**, targetblank, screensaver, multiserver*, subtitleappearancesettings*, subtitleburnsettings | matches per the platform branches |
-| **not** pushed: filedownload, externallinks, fullscreenchange, remotecontrol, remotevideo, fileinput, chromecast, sharing, remoteaudio | excluded for `tv`/`tizen` |
+| **not** pushed: filedownload, externallinks, fullscreenchange, remotecontrol, remotevideo, fileinput, chromecast, sharing, remoteaudio                                                         | excluded for `tv`/`tizen`         |
 
 \* `multiserver` is config-gated; `subtitleappearancesettings` is `::cue`-detection-gated (true on modern Tizen Chromium).
 
@@ -57,36 +67,36 @@ verbatim for that environment. Decoded results for a Tizen TV browser:
 `Δ` marks a TV-vs-browser difference. `consumed` = a real `appHost.supports()`
 call site was found in the reachable bundles.
 
-| cmd | TV | browser(Tizen) | consumed | gate |
-|---|---|---|---|---|
-| castmenuhashchange | false | false | yes | cast menu hash-change routing |
-| chromecast | false | false | no | — |
-| clientsettings | false | false | yes | client-settings UI |
-| displaylanguage | true | true | no | display-language selection |
-| **displaymode** `Δ` | **false** | **true** | **no** | desktop window display-mode; **no caller in reachable bundles**, irrelevant to fullscreen TV |
-| downloadmanagement | false | false | yes | downloads management UI |
-| **exit** | true | true | yes | app exit → `tizen.application` exit |
-| **exitmenu** `Δ` | **true** | **false** | **yes** | renders in-app **Exit** menu item |
-| externallinks | false | false | yes | external project/info links |
-| externalplayerintent | false | false | no | — |
-| filedownload | false | false | no | — |
-| fileinput | false | false | no | — |
-| fullscreenchange | false | false | yes | fullscreen toggle button |
-| htmlaudioautoplay | true | true | no | audio autoplay policy |
-| htmlvideoautoplay | true | true | no | video autoplay policy |
-| multiserver | true | true | yes | "Select Server" switching |
-| nativeblurayplayback | false | false | no | — |
-| nativedvdplayback | false | false | no | — |
-| nativeisoplayback | false | false | no | — |
-| physicalvolumecontrol | true | true | yes | hides on-screen volume slider |
-| remoteaudio | false | false | yes | remote/cast audio target |
-| remotecontrol | false | false | yes | cast sender / "play on another device" |
-| **remotevideo** | false | false | yes | play `IsRemote` video items (blocks when false) |
-| screensaver | true | true | no | screensaver behavior |
-| sharing | false | false | yes | Share button |
-| subtitleappearancesettings | true | true | no | subtitle appearance page |
-| subtitleburnsettings | true | true | no | subtitle burn-in |
-| targetblank | true | true | yes | open links in new tab |
+| cmd                        | TV        | browser(Tizen) | consumed | gate                                                                                         |
+| -------------------------- | --------- | -------------- | -------- | -------------------------------------------------------------------------------------------- |
+| castmenuhashchange         | false     | false          | yes      | cast menu hash-change routing                                                                |
+| chromecast                 | false     | false          | no       | —                                                                                            |
+| clientsettings             | false     | false          | yes      | client-settings UI                                                                           |
+| displaylanguage            | true      | true           | no       | display-language selection                                                                   |
+| **displaymode** `Δ`        | **false** | **true**       | **no**   | desktop window display-mode; **no caller in reachable bundles**, irrelevant to fullscreen TV |
+| downloadmanagement         | false     | false          | yes      | downloads management UI                                                                      |
+| **exit**                   | true      | true           | yes      | app exit → `tizen.application` exit                                                          |
+| **exitmenu** `Δ`           | **true**  | **false**      | **yes**  | renders in-app **Exit** menu item                                                            |
+| externallinks              | false     | false          | yes      | external project/info links                                                                  |
+| externalplayerintent       | false     | false          | no       | —                                                                                            |
+| filedownload               | false     | false          | no       | —                                                                                            |
+| fileinput                  | false     | false          | no       | —                                                                                            |
+| fullscreenchange           | false     | false          | yes      | fullscreen toggle button                                                                     |
+| htmlaudioautoplay          | true      | true           | no       | audio autoplay policy                                                                        |
+| htmlvideoautoplay          | true      | true           | no       | video autoplay policy                                                                        |
+| multiserver                | true      | true           | yes      | "Select Server" switching                                                                    |
+| nativeblurayplayback       | false     | false          | no       | —                                                                                            |
+| nativedvdplayback          | false     | false          | no       | —                                                                                            |
+| nativeisoplayback          | false     | false          | no       | —                                                                                            |
+| physicalvolumecontrol      | true      | true           | yes      | hides on-screen volume slider                                                                |
+| remoteaudio                | false     | false          | yes      | remote/cast audio target                                                                     |
+| remotecontrol              | false     | false          | yes      | cast sender / "play on another device"                                                       |
+| **remotevideo**            | false     | false          | yes      | play `IsRemote` video items (blocks when false)                                              |
+| screensaver                | true      | true           | no       | screensaver behavior                                                                         |
+| sharing                    | false     | false          | yes      | Share button                                                                                 |
+| subtitleappearancesettings | true      | true           | no       | subtitle appearance page                                                                     |
+| subtitleburnsettings       | true      | true           | no       | subtitle burn-in                                                                             |
+| targetblank                | true      | true           | yes      | open links in new tab                                                                        |
 
 ## The three flags JEL-46 called out
 
@@ -95,13 +105,13 @@ call site was found in the reachable bundles.
   jellyfin-web's exit pathway works.
 - **`remotevideo` → false (consistent, not a divergence).** This is the one that
   could have bitten us: `if (item.IsRemote && !appHost.supports('remotevideo'))
-  return false` blocks playback of remote items. The TV reports false — **and so
+return false` blocks playback of remote items. The TV reports false — **and so
   does jellyfin-web's own Tizen browser baseline** (the builder excludes `tizen`
   from the `remotevideo` push). So behavior is identical: remote items are
   handled the same way on TV and browser. No divergence.
 - **`displaymode` → false on TV, true on browser, but INERT.** The browser
   builder unconditionally pushes `displaymode`, yet **no `appHost.supports(
-  'displaymode')` call site exists** anywhere in the reachable bundles (33
+'displaymode')` call site exists** anywhere in the reachable bundles (33
   chunks crawled transitively from `main`). It gates a desktop windowing
   display-mode preference that does not apply to a fullscreen TV. Because nothing
   reads it, the TV omitting it changes no behavior.

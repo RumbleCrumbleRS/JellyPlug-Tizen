@@ -59,13 +59,13 @@ Tizen UA → preload warmers appended, both prefetches still present.
 The exact `<script>` bytes are executed with stub `window/document/navigator/
 localStorage/performance/fetch` injected, once per UA:
 
-| Assertion | browser (Chrome/120) | TV (Tizen 5.5 / Chromium 69) |
-|---|---|---|
-| `window.__shellPrefetch.index instanceof Promise` | ✅ | ✅ |
-| `window.__shellPrefetch.config instanceof Promise` | ✅ | ✅ |
-| `fetch()` fired for `/web/index.html` during IIFE | ✅ | ✅ |
-| `fetch()` fired for `/web/config.json` during IIFE | ✅ | ✅ |
-| legacy `<link rel=preload>` warmers | 0 (none) | 2 appended (additive) |
+| Assertion                                          | browser (Chrome/120) | TV (Tizen 5.5 / Chromium 69) |
+| -------------------------------------------------- | -------------------- | ---------------------------- |
+| `window.__shellPrefetch.index instanceof Promise`  | ✅                   | ✅                           |
+| `window.__shellPrefetch.config instanceof Promise` | ✅                   | ✅                           |
+| `fetch()` fired for `/web/index.html` during IIFE  | ✅                   | ✅                           |
+| `fetch()` fired for `/web/config.json` during IIFE | ✅                   | ✅                           |
+| legacy `<link rel=preload>` warmers                | 0 (none)             | 2 appended (additive)        |
 
 Both fetches are recorded **synchronously during the IIFE** (before control
 returns), which — combined with the Part A document-order proof — establishes

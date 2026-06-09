@@ -12,13 +12,13 @@ TV-like device profile.
 
 ## What the shell touches (and what it doesn't)
 
-| Concern | Owner | Shell involvement |
-| --- | --- | --- |
-| Audio-track selector UI (player overlay) | jellyfin-web | none |
-| `playbackManager.setAudioStreamIndex` / `changeStream` | jellyfin-web | none — `grep` of `shell.js`, bootstrap, and `shell-core` finds zero references |
-| Direct-play vs transcode decision | server, from device profile | `NativeShell.AppHost.getDeviceProfile` **delegates to jellyfin-web's own `profileBuilder`** (`shell.js:518`) with only `enableMkvProgressive:false, enableSsaRender:true`; the shell adds **no audio-codec list** of its own |
-| Per-user "remembered track for resume" | server (`MediaSources.DefaultAudioStreamIndex`) | none — shell only persists the server URL in localStorage |
-| Playback dispatch patch | shell seed (`shell.js`) | wraps `playbackManager.play` for **ServerId injection only**; switching audio goes through `setAudioStreamIndex → changeStream`, which never reaches that patch |
+| Concern                                                | Owner                                           | Shell involvement                                                                                                                                                                                                            |
+| ------------------------------------------------------ | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Audio-track selector UI (player overlay)               | jellyfin-web                                    | none                                                                                                                                                                                                                         |
+| `playbackManager.setAudioStreamIndex` / `changeStream` | jellyfin-web                                    | none — `grep` of `shell.js`, bootstrap, and `shell-core` finds zero references                                                                                                                                               |
+| Direct-play vs transcode decision                      | server, from device profile                     | `NativeShell.AppHost.getDeviceProfile` **delegates to jellyfin-web's own `profileBuilder`** (`shell.js:518`) with only `enableMkvProgressive:false, enableSsaRender:true`; the shell adds **no audio-codec list** of its own |
+| Per-user "remembered track for resume"                 | server (`MediaSources.DefaultAudioStreamIndex`) | none — shell only persists the server URL in localStorage                                                                                                                                                                    |
+| Playback dispatch patch                                | shell seed (`shell.js`)                         | wraps `playbackManager.play` for **ServerId injection only**; switching audio goes through `setAudioStreamIndex → changeStream`, which never reaches that patch                                                              |
 
 Because the only shell hook near playback (`pm.play` ServerId injection) is not
 on the track-switch path, and `getDeviceProfile` is delegated upstream, there is
@@ -45,15 +45,18 @@ PASS  test-account default audio index restored  — back to 1
 ```
 
 ### (1) Open the audio track selector
+
 The server enumerates audio tracks in `MediaSources[].MediaStreams` (`Type:Audio`).
-The test server has 147 items with ≥2 audio tracks (e.g. *9 to 5* exposes 5×
+The test server has 147 items with ≥2 audio tracks (e.g. _9 to 5_ exposes 5×
 ac3: eng/eng/fra/spa/eng at indices 1–5). The selector is jellyfin-web's native
 overlay; on TV it is the same code, rendered in the TV layout.
 
 ### (2)+(3) Switch tracks → audio changes immediately
+
 Picking a track makes jellyfin-web POST `Items/{id}/PlaybackInfo` with the new
 `AudioStreamIndex`. Verified for **every** track index, under both profiles, the
 server returns a stream targeting exactly that track:
+
 - **Transcode path** (the test server's multi-audio content is `mpeg2video`/ac3,
   so it always transcodes): the returned `TranscodingUrl` carries
   `AudioStreamIndex=<picked>` and `AudioCodec=ac3`. A fresh URL per switch ⇒ the
@@ -66,6 +69,7 @@ server returns a stream targeting exactly that track:
   to that track. Same contract, exercised above.)
 
 ### (4) Remembered for resume
+
 The selected track is persisted **server-side, per user**: after reporting a
 play session + progress carrying `AudioStreamIndex=2` and stopping, the item's
 `MediaSources[0].DefaultAudioStreamIndex` flips `1 → 2`. On the next launch
@@ -75,6 +79,7 @@ Persistence is keyed off the **progress report's** `AudioStreamIndex` at a
 non-trivial position — not the bare PlaybackInfo call.
 
 ## Scope notes
+
 - Not driven through a headless browser UI: Chromium-headless cannot decode the
   server's mpeg2video/ac3 content, so a player-overlay click-through would be
   flaky and prove less than this protocol-level check. The harness verifies the
@@ -84,6 +89,7 @@ non-trivial position — not the bare PlaybackInfo call.
   sample. Track switching on a direct-play title would still re-request as
   above; flagged here for transparency.
 - Subtitle-track selection is the sibling task [JEL-44](/JEL/issues/JEL-44).
+
 ```
 Re-run: `node tooling/tv-validate/audio-track/verify-audio-track.mjs`
 ```
