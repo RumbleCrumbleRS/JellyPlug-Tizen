@@ -6,7 +6,7 @@
   "license": "GPL-2.0-only",
   "scripts": {
     "build": "python3 scripts/build_bootstrap.py",
-    "test": "node scripts/selftest.cjs",
+    "test": "node scripts/selftest.cjs && node scripts/babel-transpile.test.cjs",
     "clean": "rm -rf dist manifest.bootstrap.json"
   }
 }
