@@ -78,7 +78,6 @@ test asserts the absence of any Tizen-only branch in the shim.
 2. **Boot-time recovery divergence between the two shells (JEL-63 follow-up, not
    a mid-session issue).** Both shells keep their network-failure UI strictly in
    the boot catch, but they differ on what that catch does:
-
    - `shell.js` (full shell): JEL-63 applied — **keeps** the saved server URL and
      re-shows the connect form pre-filled, copy =
      _"Could not reach saved server. Check your network and try again."_ so a
