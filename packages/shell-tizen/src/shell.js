@@ -48,7 +48,7 @@
   // non-word/non-`$`/non-`.` boundary restricts it to genuine BigInt
   // literals (`10n`) the way Chromium 63 actually needs.
   var MODERN_SYNTAX_RE_SRC =
-    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b";
+    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{";
   var MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC);
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
@@ -847,7 +847,7 @@
       // plugin parses fine on Chromium 56 as-is.
       // JEL-26: keep this seed-side pre-check in lockstep with the widget-side
       // MODERN_SYNTAX_RE_SRC above, including the BigInt false-positive anchor.
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b/;",
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
