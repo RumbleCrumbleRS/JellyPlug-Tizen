@@ -42,13 +42,13 @@ Checked against the canonical `src/scripts/browserDeviceProfile.js` on the
 `release-10.11.z` / `v10.11.0` / `v10.11.1` branches (the test server runs
 Jellyfin 10.11.x) and `release-10.10.z`:
 
-| Option (shell value) | Effect in jellyfin-web | Excludes a format? |
-| --- | --- | --- |
+| Option (shell value)          | Effect in jellyfin-web                                                                                                                                                                                                                                                                    | Excludes a format?                                                                                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enableMkvProgressive: false` | **Inert.** The identifier `enableMkvProgressive` is **not referenced anywhere** in `browserDeviceProfile.js` (0 matches) on 10.10/10.11/master. MKV direct-play is gated solely on the runtime probe `canPlayMkv = testCanPlayMkv(videoTestElement)` (`canPlayType('video/x-matroska')`). | **No.** MKV direct-plays iff the WebView reports matroska support — empirically true on all three models (see matrix: every `mkv/h264/aac` and supported-codec mkv direct-plays). |
-| `enableSsaRender: true` | Adds `ass` + `ssa` SubtitleProfiles with `Method: 'External'` (rendered client-side via libass), instead of forcing burn-in. This is also jellyfin-web's **default** (`options.enableSsaRender !== false`). | **No — the opposite.** It *avoids* an unnecessary video transcode when an SSA/ASS subtitle is enabled. |
+| `enableSsaRender: true`       | Adds `ass` + `ssa` SubtitleProfiles with `Method: 'External'` (rendered client-side via libass), instead of forcing burn-in. This is also jellyfin-web's **default** (`options.enableSsaRender !== false`).                                                                               | **No — the opposite.** It _avoids_ an unnecessary video transcode when an SSA/ASS subtitle is enabled.                                                                            |
 
 So one option is a no-op in the shipped server version and the other is the
-transcode-*minimizing* choice that matches the browser default. Neither can
+transcode-_minimizing_ choice that matches the browser default. Neither can
 exclude a direct-play format.
 
 ## Empirical proof (live server, Jellyfin 10.11.x)
@@ -92,8 +92,8 @@ TV direct-plays but desktop browser transcodes on 23 item(s)
   14 items transcode under all four profiles (browser included):
   - `mpeg2video` / `avi`+`mpeg4` sources — no profile lists these (correctly; no
     modern Chromium decodes them) → server transcodes for everyone.
-  - Anime with a **default/forced PGS image subtitle** (e.g. *Asta and Yuno*,
-    *Izuku Midoriya: Origin*, *A Young Man's Vow*) — confirmed via stream probe:
+  - Anime with a **default/forced PGS image subtitle** (e.g. _Asta and Yuno_,
+    _Izuku Midoriya: Origin_, _A Young Man's Vow_) — confirmed via stream probe:
     `Subtitle:PGSSUB/def`. PGS is an image format that is **burned in** unless the
     client opts into PGS rendering (`subtitlerenderpgs`, off by default) — this is
     a subtitle-delivery decision applied **identically to the browser**, unrelated
@@ -104,10 +104,10 @@ TV direct-plays but desktop browser transcodes on 23 item(s)
   runtime profile reports honestly, **not** an artificial exclusion. On the real
   device the exact set is whatever that panel's `canPlayType` returns.
 
-> Note: the M56/M63/M69 profiles are *representative* of each generation's
+> Note: the M56/M63/M69 profiles are _representative_ of each generation's
 > documented codec support, because `profileBuilder` needs a live DOM and cannot
-> run in Node. The proven contract — *no codec a profile lists is ever needlessly
-> transcoded, and the TV is never worse than the browser for a listed codec* —
+> run in Node. The proven contract — _no codec a profile lists is ever needlessly
+> transcoded, and the TV is never worse than the browser for a listed codec_ —
 > holds for any profile shape. To validate the exact on-device profile, capture it
 > (below) and pass `PROFILE_FILE=<path>` to add it as a fifth column.
 
@@ -134,12 +134,14 @@ window.NativeShell.getDeviceProfile(function (o) {
 Then: `PROFILE_FILE=captured-tv-profile.json node tooling/tv-validate/device-profile/verify-device-profile.mjs`
 
 ## Scope notes
+
 - DRM/Widevine direct-play is not exercised (the test library is clear-key); the
   profile delegation argument covers it identically — jellyfin-web sets DRM
   capabilities from runtime detection, the shell adds nothing.
 - This is a verification ticket; **no shell code change is warranted.** The
   delegation design is correct and is the same approach jellyfin-web uses for its
   own web client.
+
 ```
 Re-run: `node tooling/tv-validate/device-profile/verify-device-profile.mjs`
 ```

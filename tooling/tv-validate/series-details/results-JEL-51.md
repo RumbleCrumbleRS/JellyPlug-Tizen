@@ -29,11 +29,11 @@ building — the shell implements no details code path. The data comes from
 user-scoped endpoints that take **no `DeviceProfile`** and are **not keyed on
 client/device**:
 
-| Details element | Server endpoint | Device-dependent? |
-| --- | --- | --- |
-| Series header metadata | `GET /Users/{uid}/Items/{seriesId}` | No |
-| Season selector list | `GET /Shows/{seriesId}/Seasons?UserId={uid}` | No |
-| Episode list (per season) | `GET /Shows/{seriesId}/Episodes?SeasonId=…&UserId={uid}` | No |
+| Details element           | Server endpoint                                          | Device-dependent? |
+| ------------------------- | -------------------------------------------------------- | ----------------- |
+| Series header metadata    | `GET /Users/{uid}/Items/{seriesId}`                      | No                |
+| Season selector list      | `GET /Shows/{seriesId}/Seasons?UserId={uid}`             | No                |
+| Episode list (per season) | `GET /Shows/{seriesId}/Episodes?SeasonId=…&UserId={uid}` | No                |
 
 The harness fetches all three under a **browser-like** identity and the **real TV
 identity** (`Client="Jellyfin Shell for Tizen", Device="Samsung Smart TV"`) and
@@ -57,12 +57,12 @@ path, TV == browser **by construction**; the harness confirms it empirically.
 **(B1) Source guards** — assert `boot-shell.src.js` still carries the four fixes
 that, if reverted, re-wedge the details page:
 
-| Guard | Fix | Why it matters |
-| --- | --- | --- |
-| `MODERN_SYNTAX_RE` detects `catch{` | JEL-23 #1 | else JavaScriptInjector (uses optional-catch) is mis-classed ES5, inlined raw → SyntaxError |
-| `babelTranspile` passes `iterableIsArray` + `arrayLikeIsIterable` | belt-and-suspenders | any lowered for-of/spread emits indexed access, never the throwing `_createForOfIteratorHelper` |
-| transpile gated on `__ensureBabel` | JEL-20 | babel guaranteed loaded before transform — a modern plugin is never `document.write`'d raw |
-| legacy scan enumerates all scripts (not gated on stale `babelNeeded`); `markBabelNeeded` persists at detection | JEL-23 #2/#3 | breaks the chicken-and-egg that let the warm cache skip the slow path |
+| Guard                                                                                                          | Fix                 | Why it matters                                                                                  |
+| -------------------------------------------------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------- |
+| `MODERN_SYNTAX_RE` detects `catch{`                                                                            | JEL-23 #1           | else JavaScriptInjector (uses optional-catch) is mis-classed ES5, inlined raw → SyntaxError     |
+| `babelTranspile` passes `iterableIsArray` + `arrayLikeIsIterable`                                              | belt-and-suspenders | any lowered for-of/spread emits indexed access, never the throwing `_createForOfIteratorHelper` |
+| transpile gated on `__ensureBabel`                                                                             | JEL-20              | babel guaranteed loaded before transform — a modern plugin is never `document.write`'d raw      |
+| legacy scan enumerates all scripts (not gated on stale `babelNeeded`); `markBabelNeeded` persists at detection | JEL-23 #2/#3        | breaks the chicken-and-egg that let the warm cache skip the slow path                           |
 
 **(B2) Functional** — the harness loads the **exact babel bundle that ships in the
 WGT** (`babel.min.js`, 7.29.0) and runs the **6 plugin scripts the server injects

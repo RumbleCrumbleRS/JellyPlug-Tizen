@@ -25,16 +25,16 @@ by the QA beacon's `countCards()` and the HUD `cards:N` row (see PART B).
 
 ### The marks (`window.__qaMarks`, shipped in `src/index.html`)
 
-| Mark | Stamped by | Fires on |
-| --- | --- | --- |
-| `tShellStart` | boot-mark initializer IIFE | TV + browser |
-| `tBabelPreloadAppend` | babel-preload IIFE (`<link rel=preload babel.min.js>`) | **TV only** |
-| `tBabelScriptAppend` | `__ensureBabel` (eager kick appends `<script babel.min.js>`) | **TV only** |
-| `tBabelReady` | babel `<script>` `onload` (V8 parse complete) | **TV only** |
-| `tFirstWebFetchStart` | prefetch IIFE, before `fetch('/web/index.html')` | TV + browser |
-| `tFirstWebFetchEnd` | prefetch IIFE `.then()` | TV + browser |
-| `tDocumentWrite` | `shell.js markDocumentWrite()`, before `document.open()` | TV + browser |
-| `bootIndex` / `bootTs` | initializer (rotates `current`→`prior`, increments index) | TV + browser |
+| Mark                   | Stamped by                                                   | Fires on     |
+| ---------------------- | ------------------------------------------------------------ | ------------ |
+| `tShellStart`          | boot-mark initializer IIFE                                   | TV + browser |
+| `tBabelPreloadAppend`  | babel-preload IIFE (`<link rel=preload babel.min.js>`)       | **TV only**  |
+| `tBabelScriptAppend`   | `__ensureBabel` (eager kick appends `<script babel.min.js>`) | **TV only**  |
+| `tBabelReady`          | babel `<script>` `onload` (V8 parse complete)                | **TV only**  |
+| `tFirstWebFetchStart`  | prefetch IIFE, before `fetch('/web/index.html')`             | TV + browser |
+| `tFirstWebFetchEnd`    | prefetch IIFE `.then()`                                      | TV + browser |
+| `tDocumentWrite`       | `shell.js markDocumentWrite()`, before `document.open()`     | TV + browser |
+| `bootIndex` / `bootTs` | initializer (rotates `current`→`prior`, increments index)    | TV + browser |
 
 ## The headline result — which phases are longer on TV
 

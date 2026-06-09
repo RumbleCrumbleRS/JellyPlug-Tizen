@@ -22,7 +22,7 @@ on-glass-only and listed at the end.
    track. Same code path on TV.
 3. **Switch between tracks** — ✅ selecting `English-SRT - ASS` switched the
    active track and instantiated the renderer (below).
-4. **Position/size on the TV display** — ⚠️ partial: render *path* verified;
+4. **Position/size on the TV display** — ⚠️ partial: render _path_ verified;
    pixel position/size on the physical 1080p panel is on-glass-only (see
    residual risks). CSS is identical bytes, so divergence would require an M63
    CSS-engine gap.
@@ -38,12 +38,12 @@ whether the request comes from the shell's TV profile or a browser profile. The
 only thing the shell's `enableSsaRender:true` changes is keeping ASS as a
 client-rendered external track instead of burning it in:
 
-| codec | shell-TV (`ssa=on`) | hypothetical `ssa=off` |
-|---|---|---|
-| subrip (text) | External | External |
-| ass (SSA) | **External** (client libass) | Encode (server burn-in) |
-| pgssub (bitmap) | Encode (burn-in) | Encode |
-| dvdsub (bitmap) | Encode (burn-in) | Encode |
+| codec           | shell-TV (`ssa=on`)          | hypothetical `ssa=off`  |
+| --------------- | ---------------------------- | ----------------------- |
+| subrip (text)   | External                     | External                |
+| ass (SSA)       | **External** (client libass) | Encode (server burn-in) |
+| pgssub (bitmap) | Encode (burn-in)             | Encode                  |
+| dvdsub (bitmap) | Encode (burn-in)             | Encode                  |
 
 `surprises: 0` — every row matched the expected delivery. So: text and bitmap
 subtitles render the same way on TV and browser; only ASS depends on the M63
@@ -52,6 +52,7 @@ client renderer, which is what the next two findings probe.
 ### 2. ASS renders via client SubtitlesOctopus in a real browser (`subtitle-render-capture.mjs`)
 
 Selecting the ASS track on "300" produced:
+
 - `canvas.libassjs-canvas` (1280×533) under `div.libassjs-canvas-parent`, and
 - `video.textTracks.length === 0` (so it is **not** native `<track>`/`::cue`).
 

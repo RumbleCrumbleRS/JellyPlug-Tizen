@@ -26,15 +26,16 @@ minified blobs.
 document. The shell can only affect jellyfin-web through five surfaces; each is
 verified inert mid-session:
 
-| # | Surface | Shell behaviour mid-session | Effect on jellyfin-web error handling |
-|---|---------|------------------------------|----------------------------------------|
-| a | **Network (XHR/fetch)** | The seed shim intercepts **only** `config.json` (`/(^\|/)config\.json(\?\|$)/`); every other URL defers to the native transport (`origFetch.call` / `origSend.apply`). | Data calls (`Items`, `PlaybackInfo`, `Sessions/Playing`, images, streams) fail **natively** when the server dies — exactly as in a browser — so jellyfin-web's own `.catch()`/`onerror` fires and draws its error toast / "connection lost" UI. |
-| b | **Competing offline UI** | No `navigator.onLine` probe, no `online`/`offline` listener, no `navigator.connection`, no mid-session overlay. | Nothing is drawn over jellyfin-web's error UI. |
-| c | **Input** | The shell's only key binding is BACK (10009), and it **early-returns** once `__jellyfinShellBootDone` is set. | Every key jellyfin-web's error UI needs (Back / retry / navigate) reaches it unmodified. |
-| d | **Error events** | Global `error` / `unhandledrejection` listeners are **diagnostic-only**: they record into the HUD, then (for rejections) `preventDefault()` **after** recording. They never `stopImmediatePropagation`. | A rejection that jellyfin-web `.catch()`-es never becomes "unhandled", so the shell handler never sees it; on a genuinely unhandled rejection `preventDefault()` only suppresses the browser's default console log — it cannot cancel a `.catch()` that already ran. jellyfin-web's handling is untouched. |
-| e | **Recovery / state** | Server-state teardown + the shell's own error message live **only** in the boot-time `loadRemoteWebClient(stored).catch`. Nothing wires them to a mid-session timer/event; the shell never calls `location.reload()` on a network condition. | When the network restores, jellyfin-web's next call/poll succeeds against the still-loaded client → **no restart**. |
+| #   | Surface                  | Shell behaviour mid-session                                                                                                                                                                                                                  | Effect on jellyfin-web error handling                                                                                                                                                                                                                                                                      |
+| --- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a   | **Network (XHR/fetch)**  | The seed shim intercepts **only** `config.json` (`/(^\|/)config\.json(\?\|$)/`); every other URL defers to the native transport (`origFetch.call` / `origSend.apply`).                                                                       | Data calls (`Items`, `PlaybackInfo`, `Sessions/Playing`, images, streams) fail **natively** when the server dies — exactly as in a browser — so jellyfin-web's own `.catch()`/`onerror` fires and draws its error toast / "connection lost" UI.                                                            |
+| b   | **Competing offline UI** | No `navigator.onLine` probe, no `online`/`offline` listener, no `navigator.connection`, no mid-session overlay.                                                                                                                              | Nothing is drawn over jellyfin-web's error UI.                                                                                                                                                                                                                                                             |
+| c   | **Input**                | The shell's only key binding is BACK (10009), and it **early-returns** once `__jellyfinShellBootDone` is set.                                                                                                                                | Every key jellyfin-web's error UI needs (Back / retry / navigate) reaches it unmodified.                                                                                                                                                                                                                   |
+| d   | **Error events**         | Global `error` / `unhandledrejection` listeners are **diagnostic-only**: they record into the HUD, then (for rejections) `preventDefault()` **after** recording. They never `stopImmediatePropagation`.                                      | A rejection that jellyfin-web `.catch()`-es never becomes "unhandled", so the shell handler never sees it; on a genuinely unhandled rejection `preventDefault()` only suppresses the browser's default console log — it cannot cancel a `.catch()` that already ran. jellyfin-web's handling is untouched. |
+| e   | **Recovery / state**     | Server-state teardown + the shell's own error message live **only** in the boot-time `loadRemoteWebClient(stored).catch`. Nothing wires them to a mid-session timer/event; the shell never calls `location.reload()` on a network condition. | When the network restores, jellyfin-web's next call/poll succeeds against the still-loaded client → **no restart**.                                                                                                                                                                                        |
 
 ### TV == browser by construction
+
 The intercept decision (`matches()`) and the BACK gate reference **no**
 `tizen`/`webapis` global — they use only `XMLHttpRequest`, `window.fetch`,
 `Response`, a regex, and a `window` flag. So the intercept-or-passthrough
@@ -68,7 +69,7 @@ test asserts the absence of any Tizen-only branch in the shim.
 ## Observations (informational)
 
 1. **config.json is the only seeded resource.** If jellyfin-web re-fetches
-   `config.json` *while the server is down mid-session*, the shim still resolves
+   `config.json` _while the server is down mid-session_, the shim still resolves
    it `200` from the seeded body. This is **benign and parity-neutral**:
    `config.json` is static boot config with no liveness signal, browsers cache
    it too, and the error UI is driven by **data** calls (which the shim passes
@@ -77,6 +78,7 @@ test asserts the absence of any Tizen-only branch in the shim.
 2. **Boot-time recovery divergence between the two shells (JEL-63 follow-up, not
    a mid-session issue).** Both shells keep their network-failure UI strictly in
    the boot catch, but they differ on what that catch does:
+
    - `shell.js` (full shell): JEL-63 applied — **keeps** the saved server URL and
      re-shows the connect form pre-filled, copy =
      _"Could not reach saved server. Check your network and try again."_ so a
@@ -86,7 +88,7 @@ test asserts the absence of any Tizen-only branch in the shim.
 
    Because the deployed artifact is the bootstrap, a **boot-time** outage on the
    TV currently wipes the saved URL and forces a retype. This does not affect the
-   JEL-64 *mid-session* scenario, but porting JEL-63 to the bootstrap is the
+   JEL-64 _mid-session_ scenario, but porting JEL-63 to the bootstrap is the
    right follow-up. Filed as a note here for triage.
 
 ---

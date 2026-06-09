@@ -15,21 +15,21 @@ client identities (a browser-like session and the real TV session,
 
 A `grep` of `shell.js` and `boot-shell.src.js` for `search` finds only:
 
-| Hit | What it is | Relevant to text search? |
-| --- | --- | --- |
+| Hit                                            | What it is                  | Relevant to text search?                                         |
+| ---------------------------------------------- | --------------------------- | ---------------------------------------------------------------- |
 | `focusManager.nav()` "searches geometrically…" | D-pad **spatial** focus nav | No — that's [JEL-33](/JEL/issues/JEL-33) focus, not query search |
-| `location.search` | URL query-string parsing | No |
+| `location.search`                              | URL query-string parsing    | No                                                               |
 
 There is **no** text-search, search-input, search-results, or `/Search/Hints`
 code anywhere in the shell. Every piece the user exercises on the search screen
 maps to a layer the shell does not touch:
 
-| Step in the task | Owned by | Why it can't diverge TV vs browser |
-| --- | --- | --- |
-| **(1) Query entry** (virtual keyboard / input via D-pad) | jellyfin-web `searchFields` UI + platform `<input>`; D-pad focus *into* the field is the shell's body-focus-rescue ([JEL-33](/JEL/issues/JEL-33)) | The shell adds no key handling on the search screen (it only intercepts BACK `10009` — see PARITY_NOTES / [JEL-42](/JEL/issues/JEL-42)). Once focus lands, character entry + caret + intra-screen D-pad movement are the platform/`focusManager`. |
-| **(2) Results** | `GET /Search/Hints?searchTerm=…` per (debounced) keystroke | The hint payload takes **no `DeviceProfile`** and does not vary on client/device — the server returns identical `SearchHints` to any client of the user. |
-| **(3) Result display** (movies/shows/episodes/people) | result card built from hint fields (`Name`, `Type`, `PrimaryImageTag`, `Series`, …) | Same fields delivered to both clients. |
-| **(4) Navigation** | OK/click routes to `#!/details?id=<ItemId>`, payload `GET /Users/{uid}/Items/{ItemId}` | Id-addressed; identical payload for both. |
+| Step in the task                                         | Owned by                                                                                                                                          | Why it can't diverge TV vs browser                                                                                                                                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) Query entry** (virtual keyboard / input via D-pad) | jellyfin-web `searchFields` UI + platform `<input>`; D-pad focus _into_ the field is the shell's body-focus-rescue ([JEL-33](/JEL/issues/JEL-33)) | The shell adds no key handling on the search screen (it only intercepts BACK `10009` — see PARITY_NOTES / [JEL-42](/JEL/issues/JEL-42)). Once focus lands, character entry + caret + intra-screen D-pad movement are the platform/`focusManager`. |
+| **(2) Results**                                          | `GET /Search/Hints?searchTerm=…` per (debounced) keystroke                                                                                        | The hint payload takes **no `DeviceProfile`** and does not vary on client/device — the server returns identical `SearchHints` to any client of the user.                                                                                          |
+| **(3) Result display** (movies/shows/episodes/people)    | result card built from hint fields (`Name`, `Type`, `PrimaryImageTag`, `Series`, …)                                                               | Same fields delivered to both clients.                                                                                                                                                                                                            |
+| **(4) Navigation**                                       | OK/click routes to `#!/details?id=<ItemId>`, payload `GET /Users/{uid}/Items/{ItemId}`                                                            | Id-addressed; identical payload for both.                                                                                                                                                                                                         |
 
 ### Query entry / on-screen keyboard — the JEL-33 link
 
