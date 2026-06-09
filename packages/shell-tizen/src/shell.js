@@ -27,6 +27,44 @@
   var hasTizen = typeof window.tizen !== "undefined";
   var hasWebapis = typeof window.webapis !== "undefined";
 
+  // JEL-63: bounded boot-fetch timeout. With a saved server URL pointing at
+  // an unreachable-but-routable host (SYN gets no reply / packets dropped),
+  // a bare fetch() hangs for the platform's default TCP connect timeout —
+  // which differs between Tizen Chromium and desktop Chrome (tens of seconds
+  // to minutes), so boot recovery time would NOT be parity-equal. Racing the
+  // fetch against a fixed timer makes the connect-screen recovery happen at
+  // the SAME bounded moment on both platforms. 15 s sits far above any healthy
+  // /web/ RTT (200-500 ms typical, a few seconds worst case on slow TV Wi-Fi)
+  // so it never fires on a reachable server, yet well below the platform TCP
+  // default so an unreachable host recovers promptly. Promise.race only frees
+  // the boot promise — the underlying socket keeps draining (we cannot abort
+  // on Chromium 56, which predates AbortController), but the UI recovers.
+  var BOOT_FETCH_TIMEOUT_MS = 15000;
+  function withBootTimeout(p, label) {
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Timed out reaching server (" + label + ")"));
+      }, BOOT_FETCH_TIMEOUT_MS);
+      Promise.resolve(p).then(
+        function (v) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        },
+        function (e) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
+  }
+
   // ---- Transpile cache key (JEL-1150) -----------------------------------
   //
   // Derive TX_VER from the inputs that actually affect babel output:
@@ -3198,14 +3236,23 @@
     // a real Jellyfin upgrade, and the HTTP cache layer revalidates.
     var pf = window.__shellPrefetch;
     var fetchOpts = { credentials: "omit" };
-    var indexFetch =
+    // JEL-63: race both critical-path boot fetches against a bounded timer so
+    // an unreachable saved server recovers to the connect screen at the same
+    // moment on TV and browser (see withBootTimeout). Wrapping the *consumed*
+    // promise covers both the fresh-fetch and adopted-prefetch sources (the
+    // head-IIFE prefetch is itself an un-timed fetch).
+    var indexFetch = withBootTimeout(
       pf && pf.baseUrl === baseUrl && pf.index
         ? pf.index
-        : fetch(baseUrl + "index.html", fetchOpts);
-    var configFetch =
+        : fetch(baseUrl + "index.html", fetchOpts),
+      "web client",
+    );
+    var configFetch = withBootTimeout(
       pf && pf.baseUrl === baseUrl && pf.config
         ? pf.config
-        : fetch(baseUrl + "config.json", fetchOpts);
+        : fetch(baseUrl + "config.json", fetchOpts),
+      "web config",
+    );
     // JEL-1977: stale-while-revalidate body cache for /web/index.html +
     // /web/config.json. When the gate flag is on and LS holds a valid
     // entry for this server origin, resolve indexPromise/configPromise
@@ -3485,6 +3532,15 @@
     var input = document.getElementById("server-input");
     if (!form || !input) return;
 
+    // JEL-63: pre-fill the saved server URL (if any) so the boot-failure
+    // recovery path lets the user retry the same address with one Connect
+    // press instead of retyping it. Only when the field is empty so we never
+    // clobber what the user is actively typing.
+    if (!input.value) {
+      var saved = loadServerUrl();
+      if (saved) input.value = saved;
+    }
+
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       var url = normalizeServerUrl(input.value);
@@ -3519,9 +3575,18 @@
       // form. The pre-flight added a serial round trip (~hundreds of ms
       // on TV networks) on every cold start with no additional safety.
       loadRemoteWebClient(stored).catch(function () {
-        clearServerUrl();
+        // JEL-63: do NOT clear the saved server URL on a boot-time network
+        // failure. The host is often only *temporarily* unreachable (TV just
+        // woke from standby, router mid-reboot, Wi-Fi reassociating). Wiping
+        // the URL forced the user to retype the full address every time.
+        // Keep it and re-show the connect form with the address pre-filled
+        // (attachConnectForm) so a single Connect press retries the SAME
+        // server. The text below is emitted from this single, UA-independent
+        // path, so it is byte-identical on TV and browser.
         attachConnectForm();
-        showError("Saved server is unreachable. Enter a new address.");
+        showError(
+          "Could not reach saved server. Check your network and try again.",
+        );
       });
     } else {
       attachConnectForm();

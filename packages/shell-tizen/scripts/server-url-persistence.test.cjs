@@ -6,8 +6,10 @@
 //      localStorage and survives across launches ("sessions").
 //   2. On next launch the shell skips the connect screen and auto-connects
 //      from the stored URL.
-//   3. The clearServerUrl path (switching servers / unreachable saved server)
-//      removes the key and falls back to the connect screen.
+//   3. The clearServerUrl path (switching servers) removes the key and falls
+//      back to the connect screen. (JEL-63: an *unreachable* saved server does
+//      NOT clear the key — it re-shows the connect form with the URL pre-filled
+//      so the user can retry the same host.)
 //   4. TV shell (shell-tizen/src/shell.js) and hosted/browser shell
 //      (shell-tizen-bootstrap/src/boot-shell.src.js) agree on all of the above
 //      — same key, same semantics. This is the "Compare" half of the ticket.
@@ -205,9 +207,25 @@ function wiring(src, label) {
     label + ": connect submit persists via saveServerUrl(url) after validate",
     /validateServer\(url\)/.test(flat) && /saveServerUrl\(url\)/.test(flat),
   );
+  // JEL-63: an unreachable saved server must NOT clear the key — it shows the
+  // connect form (with the saved URL pre-filled for one-press retry) and a
+  // network error, keeping the URL so the user can retry the same host. The
+  // old behaviour (clearServerUrl() immediately before attachConnectForm() in
+  // the boot-failure catch) is the regression this guards against.
   check(
-    label + ": unreachable saved server clears key then shows connect form",
-    /clearServerUrl\(\)[;,]?\s*attachConnectForm\(\)/.test(flat),
+    label + ": unreachable saved server does NOT clear the key in the boot catch",
+    !/clearServerUrl\(\)[;,]?\s*attachConnectForm\(\)/.test(flat),
+  );
+  check(
+    label + ": unreachable saved server shows the network error + connect form",
+    /loadRemoteWebClient\(stored\)\.catch\(function \(\) \{/.test(flat) &&
+      /Could not reach saved server\. Check your network and try again\./.test(
+        flat,
+      ),
+  );
+  check(
+    label + ": connect form pre-fills the saved URL for retry",
+    /var saved = loadServerUrl\(\)/.test(flat),
   );
   check(
     label + ": selectServer() switch clears the stored URL",
