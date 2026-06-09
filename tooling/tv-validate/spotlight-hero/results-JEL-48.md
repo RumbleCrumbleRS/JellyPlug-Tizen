@@ -15,23 +15,23 @@ identical to a desktop browser **by construction**.
 That the hero actually renders and is D-pad-reachable on the real locked M63 TV
 was the subject of [JEL-17](/JEL/issues/JEL-17) (resolved: warm-boot DOM shows
 `hsc=1, splide=function, heroEls=1, spotlightEls=68, watchBtn=18`, after a
-5-part babel/cache shell fix). JEL-48 is the *behavioral parity comparison* of
+5-part babel/cache shell fix). JEL-48 is the _behavioral parity comparison_ of
 the four spotlight interactions, verified against the live server contract.
 
 ## What the shell touches (and what it doesn't)
 
-| Spotlight concern | Owner | Shell involvement |
-| --- | --- | --- |
-| Hero/spotlight markup + Splide mount | Editor's Choice plugin | none |
-| Backdrop image | server image endpoint | none |
-| Auto-advance (`autoplay`, `interval`) | server config → Splide | none |
-| Left/right arrow navigation | Splide (`keyboard:true`) + `splide__arrow` buttons | none — shell only `preventDefault`s BACK/10009 |
-| OK/Enter → details page | slide `<a href="#/details?id=">` + `Emby.Page.showItem` | none |
-| TV layout adjustments | plugin, gated on jellyfin-web's `layout-tv` class | none — shell does not set `layout-tv` |
+| Spotlight concern                     | Owner                                                   | Shell involvement                              |
+| ------------------------------------- | ------------------------------------------------------- | ---------------------------------------------- |
+| Hero/spotlight markup + Splide mount  | Editor's Choice plugin                                  | none                                           |
+| Backdrop image                        | server image endpoint                                   | none                                           |
+| Auto-advance (`autoplay`, `interval`) | server config → Splide                                  | none                                           |
+| Left/right arrow navigation           | Splide (`keyboard:true`) + `splide__arrow` buttons      | none — shell only `preventDefault`s BACK/10009 |
+| OK/Enter → details page               | slide `<a href="#/details?id=">` + `Emby.Page.showItem` | none                                           |
+| TV layout adjustments                 | plugin, gated on jellyfin-web's `layout-tv` class       | none — shell does not set `layout-tv`          |
 
 The plugin's **only** TV-specific code is (a) a cosmetic `.layout-tv` CSS rule
 for overview text, (b) the `hideOnTvLayout` config gate (`false` on this server,
-so the spotlight *shows* on TV), and (c) a focus *enhancement* that nudges D-pad
+so the spotlight _shows_ on TV), and (c) a focus _enhancement_ that nudges D-pad
 focus off the scroll buttons onto the tab bar. `layout-tv` is a class
 **jellyfin-web** sets from its own display-mode detection, not the shell. There
 is no User-Agent / Tizen / WebOS branch anywhere in the plugin (the lone
@@ -68,15 +68,17 @@ autoplay/interval, keyboard arrow handling, and anchor-click navigation are
 literally the same code on TV and browser.
 
 ### (1) Correct backdrop image
+
 Each slide's `background-image` is `../Items/{id}/Images/Backdrop/0{size}`. With
 `reduceImageSizes:false` (this server) the size param is empty, so the backdrop
 request is **device-independent** — TV and browser fetch the identical URL.
 Every one of the 5 spotlight items returns a real `image/*` backdrop (HTTP 200).
-*(If `reduceImageSizes` were ever flipped to `true`, the plugin would append
+_(If `reduceImageSizes` were ever flipped to `true`, the plugin would append
 `?width=window.screen.width`, which differs TV vs browser; the harness asserts
-it is `false` and would flag a flip.)*
+it is `false` and would flag a flip.)_
 
 ### (2) Auto-advance fires at the same interval
+
 `new Splide(..., { autoplay: !!data.autoplay, interval: data.autoplayInterval })`.
 Both values come from **one** server config blob (`/EditorsChoice/favourites`),
 delivered identically to every client: `autoplay:true`, `interval:10000` (10 s).
@@ -84,6 +86,7 @@ Splide's autoplay timer is upstream library code running on the same bytes, so
 the cadence is identical on TV and browser.
 
 ### (3) Manual left/right navigation via arrow keys
+
 `new Splide(..., { keyboard: true })` enables Splide's own arrow-key handler, and
 the carousel renders `splide__arrow--prev`/`--next` buttons. On the browser,
 Left/Right reach Splide directly; on TV the D-pad Left/Right are the same key
@@ -92,14 +95,16 @@ browser D-pad verification and [JEL-42](/JEL/issues/JEL-42) shell transparency).
 `type:"loop"` + `rewind:true` means navigation wraps identically on both.
 
 ### (4) OK/Enter/Select → correct details page
+
 Every slide is `<a href="{base}#/details?id={item.id}" onclick="Emby.Page.showItem('{item.id}'); return false;">`.
 Activating the focused anchor (Enter on browser, Select/OK on the TV remote)
 calls jellyfin-web's `Emby.Page.showItem(id)` → details page. All 5 spotlight
-target ids resolve to their real items on the server (Movie/Series). *(The
+target ids resolve to their real items on the server (Movie/Series). _(The
 favourites feed returns dashed GUIDs used verbatim in the href; `/Items` returns
-the un-dashed form — same id, jellyfin-web's appRouter accepts either.)*
+the un-dashed form — same id, jellyfin-web's appRouter accepts either.)_
 
 ## Scope notes
+
 - Not driven through a headless browser watching the Splide timer tick:
   autoplay/keyboard are upstream Splide behavior; UI-driving it would test Splide,
   not TV/browser parity. The harness verifies the server contract + the
