@@ -41,14 +41,25 @@
   // refactor that doesn't touch these inputs. The seed-script `__TXVER`
   // (runs on server origin after document.write) reads the same value
   // so static-side and dynamic-side cache writes hit the same keys.
+  // JEL-26: mirror the bootstrap shell's BigInt false-positive guard. The
+  // bare `\d+n\b` matched ordinary identifiers ending in a digit+`n`
+  // (e.g. `span1n`, hex-ish tokens), forcing needless transpile passes and,
+  // worse, sometimes flagging already-legacy code. Anchoring on a
+  // non-word/non-`$`/non-`.` boundary restricts it to genuine BigInt
+  // literals (`10n`) the way Chromium 63 actually needs.
   var MODERN_SYNTAX_RE_SRC =
-    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|\\d+n\\b";
+    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b";
   var MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC);
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
   // releases changes this string and busts the cache.
+  // JEL-26: chrome 56 -> 63 + loose mode mirrors the bootstrap shell so a
+  // server-side shell swap onto the M63 keeps the Splide/iterable fix. The
+  // `assumptions` block is part of the transform options but intentionally
+  // omitted from this key string to stay byte-identical with the bootstrap
+  // shell's BABEL_OPTS_KEY (it derives TX_VER from the same inputs).
   var BABEL_OPTS_KEY =
-    "presets:[[env,{targets:{chrome:56},modules:false}]];sourceType:script;compact:true;comments:false";
+    "presets:[[env,{targets:{chrome:63},modules:false,loose:true}]];sourceType:script;compact:true;comments:false";
   // Build-time substituted by build_shell_min.py with
   // `<len>:<first32>:<last32>` of vendored babel.min.js. Unbuilt loads
   // keep the literal placeholder, which is fine: it's stable across
@@ -834,9 +845,11 @@
       // JEL-554 (v32): same pre-check as static transpileLegacyScripts.
       // Skip babel.transform entirely when no ES2020+ syntax is present —
       // plugin parses fine on Chromium 56 as-is.
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|\\d+n\\b/;",
+      // JEL-26: keep this seed-side pre-check in lockstep with the widget-side
+      // MODERN_SYNTAX_RE_SRC above, including the BigInt false-positive anchor.
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
-      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false}]],sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
+      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       // JEL-557: cache transpiled plugin bodies in localStorage so warm cold
       // boots skip the fetch+Babel cycle on every dynamic <script src> the
@@ -1801,7 +1814,10 @@
   function babelTranspile(src) {
     try {
       return window.Babel.transform(src, {
-        presets: [["env", { targets: { chrome: "56" }, modules: false }]],
+        presets: [
+          ["env", { targets: { chrome: "63" }, modules: false, loose: true }],
+        ],
+        assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },
         sourceType: "script",
         compact: true,
         comments: false,
