@@ -1,30 +1,33 @@
-// JEL-82 verification — Tizen system info: device model & firmware NOT reported.
+// JEL-82 / JEL-90 verification — Tizen system info & device-name model read.
 //
-// QUESTION (from the ticket): does getSystemInfo() read device info via
-// tizen.systeminfo.getPropertyValue('BUILD')? Does deviceName() return the real
-// model (not a 'Tizen TV' fallback)? Is the model exposed in QA diagnostics?
+// HISTORY: JEL-82 originally found the shell read NO device model — deviceName
+// was the fixed constant "Samsung Smart TV" — and locked that contract here
+// "while the JEL-89 identity decision was pending." JEL-89 then ADOPTED the
+// JEL-45 spec, and JEL-90 implemented it. This guard is updated to the NEW
+// contract; the JEL-82 finding is superseded.
 //
-// ANSWER — established by source + runtime execution (see
-// tooling/tv-validate/system-info/results-JEL-82.md):
+// CURRENT CONTRACT (JEL-90), established by source (see
+// tooling/tv-validate/system-info/results-JEL-82.md + nativeshell-apphost.test):
 //
-//   The issue's premise is FALSE against the shipped code. The shell does not
-//   read the device model or firmware version at all:
-//     1. getSystemInfo() queries "DISPLAY" (screen resolution) and never "BUILD".
-//        Its only job is to size AppHost.screen(); the result object carries just
-//        resolutionWidth/resolutionHeight.
-//     2. AppHost.deviceName() returns the fixed constant
-//        AppInfo.deviceName === "Samsung Smart TV" on every code path — no model
-//        derivation, and there is no "Tizen TV" fallback string anywhere. This is
-//        the JEL-89 identity decision, source-guarded by nativeshell-apphost.test.
-//     3. __shellDiag carries errors/warns/stats only — no model/firmware field,
-//        because nothing collects it.
-//   ⇒ The server's Devices dashboard shows the static "Samsung Smart TV" for
-//     every TV. (Devices are still distinguished by deviceId; see JEL-67.)
+//   1. getSystemInfo() STILL queries "DISPLAY" only and NEVER "BUILD". Its sole
+//      job is to size AppHost.screen(); the result object carries just
+//      resolutionWidth/resolutionHeight. The model read is deliberately a
+//      SEPARATE init step (resolveDeviceName), so screen() stays resolution-only.
+//   2. The shell NOW reads the TV model: resolveDeviceName() calls
+//      tizen.systeminfo.getPropertyValue("BUILD", ...) -> info.model, with a
+//      try/catch + error-callback fallback to the "Tizen TV" constant, and runs
+//      in parallel with getSystemInfo() before AppHost.init() resolves.
+//   3. AppInfo.deviceName defaults to the "Tizen TV" fallback; AppHost.deviceName()
+//      returns the cached AppInfo.deviceName (populated at init). On a real TV the
+//      server's Devices dashboard now shows the panel model (e.g. "UN65MU8000").
+//   4. __shellDiag still carries errors/warns/stats only — no model/firmware field.
 //
-// This .cjs locks the SHELL side to source (DISPLAY-only, fixed name, no BUILD).
-// The companion .mjs EXECUTES getSystemInfo() in a vm realm against a recording
-// tizen.systeminfo double to prove BUILD is never asked even at runtime:
-// tooling/tv-validate/system-info/verify-system-info.mjs.
+// DEPLOYED BLOBS: boot-shell.min.js (the on-TV retail bootstrap) is rebuilt from
+// source and carries the BUILD model read (CI src==min guard). shell.min.js (the
+// hosted/WGT shell, rebuilt only at release cuts) currently carries the updated
+// identity STRING ("Tizen TV") via a surgical update; its model-read LOGIC lands
+// at the next hosted-drop rebuild (a full build_shell_min.py rebuild presently
+// overflows the 102400-byte cap due to pre-existing drift — tracked separately).
 //
 // Run: node scripts/system-info.test.cjs
 //   or: pnpm --filter @jellyfin-tv/shell-tizen test
@@ -47,6 +50,13 @@ const BOOT_SRC = path.join(
   "shell-tizen-bootstrap",
   "src",
   "boot-shell.src.js",
+);
+const BOOT_MIN = path.join(
+  REPO,
+  "packages",
+  "shell-tizen-bootstrap",
+  "src",
+  "boot-shell.min.js",
 );
 
 let failures = 0;
@@ -75,6 +85,7 @@ function fnBody(src, name, label) {
 const tvSrc = fs.readFileSync(TV_SHELL, "utf8");
 const minSrc = fs.readFileSync(TV_SHELL_MIN, "utf8");
 const bootSrc = fs.readFileSync(BOOT_SRC, "utf8");
+const bootMin = fs.readFileSync(BOOT_MIN, "utf8");
 
 const SHELLS = [
   { label: "shell.js", src: tvSrc },
@@ -101,7 +112,8 @@ for (const { label, src } of SHELLS) {
   );
 }
 
-// --- 2. deviceName() is the fixed "Samsung Smart TV" constant -----------------
+// --- 2. deviceName defaults to the "Tizen TV" fallback; the model is read -----
+//        from tizen.systeminfo "BUILD" in a SEPARATE init step (JEL-90).
 for (const { label, src } of SHELLS) {
   const appInfoBlock = src.slice(
     src.indexOf("AppInfo"),
@@ -109,19 +121,24 @@ for (const { label, src } of SHELLS) {
   );
   const nameMatch = appInfoBlock.match(/deviceName:\s*"([^"]+)"/);
   check(
-    `[${label}] AppInfo.deviceName === "Samsung Smart TV" (fixed, not the model)`,
-    !!nameMatch && nameMatch[1] === "Samsung Smart TV",
+    `[${label}] AppInfo.deviceName defaults to the "Tizen TV" fallback`,
+    !!nameMatch && nameMatch[1] === "Tizen TV",
     nameMatch ? "got " + JSON.stringify(nameMatch[1]) : "deviceName not found",
   );
   check(
-    `[${label}] AppHost.deviceName() returns the cached constant (no model lookup)`,
+    `[${label}] AppHost.deviceName() returns the cached AppInfo.deviceName (populated at init)`,
     /deviceName:\s*function\s*\(\)\s*\{\s*return\s+AppInfo\.deviceName/.test(
       src,
     ),
   );
   check(
-    `[${label}] no "Tizen TV" fallback string exists`,
-    !/"Tizen TV"/.test(src),
+    `[${label}] reads the TV model via tizen.systeminfo "BUILD" -> info.model`,
+    /getPropertyValue\(\s*\n?\s*"BUILD"/.test(src) && /\.model\b/.test(src),
+    'expected a getPropertyValue("BUILD") read feeding info.model',
+  );
+  check(
+    `[${label}] "Tizen TV" fallback string is present`,
+    /"Tizen TV"/.test(src),
   );
 }
 
@@ -135,19 +152,39 @@ for (const { label, src } of SHELLS) {
   );
 }
 
-// --- 4. Deployed artifact mirrors all three facts -----------------------------
+// --- 4. Deployed artifacts -----------------------------------------------------
+// boot-shell.min.js is the on-TV retail bootstrap: a full rebuild from source,
+// so it carries the "Tizen TV" fallback AND the BUILD model read.
 check(
-  'shell.min.js (deployed) reports the constant "Samsung Smart TV"',
-  minSrc.includes("Samsung Smart TV"),
+  'boot-shell.min.js (retail) reports the "Tizen TV" fallback',
+  bootMin.includes('"Tizen TV"'),
 );
 check(
-  'shell.min.js (deployed) queries "DISPLAY" and never "BUILD"',
-  minSrc.includes('getPropertyValue("DISPLAY"') &&
-    !/getPropertyValue\(\s*"BUILD"/.test(minSrc),
+  'boot-shell.min.js (retail) reads the TV model via "BUILD"',
+  /getPropertyValue\(\s*"BUILD"/.test(bootMin) && /\.model\b/.test(bootMin),
 );
 check(
-  'shell.min.js (deployed) contains no "Tizen TV" device-name fallback',
-  !minSrc.includes('"Tizen TV"'),
+  'boot-shell.min.js (retail) no longer reports the old "Samsung Smart TV" constant',
+  !bootMin.includes("Samsung Smart TV"),
+);
+
+// shell.min.js (hosted/WGT shell) is rebuilt only at release cuts. Its identity
+// STRING has been surgically updated to the "Tizen TV" fallback; the model-read
+// LOGIC lands at the next hosted-drop rebuild (a full build_shell_min.py rebuild
+// currently overflows the 102400-byte cap — pre-existing drift, tracked apart).
+// So we assert the string is mirrored and getSystemInfo stays DISPLAY-only, but
+// do NOT yet require the BUILD read in this blob.
+check(
+  'shell.min.js (deployed) reports the "Tizen TV" fallback',
+  minSrc.includes('"Tizen TV"'),
+);
+check(
+  'shell.min.js (deployed) no longer reports the old "Samsung Smart TV" constant',
+  !minSrc.includes("Samsung Smart TV"),
+);
+check(
+  'shell.min.js (deployed) getSystemInfo still queries "DISPLAY" (screen sizing intact)',
+  minSrc.includes('getPropertyValue("DISPLAY"'),
 );
 
 // --- summary ------------------------------------------------------------------
@@ -157,5 +194,5 @@ if (failures) {
   process.exit(1);
 }
 console.log(
-  "All system-info checks passed (model/firmware not reported; fixed device name — by design, JEL-89).",
+  'All system-info checks passed (screen sizing is DISPLAY-only; deviceName now reads the TV model via BUILD with a "Tizen TV" fallback — JEL-89/JEL-90).',
 );

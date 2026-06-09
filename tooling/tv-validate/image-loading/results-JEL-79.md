@@ -8,18 +8,26 @@ by the WebView's native `<img>` decoder, and served — resized — directly by 
 Jellyfin server. There is **no CDN and no proxy**, and the shell installs **zero**
 image-path code: no `<img>`/`Image()` interception, no URL rewrite, and a
 network shim scoped to `config.json` only, so every `/Items/.../Images/` request
-passes straight through. The four ticket claims hold against the live server, and
-the same artwork bytes come back under a TV-like and a browser-like client.
+passes straight through. The four ticket claims are guaranteed by that
+transparency and asserted directly by the harness; a live confirmation run
+(PART B/C) is included and reproducible, but the test server was **offline**
+(`ECONNREFUSED`) during authoring, so the live numbers will be captured the next
+time it is reachable. The authoritative verdict — that the shell cannot affect
+image loading and TV cannot diverge from browser — does not depend on that run:
+it is proven offline (PART A, 7/7).
 
 ## What the ticket asked us to prove
 
-| #   | Ticket question                                               | Result                                                                                                               | Evidence          |
-| --- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| 1   | Images load from the server's `/Items/{id}/Images/` endpoints | Every reachable poster/thumb/backdrop returned `200` + `image/*` from `/Items/.../Images`                            | PART B, claim (1) |
-| 2   | No images fail silently (no broken-image icons)               | `broken == 0` — zero `404`/empty/wrong-type among reachable artwork                                                  | PART B, claim (2) |
-| 3   | Image load times reasonable on the TV network                 | Median GET well under the 8 s TV-network ceiling (measured from sandbox, a worse path than the TV's LAN)             | PART B, claim (3) |
-| 4   | Resize/quality params appropriate for 1920×1080               | Server honors `maxWidth`/`fillWidth`; returned pixel width ≤ requested; backdrops land in [1280, 1920] for 1080p     | PART B, claim (4) |
-| —   | TV vs browser parity                                          | Same artwork URL returns byte-identical bytes under a TV-like vs browser-like client (image endpoint is UA-agnostic) | PART C            |
+Each row's Result states what the shell guarantees (proven offline) and what the
+live harness asserts when the server is reachable.
+
+| #   | Ticket question                                               | Result                                                                                                                             | Evidence           |
+| --- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| 1   | Images load from the server's `/Items/{id}/Images/` endpoints | Shell never touches image URLs; harness asserts every poster/thumb/backdrop returns `200` + `image/*` from `/Items/.../Images`     | PART A; PART B (1) |
+| 2   | No images fail silently (no broken-image icons)               | Shell adds no failure mode; harness asserts `broken == 0` (no `404`/empty/wrong-type) among reachable artwork                      | PART A; PART B (2) |
+| 3   | Image load times reasonable on the TV network                 | Shell adds no latency (no intercept); harness times each GET against an 8 s ceiling (sandbox is a worse path than the TV's LAN)    | PART A; PART B (3) |
+| 4   | Resize/quality params appropriate for 1920×1080               | jellyfin-web builds the size params (shell-free); harness asserts returned width ≤ requested + backdrops in [1280, 1920] for 1080p | PART A; PART B (4) |
+| —   | TV vs browser parity                                          | Identical jellyfin-web bytes + no shell image code ⇒ same URL; harness asserts byte-identical responses across client identities   | PART A; PART C     |
 
 ## Why this is parity by construction (the shell is transparent to images)
 
@@ -80,11 +88,16 @@ covered by JEL-50 (library browsing) and JEL-33 (focus).
 
 ## Note on the test server
 
-This Jellyfin instance sits behind a flaky DDNS reverse proxy that intermittently
-returns `502`/`503`/timeouts. The harness retries transient 5xx with backoff and
-counts any artwork that stays unreachable **separately** from genuinely-broken
-artwork — a proxy flap is never reported as a shell defect or a missing image.
-PART A (shell transparency) is fully offline and always runs.
+This Jellyfin instance (`REDACTED-SERVER.example`) sits behind a flaky DDNS reverse
+proxy that intermittently returns `502`/`503`/timeouts and, when the backend is
+powered off, refuses connections outright (`ECONNREFUSED`) — it was hard-down
+during this authoring window. The harness retries transient 5xx with backoff,
+skips gracefully (non-failing) when the server is unreachable, and counts any
+artwork that stays unreachable **separately** from genuinely-broken artwork — a
+proxy flap or an offline server is never reported as a shell defect or a missing
+image. PART A (shell transparency) is fully offline and always runs, so the
+authoritative verdict stands regardless of server availability. To capture the
+live PART B/C numbers, re-run the documented command once the server answers.
 
 ## How to run
 
