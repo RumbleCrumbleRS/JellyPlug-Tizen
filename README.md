@@ -1,237 +1,170 @@
-# JellyPlug-Tizen / jellyfin-tv-shell
+# Jellyfin for Tizen (JellyPlug)
 
-Thin browser-shell apps for Jellyfin on TV. Each platform shell loads the
-**live** Jellyfin web client from `${server}/web/` so server-installed plugins
-work 1:1 on TV — same code, same plugins, every platform.
+A thin browser-shell app for running Jellyfin on Samsung Smart TVs. The shell
+loads the **live** Jellyfin web client from `${server}/web/`, so every plugin
+installed on your server works 1:1 on the TV — same code, same plugins.
 
-The Tizen path uses the **Hosted Shell Bootstrap (HSB)**: a near-immutable
-580 KB WGT installed once on the TV, which then fetches `shell.min.js` from
-`${server}/shell/` at launch. Every shell update afterwards is a server-side
-file swap — no `sdb shell`, no `pkgcmd`, no re-signing the WGT per release.
+The Tizen build uses a **Hosted Shell Bootstrap (HSB)**: a small (~580 KB) WGT
+is installed on the TV once, and from then on it fetches `shell.min.js` from
+your Jellyfin server at launch. Updating the shell after that is just a
+server-side file swap — no re-signing or re-installing the WGT per release.
 
----
+> Detailed guides (emulator setup, on-device debugging, server hosting) live in
+> the per-package READMEs under [`packages/`](./packages) and
+> [`tooling/`](./tooling).
 
-## Quick Start — install on a Samsung Tizen TV
+## Prerequisites
 
-You need:
+- Tizen Studio 4.6+ with IDE or CLI. See [Installing TV SDK](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/installing-tv-sdk.html).
+- `tizen` and `sdb` CLIs on your `PATH`. The installer adds `tizen` but **not**
+  `sdb` — append `C:\tizen-studio\tools\` to `PATH` so `sdb` resolves.
+- Git
+- Node.js 20+ and [pnpm](https://pnpm.io/)
 
-- Tizen Studio installed.
-- `tizen` CLI on `PATH` (the installer adds `C:\tizen-studio\tools\ide\bin\`).
-- `sdb` CLI on `PATH` — **the installer does NOT add this by default**.
-  Append `C:\tizen-studio\tools\` to `PATH` so `sdb` resolves directly. One-line PowerShell:
-  ```powershell
-  [Environment]::SetEnvironmentVariable("Path", "$([Environment]::GetEnvironmentVariable('Path','User'));C:\tizen-studio\tools", "User")
-  ```
-  Close + reopen the terminal afterwards.
-- A signed TV certificate profile in **Tizen Studio → Certificate Manager**.
-  Same profile used to sign any other `.wgt` you've put on this TV.
-- TV in **Developer Mode** with the host IP set, and reachable via `sdb connect`.
-- TV target name (e.g. `QN82Q60RAFXZA`) — `sdb devices` will list it.
+## Getting Started
 
-If `tizen install` fails with `Can not transfer ... package` and `sdb devices` is not on PATH, that means `sdb`'s connection state is bad — but you also can't diagnose it without the binary. Add it to PATH first.
+1. Install the prerequisites above.
+2. Install Certificate Manager using the Tizen Studio Package Manager.
+3. Set up a Tizen TV certificate in Certificate Manager (the same profile you
+   use to sign any other `.wgt` for this TV).
+4. Clone this repository.
 
-### Build + install — one copy-paste block
+   ```sh
+   git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
+   cd JellyPlug-Tizen
+   ```
 
-Replace `<tv-target>` with your TV name (`sdb devices` will list it, e.g. `QN82Q60RAFXZA`):
+## Build the WGT
 
-```powershell
-git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
-cd JellyPlug-Tizen\packages\shell-tizen-bootstrap\src
-if (Test-Path JellyfinShell.wgt) { Remove-Item JellyfinShell.wgt }
-tizen package -t wgt -- .
-tizen install -n JellyfinShell.wgt -t <tv-target>
-```
+The bootstrap WGT is built from `packages/shell-tizen-bootstrap/src`:
 
-Run all five lines from start to finish — **do not `cd` back to the repo root between package and install**. The output WGT is `JellyfinShell.wgt` (~580 KB) and lives in the same `src\` dir, so the install command must run from there too.
-
-**The `Remove-Item JellyfinShell.wgt` line matters on rebuilds.** `tizen package -t wgt -- .` packages every file in the CWD, so any prior build's `JellyfinShell.wgt` left sitting in `src\` will get bundled inside the new WGT. The TV signature verifier then fails at `installing[17]` and aborts the install. Delete the stale file before each repackage.
-
-If you're **upgrading an already-installed bootstrap** and the install still aborts at `installing[17]` even after the clean repackage, the on-device upgrade check is rejecting the new author signature. Uninstall first, then install fresh:
-
-```powershell
-tizen uninstall -p JelShellTV.Jellyfin -t <tv-target>
-tizen install -n JellyfinShell.wgt -t <tv-target>
-```
-
-Filename is literally `JellyfinShell.wgt` — one word, capital `J` and `S`, no space, no period before `Shell`. If you type `Jellyfin.wgt` you'll get `There is no package with named Jellyfin.wgt.`
-
-### Alternative — Device Manager GUI
-
-```powershell
-git clone https://github.com/RumbleCrumbleRS/JellyPlug-Tizen.git
-cd JellyPlug-Tizen\packages\shell-tizen-bootstrap\src
+```sh
+cd packages/shell-tizen-bootstrap/src
 tizen package -t wgt -- .
 ```
 
-Then **Tizen Studio → Device Manager → right-click TV → Install Application → pick `JellyfinShell.wgt`** from `packages\shell-tizen-bootstrap\src\`.
+This produces `JellyfinShell.wgt` (~580 KB) in the same `src/` directory.
 
-### Alternative — skip build, use prebuilt unsigned WGT
+> **On rebuilds, delete the previous WGT first.** `tizen package` bundles every
+> file in the directory, so a stale `JellyfinShell.wgt` left in `src/` gets
+> packaged inside the new one and the TV rejects the signature. Remove it before
+> repackaging:
+>
+> ```sh
+> rm -f JellyfinShell.wgt && tizen package -t wgt -- .
+> ```
 
-```
-release-artifacts\bootstrap\v2.0.0\JellyfinShellBootstrap_v2.0.0.wgt
-```
+## Deployment
 
-Sign it via **Tizen Studio → Certificate Manager → right-click profile → re-sign WGT**, then `tizen install -n <signed-path> -t <tv-target>`.
+### Deploy to Emulator
 
-### Expected install output
-
-The TV may report `Failed to install Tizen application.` from the CLI while
-the app icon **still appears on the launcher**. That's a known spurious
-CLI-tool failure — `pkgcmd` actually registers the app on-device, only the
-CLI's post-install handshake returns non-zero. Check the launcher.
-
-### Verify it's the right WGT
-
-After install, the platform log line should look like:
-
-```
-app_id[JelShellTV.Jellyfin] install start
+```sh
+tizen install -n JellyfinShell.wgt -t T-samsung-5.5-x86
 ```
 
-The package prefix is **`JelShellTV`**, not `AprZAARz4r` (the legacy
-thin-shell prefix). If you see `AprZAARz4r`, you installed the legacy WGT,
-not the bootstrap — repackage from `packages\shell-tizen-bootstrap\src`.
+### Deploy to TV
+
+1. Turn on the TV.
+2. Activate Developer Mode on the TV and set the host IP.
+3. Connect to the TV (replace with your TV's IP):
+
+   ```sh
+   sdb connect YOUR_TV_IP
+   ```
+
+4. If you are using a Samsung certificate, allow installs onto your TV:
+
+   ```sh
+   tizen install-permit -t <tv-target>
+   ```
+
+5. Install the package (`sdb devices` lists the target name, e.g. `QN82Q60RAFXZA`):
+
+   ```sh
+   tizen install -n JellyfinShell.wgt -t <tv-target>
+   ```
+
+> **Upgrading an existing install?** If the install aborts even after a clean
+> repackage, uninstall first, then install fresh:
+>
+> ```sh
+> tizen uninstall -p JelShellTV.Jellyfin -t <tv-target>
+> tizen install -n JellyfinShell.wgt -t <tv-target>
+> ```
+
+> The CLI may print `Failed to install Tizen application.` while the app icon
+> **still appears on the launcher**. This is a known spurious CLI failure —
+> `pkgcmd` registers the app on-device; only the CLI's post-install handshake
+> returns non-zero. Check the launcher.
 
 ### First launch
 
-Open **JellyfinShell** on the TV. You should see one of:
+Open **JellyfinShell** on the TV. You should see either a connect form (if no
+server is configured), or the Jellyfin web client served from your server.
 
-- A connect form (if no `serverUrl` is set in `localStorage`).
-- The Jellyfin web client (if the server has a populated `${server}/shell/`
-  drop folder — see below).
-- The baked last-known-good v80 shell (if `${server}/shell/` is missing or
-  the manifest fetch fails).
+## Updating the shell
 
-Bootloader exposes two debug globals on the page: `window.__hsbShellUrl` (the
-URL it loaded) and `window.__hsbFallback` (`true` if it fell back to baked
-boot-shell). Useful if you have DevTools access.
+Once the bootstrap is installed, every shell change is just a file swap on your
+Jellyfin server — no `sdb`, no re-signing. Build a new `shell.min.js`, drop it
+into the server's `/shell/` directory with a refreshed manifest, and relaunch
+the TV app:
 
----
-
-## Updating the shell — no `sdb` after the bootstrap is installed
-
-Once the bootstrap is on the TV, every shell change is just a file swap on
-your Jellyfin server. Drop the new `shell.min.js` + refreshed `manifest.json`
-into the server's `/shell/` directory and relaunch the TV app.
-
-### Server-side `/shell/` layout
-
-```
-${server-webroot}/shell/
-├── shell.min.js          # current shell bundle
-├── babel.min.js          # (optional) preload babel polyfill for legacy Tizen
-├── manifest.json         # sha256s + version metadata (built by emit_manifest.py)
-└── boot-shell-x.y.z.wgt  # (optional) advertised bootstrap for fresh-pull installs
-```
-
-Hosting notes (nginx, Kestrel) and the manifest schema are in
-[`packages/server-shell-drop/README.md`](./packages/server-shell-drop/README.md).
-
-Rebuild `manifest.json` after every shell drop:
-
-```bash
-python3 packages/server-shell-drop/scripts/emit_manifest.py /path/to/server/shell
-```
-
-### Build a new `shell.min.js`
-
-The shell that runs inside the bootstrap is `packages/shell-tizen/src/shell.js`.
-Edit, rebuild, drop it into `${server}/shell/`, relaunch the TV app:
-
-```bash
+```sh
 pnpm install
 pnpm --filter @jellyfin-tv/shell-tizen build
-# build output appears in packages/shell-tizen/dist/
 cp packages/shell-tizen/dist/shell.min.js /path/to/server/shell/
 python3 packages/server-shell-drop/scripts/emit_manifest.py /path/to/server/shell
 ```
 
-No `sdb`, no Device Manager, no signing involved in this loop. That's the
-whole point of HSB.
+Server hosting notes and the manifest schema are in
+[`packages/server-shell-drop/README.md`](./packages/server-shell-drop/README.md).
 
----
+## Development
 
-## Repo layout
-
-```
-packages/
-  shell-core/                # shared TS: connect screen, NativeShell types,
-                             # key maps, server validation
-  shell-tizen/               # Samsung Tizen shell.min.js source — what runs
-                             # inside the bootstrap, swappable via ${server}/shell/
-  shell-tizen-bootstrap/     # Hosted Shell Bootstrap WGT — installed once,
-                             # fetches shell.min.js at launch
-  server-shell-drop/         # Server-side ${server}/shell/ layout + manifest emitter
-  shell-webos/               # LG webOS .ipk (scaffold)
-  shell-android/             # Android TV .apk (scaffold)
-tooling/
-  eslint-config/             # shared eslint preset
-  tsconfig-base/             # shared tsconfig
-  ci/                        # shared GHA helpers
-  wgt-emulate/               # run+test the WGT in a desktop browser (no TV);
-                             # also documents the Tizen TV Emulator path
-  tv-inspect/                # remote CDP capture/verify on a real TV
-release-artifacts/
-  bootstrap/v2.0.0/          # unsigned prebuilt bootstrap WGT
-  v1.0.x/                    # historical shell-tizen WGTs (pre-HSB)
-.github/workflows/
-  ci.yml                     # lint + typecheck + per-platform build matrix
-  release-tizen.yml          # tag tizen-v* -> signed .wgt
-  release-webos.yml          # tag webos-v* -> .ipk
-  release-android.yml        # tag android-v* -> signed .apk
-```
-
-## Local development
-
-```bash
+```sh
 pnpm install
 pnpm run lint
 pnpm run typecheck
 pnpm run build
 ```
 
-Per-package:
+You do **not** need a TV to exercise the WGT — the bootstrap is plain web and
+the whole HSB flow runs in a desktop browser:
 
-```bash
-pnpm --filter @jellyfin-tv/shell-tizen build
-pnpm --filter @jellyfin-tv/shell-tizen-bootstrap build
-pnpm --filter @jellyfin-tv/shell-tizen-bootstrap test
-pnpm --filter @jellyfin-tv/server-shell-drop emit-manifest -- /path/to/server/shell
-```
-
-## Emulating + testing the WGT
-
-You do **not** need a TV to exercise the WGT. The bootstrap is plain web, so the
-whole Hosted Shell Bootstrap flow runs in a desktop browser. Four tiers, fastest
-→ highest-fidelity (full guide in
-[`tooling/wgt-emulate/README.md`](./tooling/wgt-emulate/README.md)):
-
-```bash
-# Tier 1 — bootloader branch logic, headless, instant
+```sh
+# Bootloader logic, headless, instant
 node packages/shell-tizen-bootstrap/scripts/selftest.cjs
 
-# Tier 2 — full HSB flow + visuals in a desktop browser (Python only)
+# Full HSB flow + visuals in a desktop browser
 python3 tooling/wgt-emulate/serve.py        # then open http://localhost:8088/
-python3 tooling/wgt-emulate/serve.py --self-test   # headless CI check
-
-# Tier 3 — Tizen TV Emulator (real Tizen runtime + signature checks)
-# Tier 4 — real TV via sdb + tooling/tv-inspect
 ```
 
-Tiers 3–4 (emulator setup, packaging/signing, on-device CDP capture) are
-documented in `tooling/wgt-emulate/README.md` and `tooling/tv-inspect/README.md`.
+The full emulator/on-device testing guide is in
+[`tooling/wgt-emulate/README.md`](./tooling/wgt-emulate/README.md).
 
-## Legacy thin-shell branch
+### Repo layout
 
-The pre-monorepo legacy thin-shell code (the old root-level `Jellyfin.wgt`
-build) is preserved at the tag `legacy-thin-shell-pre-jel2040`. Don't build
-from there — it's superseded by the HSB workflow above. If you ever need to
-reference it:
-
-```bash
-git show legacy-thin-shell-pre-jel2040:README.md
 ```
+packages/
+  shell-core/                shared TS: connect screen, key maps, validation
+  shell-tizen/               Samsung shell.min.js source (swappable via server)
+  shell-tizen-bootstrap/     Hosted Shell Bootstrap WGT (installed once)
+  server-shell-drop/         server-side /shell/ layout + manifest emitter
+  shell-webos/               LG webOS .ipk (scaffold)
+  shell-android/             Android TV .apk (scaffold)
+tooling/
+  wgt-emulate/               run + test the WGT in a desktop browser
+  tv-inspect/                remote CDP capture/verify on a real TV
+```
+
+## Legacy thin-shell
+
+The pre-monorepo legacy thin-shell code is preserved at the tag
+`legacy-thin-shell-pre-jel2040`. Don't build from it — it's superseded by the
+HSB workflow above.
 
 ## License
 
 GPL-2.0-only, matching the rest of the Jellyfin org.
+</content>
+</invoke>
