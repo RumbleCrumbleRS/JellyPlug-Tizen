@@ -46,12 +46,22 @@
       // nothing throws; real key delivery is the browser's own keydown events.
       _registered: [],
       getSupportedKeys: function () {
+        // Codes MUST match the canonical TIZEN_KEYMAP in
+        // packages/shell-core/src/input/index.ts. (JEL-35) The earlier list was
+        // incomplete (no MediaPlayPause / MediaTrackPrevious / MediaTrackNext).
+        // Note 412/417 are Rewind/FastForward and 10232/10233 are TrackPrevious/
+        // TrackNext — verified against the Samsung Tizen remote keycodes and
+        // jellyfin-web 10.11.10's live KeyNames table. Keep in lockstep with the
+        // keymap so the stub mirrors the 12 keys shell.js registers.
         return [
           { name: "MediaPlay", code: 415 },
           { name: "MediaPause", code: 19 },
+          { name: "MediaPlayPause", code: 10252 },
           { name: "MediaStop", code: 413 },
           { name: "MediaRewind", code: 412 },
           { name: "MediaFastForward", code: 417 },
+          { name: "MediaTrackPrevious", code: 10232 },
+          { name: "MediaTrackNext", code: 10233 },
           { name: "ColorF0Red", code: 403 },
           { name: "ColorF1Green", code: 404 },
           { name: "ColorF2Yellow", code: 405 },
