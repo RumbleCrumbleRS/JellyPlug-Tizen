@@ -1,8 +1,8 @@
 {
-  "version": "2.0.1",
+  "version": "2.0.2",
   "kind": "bootstrap-wgt",
-  "filename": "JellyfinShellBootstrap_v2.0.1.wgt",
-  "sha256": "8d6297d44eaae09b82ad89e5aad0cdc7f511415aa6bec52f2c40cdbaaeee5ebb",
-  "sizeBytes": 580197,
+  "filename": "JellyfinShellBootstrap_v2.0.2.wgt",
+  "sha256": "4a3382890f1f054c2be3dd06d4ed2578cebf1a0804c93eb46b7e65cc44603bf9",
+  "sizeBytes": 581309,
   "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required."
 }
