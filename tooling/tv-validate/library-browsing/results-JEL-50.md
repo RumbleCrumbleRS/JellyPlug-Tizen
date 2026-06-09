@@ -13,18 +13,18 @@ identity.
 
 ## What the shell touches (and what it doesn't)
 
-| Concern | Owner | Shell involvement |
-| --- | --- | --- |
-| Grid of posters + titles (cardBuilder) | jellyfin-web | none — `grep` of `shell.js` + bootstrap finds zero item-list / image / card / `cardBuilder` code |
-| **Horizontal/vertical D-pad movement between cards** | jellyfin-web `focusManager` (geometric spatial nav) | none on card→card movement. The shell's *only* focus contribution is the body-focus-rescue + proactive auto-focuser (JEL-1580) that lands focus **into** the grid when `activeElement` is `<body>`; once a card is focused, jellyfin-web owns movement |
-| Filters & sort (UI + query params) | jellyfin-web | none — server query params `SortBy`/`SortOrder`/`Genres`/`Filters` are built by jellyfin-web; the shell adds none |
-| Paging / infinite scroll | jellyfin-web (`StartIndex`+`Limit`, `TotalRecordCount`) | none |
-| Server URL the grid queries | shell (localStorage) | only seeds the server URL + a `config.json` fetch shim; never touches `/Items` |
+| Concern                                              | Owner                                                   | Shell involvement                                                                                                                                                                                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Grid of posters + titles (cardBuilder)               | jellyfin-web                                            | none — `grep` of `shell.js` + bootstrap finds zero item-list / image / card / `cardBuilder` code                                                                                                                                                       |
+| **Horizontal/vertical D-pad movement between cards** | jellyfin-web `focusManager` (geometric spatial nav)     | none on card→card movement. The shell's _only_ focus contribution is the body-focus-rescue + proactive auto-focuser (JEL-1580) that lands focus **into** the grid when `activeElement` is `<body>`; once a card is focused, jellyfin-web owns movement |
+| Filters & sort (UI + query params)                   | jellyfin-web                                            | none — server query params `SortBy`/`SortOrder`/`Genres`/`Filters` are built by jellyfin-web; the shell adds none                                                                                                                                      |
+| Paging / infinite scroll                             | jellyfin-web (`StartIndex`+`Limit`, `TotalRecordCount`) | none                                                                                                                                                                                                                                                   |
+| Server URL the grid queries                          | shell (localStorage)                                    | only seeds the server URL + a `config.json` fetch shim; never touches `/Items`                                                                                                                                                                         |
 
 Because no shell code sits on the grid-render, focus-movement, filter/sort, or
 paging paths, there is nothing that can make library browsing diverge between TV
 and browser. The single shell hook near navigation (the body-focus-rescue) only
-*delivers* focus into the page — it is the same ES5 bytes on TV and browser and
+_delivers_ focus into the page — it is the same ES5 bytes on TV and browser and
 was verified browser-side on the Library page itself (see D-pad section).
 
 ## Empirical verification (live server, Jellyfin 10.11.x)
@@ -64,6 +64,7 @@ PASS  [TV Shows] TV enumeration byte-identical to browser enumeration  — tv 29
 ```
 
 ### (1) Grid renders with correct thumbnails and titles
+
 cardBuilder draws one card per item from the server's `/Items` response, needing
 a `Name` (title) and a `Primary` image tag (poster). Verified **every** item in
 the Movies (58) and TV Shows (29) grids has both, and that a real poster URL
@@ -72,7 +73,9 @@ the same cardBuilder code rendered in the TV layout (`localStorage.layout="tv"`,
 seeded by the shell).
 
 ### (2) Horizontal and vertical D-pad navigation through the grid
+
 Two layers, neither of which is shell grid code:
+
 - **Into the grid:** post-login, Tizen leaves `activeElement` on `<body>`; the
   shell's body-focus-rescue / auto-focuser (JEL-1580) lands focus on the first
   focusable. This was verified **browser-side on the Library page itself** in
@@ -85,10 +88,11 @@ Two layers, neither of which is shell grid code:
   (its only `keydown` interception is BACK `10009`).
 
 ### (3) Filters and sort options are accessible
+
 - **Sort:** `SortBy`/`SortOrder` are honored — ascending is monotonic
   non-decreasing by `SortName`, descending monotonic non-increasing, and the two
   orders differ. An alternate `SortBy=DateCreated` returns the same item set in a
-  different valid order. (Exact asc/desc mirroring is *not* asserted: Movies has
+  different valid order. (Exact asc/desc mirroring is _not_ asserted: Movies has
   7 titles sharing `SortName` "superman iv", and the server keeps tied items in a
   stable secondary order both directions — monotonicity is the tie-tolerant
   proof.)
@@ -98,9 +102,11 @@ Two layers, neither of which is shell grid code:
   11/29 series).
 
 ### (4) Paging / infinite scroll — complete, no skips, no duplicates
+
 jellyfin-web's infinite scroll requests `/Items` with `StartIndex`+`Limit` and
 reads `TotalRecordCount`. Paging each library in chunks of 7 (forcing many page
 turns) and assembling the id list:
+
 - count equals `TotalRecordCount` (58 Movies, 29 TV Shows) — **nothing dropped**;
 - every id is unique — **no duplicates across page boundaries**;
 - the paged order is identical to a single unpaged fetch in the same sort — **no
@@ -113,9 +119,10 @@ server contract that no shell code touches, so the grids enumerate identically o
 both platforms.
 
 ## Scope notes
+
 - Not driven through a headless-browser pixel walk of the cards: intra-grid
   spatial focus is jellyfin-web `focusManager` (covered behaviorally by
-  [JEL-33](/JEL/issues/JEL-33)); the open question specific to *library browsing*
+  [JEL-33](/JEL/issues/JEL-33)); the open question specific to _library browsing_
   is the data contract (right items, right images, sort/filter honored, paging
   complete with no skip/dup), which is exactly what the harness proves at the
   protocol level.
@@ -123,7 +130,7 @@ both platforms.
   holds for any TV Shows library grid since the `/Items` contract is identical
   across views.
 - On-device M63 pixel capture is firmware-blocked on the Q60R (see
-  [JEL-7](/JEL/issues/JEL-7)); the shell's grid involvement is *nil*, so there is
+  [JEL-7](/JEL/issues/JEL-7)); the shell's grid involvement is _nil_, so there is
   no TV-only grid code to capture — parity is established by the server contract
   plus the shared, byte-identical rescue/auto-focus bytes.
 

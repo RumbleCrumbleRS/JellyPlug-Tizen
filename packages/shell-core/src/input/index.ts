@@ -42,10 +42,16 @@ export const TIZEN_KEYMAP: Readonly<Record<number, StandardKey>> =
     19: "MediaPause",
     10252: "MediaPlayPause",
     413: "MediaStop",
-    417: "MediaTrackNext",
-    412: "MediaTrackPrevious",
-    10233: "MediaFastForward",
-    10232: "MediaRewind",
+    // JEL-35: 412/417 are Rewind/FastForward and 10232/10233 are the
+    // Track Previous/Next codes — these four were previously swapped. Verified
+    // against the Samsung Tizen remote keycodes and confirmed against
+    // jellyfin-web 10.11.10's live KeyNames table (which the focus engine
+    // resolves keydowns through): 412:"MediaRewind",417:"MediaFastForward",
+    // 10232:"MediaTrackPrevious",10233:"MediaTrackNext".
+    412: "MediaRewind",
+    417: "MediaFastForward",
+    10232: "MediaTrackPrevious",
+    10233: "MediaTrackNext",
     403: "ColorF0Red",
     404: "ColorF1Green",
     405: "ColorF2Yellow",
