@@ -7,7 +7,7 @@ functions in every shell artifact the TV ever runs. Calling them does **nothing
 observable** because the Tizen WebView is a permanently-fullscreen kiosk surface
 — there is no smaller window to grow from or shrink to. The proof is structural:
 an empty function body provably cannot toggle fullscreen, mutate layout, or
-throw. The interesting part of this ticket is the *comparison*, which turns out
+throw. The interesting part of this ticket is the _comparison_, which turns out
 to be a common misconception worth pinning down precisely.
 
 ## There are TWO independent "fullscreen" mechanisms in jellyfin-web
@@ -63,21 +63,21 @@ itself gates it off for TV. On the desktop browser (B) is live; on TV it is dead
 by jellyfin-web's own design, and (A) is a no-op everywhere.
 
 **Net:** nothing the shell does around fullscreen can glitch on TV — its method
-bodies are empty, and the one mechanism that *would* change the viewport (B) is
+bodies are empty, and the one mechanism that _would_ change the viewport (B) is
 not even offered on a TV.
 
 ## What the harness proves (19 checks)
 
 `packages/shell-tizen/scripts/fullscreen-noop.test.cjs`:
 
-| #   | Check                                                                                                 | Why it matters                                                              |
-| --- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| #   | Check                                                                                                                                 | Why it matters                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | 1   | `enableFullscreen`/`disableFullscreen` bodies in **shell.js** and **boot-shell.src.js** are empty after stripping comments/whitespace | A body with any statement could touch layout and diverge — empty cannot.    |
-| 2   | The **deployed** blobs (`shell.min.js`, `boot-shell.min.js`) define both as `function(){}`            | The bytes that actually run on the TV match the source-of-record intent.    |
-| 3   | The no-op bodies reference no `requestFullscreen`/DOM/`style.`/`tizen`/`webapis`/`location` token      | Belt-and-suspenders: flags any future "harmless-looking" non-empty edit.    |
-| 4   | The apphost wrapper is existence-guarded before delegating, and the shell exposes the exact method name it calls | Guarantees (a) TV reaches our no-op and (b) browser short-circuits.         |
-| 5   | The real browser Fullscreen command is advertised only when `!browser.tv` and keys off `requestFullscreen` | Pins that the divergent path is (B), TV-gated by jellyfin-web itself.       |
-| 6   | The shell's `SupportedFeatures` list advertises **no** fullscreen capability                          | The shell never re-enables a togglefullscreen affordance with no TV target. |
+| 2   | The **deployed** blobs (`shell.min.js`, `boot-shell.min.js`) define both as `function(){}`                                            | The bytes that actually run on the TV match the source-of-record intent.    |
+| 3   | The no-op bodies reference no `requestFullscreen`/DOM/`style.`/`tizen`/`webapis`/`location` token                                     | Belt-and-suspenders: flags any future "harmless-looking" non-empty edit.    |
+| 4   | The apphost wrapper is existence-guarded before delegating, and the shell exposes the exact method name it calls                      | Guarantees (a) TV reaches our no-op and (b) browser short-circuits.         |
+| 5   | The real browser Fullscreen command is advertised only when `!browser.tv` and keys off `requestFullscreen`                            | Pins that the divergent path is (B), TV-gated by jellyfin-web itself.       |
+| 6   | The shell's `SupportedFeatures` list advertises **no** fullscreen capability                                                          | The shell never re-enables a togglefullscreen affordance with no TV target. |
 
 All four shell artifacts are checked, so the contract cannot silently drift; the
 two jellyfin-web ground-truth strings are pinned so a wrapper/gate rename

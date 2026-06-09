@@ -13,12 +13,12 @@ distinct client identities — a browser-like session and the real TV session
 
 ## Why the rows cannot diverge TV vs browser
 
-| Row | Server endpoint | Device-dependent? |
-| --- | --- | --- |
-| Continue Watching | `GET /Users/{uid}/Items/Resume` | No — user-scoped, no `DeviceProfile` param |
-| Next Up | `GET /Shows/NextUp?UserId={uid}` | No — user-scoped |
-| Latest Movies | `GET /Users/{uid}/Items/Latest?ParentId={moviesLib}` | No — user-scoped |
-| Latest TV | `GET /Users/{uid}/Items/Latest?ParentId={tvLib}` | No — user-scoped |
+| Row               | Server endpoint                                      | Device-dependent?                          |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------ |
+| Continue Watching | `GET /Users/{uid}/Items/Resume`                      | No — user-scoped, no `DeviceProfile` param |
+| Next Up           | `GET /Shows/NextUp?UserId={uid}`                     | No — user-scoped                           |
+| Latest Movies     | `GET /Users/{uid}/Items/Latest?ParentId={moviesLib}` | No — user-scoped                           |
+| Latest TV         | `GET /Users/{uid}/Items/Latest?ParentId={tvLib}`     | No — user-scoped                           |
 
 None of these endpoints accept a device profile or vary on the client/device
 identity — they return the same items, in the same order, with the same image
@@ -35,14 +35,14 @@ proactive auto-focuser** (`shell.js`, validated under
 on `<body>`, so `focusManager.nav()` searches geometrically beyond the body rect
 and the first D-pad press is a no-op. The rescue focuses the first visible card,
 bringing TV D-pad nav to **parity** with the browser (where focus is never stuck
-on body). It changes only *whether the focus ring appears*, never *which
-items/rows render*. Once focus lands, horizontal (within-row) and vertical
+on body). It changes only _whether the focus ring appears_, never _which
+items/rows render_. Once focus lands, horizontal (within-row) and vertical
 (between-row) D-pad navigation is jellyfin-web's own `focusManager` — the shell
 is transparent to it (it only intercepts BACK `10009`), so navigation is
 identical on both platforms.
 
 Thumbnails: the home card requests an image **width sized to the layout** (TV
-cards are larger than browser cards), but the *source* image — item `Id` +
+cards are larger than browser cards), but the _source_ image — item `Id` +
 `ImageTag` — is identical, so the same artwork renders, just scaled. The harness
 compares `ImageTags`, proving the thumbnail is the same asset on both.
 
@@ -72,6 +72,7 @@ PASS  test-account episode played-state restored  — un-marked
 ```
 
 ### What each check proves
+
 - **Item count matches** — each row returns the same number of items to the TV
   session and the browser session.
 - **Items + thumbnails + progress identical** — a normalized per-item
@@ -89,9 +90,10 @@ PASS  test-account episode played-state restored  — un-marked
   shared account is unchanged.
 
 ## Scope notes
+
 - **Not driven through a live D-pad on the physical TV.** Per the JEL-7
   blockers, the locked M63 TV cannot be driven by an automated input harness
-  from the sandbox. D-pad navigation *mechanics* on Home (first-press focus
+  from the sandbox. D-pad navigation _mechanics_ on Home (first-press focus
   rescue + within/between-row movement) were validated automatically in
   [JEL-33](/JEL/issues/JEL-33); this ticket validates the row **content**
   parity, which is what "identical items / count / thumbnails / progress"
