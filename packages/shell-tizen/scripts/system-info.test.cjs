@@ -24,10 +24,10 @@
 //
 // DEPLOYED BLOBS: boot-shell.min.js (the on-TV retail bootstrap) is rebuilt from
 // source and carries the BUILD model read (CI src==min guard). shell.min.js (the
-// hosted/WGT shell, rebuilt only at release cuts) currently carries the updated
-// identity STRING ("Tizen TV") via a surgical update; its model-read LOGIC lands
-// at the next hosted-drop rebuild (a full build_shell_min.py rebuild presently
-// overflows the 102400-byte cap due to pre-existing drift — tracked separately).
+// hosted/WGT shell, rebuilt only at release cuts) was fully rebuilt in JEL-91 and
+// now carries the same BUILD model-read logic as source — the cap-overflow that
+// blocked the rebuild was fixed by budgeting the breadcrumb manifest against the
+// 102400-byte hard cap (build_shell_min.py, JEL-91).
 //
 // Run: node scripts/system-info.test.cjs
 //   or: pnpm --filter @jellyfin-tv/shell-tizen test
@@ -168,12 +168,13 @@ check(
   !bootMin.includes("Samsung Smart TV"),
 );
 
-// shell.min.js (hosted/WGT shell) is rebuilt only at release cuts. Its identity
-// STRING has been surgically updated to the "Tizen TV" fallback; the model-read
-// LOGIC lands at the next hosted-drop rebuild (a full build_shell_min.py rebuild
-// currently overflows the 102400-byte cap — pre-existing drift, tracked apart).
-// So we assert the string is mirrored and getSystemInfo stays DISPLAY-only, but
-// do NOT yet require the BUILD read in this blob.
+// shell.min.js (hosted/WGT shell) is rebuilt only at release cuts. As of JEL-91
+// it carries a FULL build_shell_min.py rebuild: the "Tizen TV" identity string,
+// the DISPLAY-only screen read, AND the BUILD model-read logic (resolveDeviceName
+// -> getPropertyValue("BUILD") -> info.model). The cap-overflow that previously
+// blocked the rebuild was fixed by budgeting the breadcrumb manifest against the
+// hard cap (JEL-91). So we now require the BUILD read in this blob too — parity
+// with the on-TV retail boot-shell.min.js above.
 check(
   'shell.min.js (deployed) reports the "Tizen TV" fallback',
   minSrc.includes('"Tizen TV"'),
@@ -185,6 +186,11 @@ check(
 check(
   'shell.min.js (deployed) getSystemInfo still queries "DISPLAY" (screen sizing intact)',
   minSrc.includes('getPropertyValue("DISPLAY"'),
+);
+check(
+  'shell.min.js (deployed) reads the TV model via tizen.systeminfo "BUILD" -> info.model (JEL-91 rebuild)',
+  /getPropertyValue\(\s*"BUILD"/.test(minSrc) && /\.model\b/.test(minSrc),
+  "expected the JEL-90 resolveDeviceName BUILD model read to survive minification",
 );
 
 // --- summary ------------------------------------------------------------------
