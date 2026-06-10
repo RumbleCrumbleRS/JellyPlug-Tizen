@@ -65,7 +65,7 @@ jobs:
           tooling/ci/verify-wgt-signed.sh "${wgts[@]}"
 
   verify-shell-source:
-    name: verify boot-shell source matches deployed artifact
+    name: verify shell sources match deployed artifacts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -85,6 +85,15 @@ jobs:
         # semantically equivalent (both canonicalized through the same esbuild),
         # so an edit to one without the other can never silently ship again.
         run: python3 packages/shell-tizen-bootstrap/scripts/verify_boot_shell_src.py
+      - name: shell.js must match shell.min.js (JEL-120 guard)
+        # Same property for the main shell: shell.min.js is a release-time
+        # esbuild build of shell.js that build-wgt.sh ships as committed, so a
+        # blob-only (or source-only) edit would ship silently. The guard
+        # forward-builds shell.js through build_shell_min's own substitution
+        # logic (__BABEL_FPR__/__SHELL_VER__/__QA_BEACON_BODY__), strips the
+        # breadcrumb manifest from the blob, and canonicalizes both sides
+        # through the same esbuild before comparing.
+        run: python3 packages/shell-tizen/scripts/verify_shell_src.py
 
   build-tizen:
     name: build shell-tizen
