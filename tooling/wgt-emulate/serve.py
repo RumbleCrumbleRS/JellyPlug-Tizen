@@ -173,7 +173,7 @@ def build_opts(args):
 def serve(args):
     opts = build_opts(args)
     handler = make_handler(opts)
-    with socketserver.ThreadingTCPServer(("0.0.0.0", args.port), handler) as httpd:
+    with socketserver.ThreadingTCPServer((args.bind, args.port), handler) as httpd:
         httpd.allow_reuse_address = True
         url = f"http://localhost:{args.port}"
         print("=" * 64)
@@ -258,6 +258,9 @@ def self_test(args):
 def main():
     ap = argparse.ArgumentParser(description="Run the Tizen WGT in a desktop browser.")
     ap.add_argument("--port", type=int, default=8088)
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="interface to bind (default: localhost only; pass "
+                         "0.0.0.0 to expose to the LAN, e.g. for a real TV)")
     ap.add_argument("--root", default=str(DEFAULT_ROOT),
                     help="WGT payload dir to serve (default: bootstrap src/)")
     ap.add_argument("--real-shell", default=None,

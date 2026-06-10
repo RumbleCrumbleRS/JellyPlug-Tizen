@@ -109,7 +109,7 @@ read-only — makes no server-state changes). Part A (offline) reads committed
 shell source; Part B (live) compares served assets and **degrades to SKIP** when
 the test server is unreachable so the offline proof still runs.
 
-Run on 2026-06-09 (test server `REDACTED-SERVER.example` transiently down — port
+Run on 2026-06-09 (test server `<test-server>` transiently down — port
 443 refused — so Part B reported SKIP; offline transparency proof passed):
 
 ```
@@ -123,7 +123,7 @@ PASS  A4 connect.css is scoped to the shell connect screen, no app-animation rul
 
 # Part B — served animation assets are identical TV vs browser (live server)
 
-SKIP  B* live asset comparison  — test server unreachable (https://REDACTED-SERVER.example) — offline proof above stands; re-run when server is back
+SKIP  B* live asset comparison  — test server unreachable (https://<test-server>) — offline proof above stands; re-run when server is back
 
 5/6 checks passed, 1 skipped.
 ```

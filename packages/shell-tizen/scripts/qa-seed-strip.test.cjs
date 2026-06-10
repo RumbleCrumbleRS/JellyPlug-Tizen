@@ -70,9 +70,11 @@ const stripped = stripRetail(srcHtml);
 // ── 1. SOURCE PRIVACY ────────────────────────────────────────────────────────
 // The personal/server URL must not live in source at all — the seed now uses a
 // __QA_SERVER_URL__ placeholder substituted only in a QA build.
+// Any *.ddns.net host counts: the historical leak was a personal DDNS server,
+// and the broader pattern guards it without re-committing the hostname (JEL-119).
 check(
   "src/index.html contains no hardcoded personal DDNS server URL",
-  !/REDACTED-SERVER\.example/.test(srcHtml),
+  !/\.ddns\.net/.test(srcHtml),
 );
 check(
   "src/index.html contains no other hardcoded https serverUrl seed",
@@ -111,7 +113,7 @@ const forbidden = [
   ["__BABEL_PRELOAD_SEED__ placeholder", /__BABEL_PRELOAD_SEED__/],
   ["__INDEX_CACHE_SEED__ placeholder", /__INDEX_CACHE_SEED__/],
   ["__QA_SERVER_URL__ placeholder", /__QA_SERVER_URL__/],
-  ["personal DDNS server URL", /REDACTED-SERVER\.example/],
+  ["personal DDNS server URL", /\.ddns\.net/],
 ];
 for (const [label, re] of forbidden) {
   check("stripped index.html drops the " + label, !re.test(stripped), label);

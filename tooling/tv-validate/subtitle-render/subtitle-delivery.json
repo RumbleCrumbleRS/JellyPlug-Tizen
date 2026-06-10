@@ -1,6 +1,6 @@
 {
   "generatedFor": "JEL-44",
-  "server": "https://REDACTED-SERVER.example",
+  "server": "https://<test-server>",
   "rows": [
     {
       "codec": "subrip",

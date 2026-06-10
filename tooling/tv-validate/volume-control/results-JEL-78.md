@@ -161,7 +161,7 @@ predicate, the four `!Re()`-gated volume ops, the two **un**gated mute ops, the
 slider-module load gate, the four keyboard command cases, and the absence of any
 Volume/Mute `KeyNames` keyCode entry.
 
-> Note: the test Jellyfin server (`REDACTED-SERVER.example`, a home DDNS) is
+> Note: the test Jellyfin server (`<test-server>`, a home DDNS) is
 > intermittently reachable from the sandbox. All 16 assertions were validated
 > against a bundle captured live this session (485,026 bytes, jellyfin-web
 > 10.11.x). The verifier skips cleanly (exit 0) when `JELLYFIN_URL` is unset and

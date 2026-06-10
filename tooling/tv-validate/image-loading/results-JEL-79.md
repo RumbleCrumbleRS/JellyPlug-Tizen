@@ -88,7 +88,7 @@ covered by JEL-50 (library browsing) and JEL-33 (focus).
 
 ## Note on the test server
 
-This Jellyfin instance (`REDACTED-SERVER.example`) sits behind a flaky DDNS reverse
+This Jellyfin instance (`<test-server>`) sits behind a flaky DDNS reverse
 proxy that intermittently returns `502`/`503`/timeouts and, when the backend is
 powered off, refuses connections outright (`ECONNREFUSED`) — it was hard-down
 during this authoring window. The harness retries transient 5xx with backoff,
