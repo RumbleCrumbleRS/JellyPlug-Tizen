@@ -57,21 +57,36 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # JEL-124: the installer is immutable (SHA-pinned below), so cache the
+      # binary and skip the large, flaky download.tizen.org fetch on warm runs.
+      # A corrupt cache entry fails the pin check and falls back to a fresh
+      # download; either path ends with the same sha256 verification.
+      - name: Cache Tizen Studio installer
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/tizen-installer.bin
+          key: tizen-installer-${{ env.TIZEN_INSTALLER_SHA256 }}
+
       - name: Install Tizen Studio Web CLI
         run: |
           set -euo pipefail
-          ver="${TIZEN_STUDIO_VER}"
-          url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
-          echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
-          # download.tizen.org connects flakily from Actions runners; plain
-          # --retry does NOT retry connect failures, hence --retry-all-errors.
-          curl -fSL --retry 5 --retry-all-errors --retry-delay 15 \
-            --connect-timeout 30 -o tizen-installer.bin "$url"
-          echo "${TIZEN_INSTALLER_SHA256}  tizen-installer.bin" | sha256sum -c -
-          chmod +x tizen-installer.bin
+          installer="${RUNNER_TEMP}/tizen-installer.bin"
+          if [[ -f "$installer" ]] && \
+             echo "${TIZEN_INSTALLER_SHA256}  ${installer}" | sha256sum -c -; then
+            echo "Using cached Tizen Studio installer (JEL-124)"
+          else
+            ver="${TIZEN_STUDIO_VER}"
+            url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
+            echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
+            # download.tizen.org connects flakily from Actions runners; plain
+            # --retry does NOT retry connect failures, hence --retry-all-errors.
+            curl -fSL --retry 5 --retry-all-errors --retry-delay 15 \
+              --connect-timeout 30 -o "$installer" "$url"
+            echo "${TIZEN_INSTALLER_SHA256}  ${installer}" | sha256sum -c -
+          fi
+          chmod +x "$installer"
           # --accept-license is required for unattended install.
-          ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
-          rm -f tizen-installer.bin
+          "$installer" --accept-license "${HOME}/tizen-studio"
           # Persist the CLI on PATH for every subsequent step.
           echo "${HOME}/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
 
