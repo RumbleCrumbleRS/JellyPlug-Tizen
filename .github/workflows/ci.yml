@@ -24,9 +24,9 @@ jobs:
     name: format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: pnpm
@@ -37,9 +37,9 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: pnpm
@@ -50,7 +50,7 @@ jobs:
     name: verify committed .wgt are signed
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Every committed .wgt must be signed (JEL-8 guard)
         # A retail Tizen TV refuses to install an unsigned package. Fail CI if
         # any committed widget lacks author + distributor signatures, so we can
@@ -68,10 +68,16 @@ jobs:
     name: verify boot-shell source matches deployed artifact
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
+          cache: pnpm
+      # Install the workspace so the guard canonicalizes through the
+      # lockfile-pinned esbuild instead of an ad-hoc `npx --yes` download
+      # (JEL-119 supply-chain hardening).
+      - run: pnpm install --frozen-lockfile
       - name: boot-shell.src.js must match boot-shell.min.js (JEL-24 guard)
         # The deployed bootstrap shell (boot-shell.min.js) once had NO committed
         # source, so it silently drifted ahead of the repo (JEL-23). JEL-24
@@ -86,8 +92,15 @@ jobs:
     needs: [format, test]
     env:
       TIZEN_STUDIO_VER: "5.6"
+      # SHA256 of web-cli_Tizen_Studio_5.6_ubuntu-64.bin as served by
+      # download.tizen.org on 2026-06-10 (JEL-119). Samsung publishes no
+      # checksums, so this pins the binary CI has been installing all along —
+      # a silent swap upstream (or a MITM) now fails the build instead of
+      # executing an unverified installer. Bumping TIZEN_STUDIO_VER requires
+      # re-pinning this hash.
+      TIZEN_INSTALLER_SHA256: "89c84fbc474dcfb02af193bcc763e2e7bf3259bf34cbf6b7f44ec2da024db7df"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # NB: we deliberately do NOT pin Temurin JDK 17 here. `tizen package`
       # reads Tizen's bundled distributor signer (tizen-distributor-signer.p12),
@@ -107,6 +120,7 @@ jobs:
           url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
           echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
           curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          echo "${TIZEN_INSTALLER_SHA256}  tizen-installer.bin" | sha256sum -c -
           chmod +x tizen-installer.bin
           # --accept-license is required for unattended install.
           ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
@@ -137,8 +151,8 @@ jobs:
           java -version
           tizen version
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: pnpm
@@ -190,7 +204,7 @@ jobs:
           ls -la "$HOME/tizen-studio-data/tools/certificate-generator/certificates/distributor/" 2>/dev/null || echo "(data distributor dir missing)"
           echo "=== cli.log tail ==="
           find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jellyfin-tv-shell-tizen-${{ github.sha }}
           path: packages/shell-tizen/dist/*.wgt*

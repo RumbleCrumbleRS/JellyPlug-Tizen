@@ -42,13 +42,17 @@ jobs:
       contents: write
     env:
       TIZEN_STUDIO_VER: "5.6"
+      # SHA256 of web-cli_Tizen_Studio_5.6_ubuntu-64.bin as served by
+      # download.tizen.org on 2026-06-10 (JEL-119; must stay in sync with
+      # ci.yml). Fails the run if the installer bytes ever change upstream.
+      TIZEN_INSTALLER_SHA256: "89c84fbc474dcfb02af193bcc763e2e7bf3259bf34cbf6b7f44ec2da024db7df"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Tizen Studio's CLI runs on the JVM; pin a JDK the tooling supports
       # rather than relying on whatever the runner image defaults to.
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: "17"
@@ -60,6 +64,7 @@ jobs:
           url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
           echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
           curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          echo "${TIZEN_INSTALLER_SHA256}  tizen-installer.bin" | sha256sum -c -
           chmod +x tizen-installer.bin
           # --accept-license is required for unattended install.
           ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
@@ -120,7 +125,7 @@ jobs:
         run: tooling/ci/verify-wgt-signed.sh dist/*.wgt
 
       - name: Upload signed .wgt artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jellyfin-shell-bootstrap-${{ github.sha }}
           path: |
@@ -131,7 +136,7 @@ jobs:
         # Only when launched from a bootstrap-v* tag; workflow_dispatch runs
         # stop at the uploaded artifact above.
         if: startsWith(github.ref, 'refs/tags/bootstrap-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: "Bootstrap ${{ github.ref_name }}"
           files: dist/*.wgt
