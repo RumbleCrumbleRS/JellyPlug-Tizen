@@ -34,7 +34,7 @@
         <div class="boot-shell">
             <h1>Jellyfin</h1>
             <p>Enter your Jellyfin server address to continue.</p>
-            <form id="server-form">
+            <form id="server-form" novalidate>
                 <input id="server-input" type="url" placeholder="https://jellyfin.example.com" autofocus required />
                 <button type="submit">Connect</button>
             </form>
@@ -47,7 +47,11 @@
         // JEL-2040 HSB bootloader.
         // Order:
         //   1. Read jellyfin.shell.serverUrl from localStorage.
-        //   2. If absent → show connect form, save on submit, reload.
+        //   2. If absent → show connect form; on submit normalize + save the
+        //      URL and load the shell IN PLACE (JEL-115: never location.reload —
+        //      the post-submit reload black-screened the Tizen 5.0/M63 webview
+        //      on fresh installs, and in-place load makes first-connect take
+        //      the same code path as every later boot).
         //   3. If present → fetch ${server}/shell/manifest.json with 3s timeout.
         //      - Use manifest.shellUrl when valid; else fall back to
         //        ${server}/shell/shell.min.js with a cache-busting query.
@@ -113,12 +117,29 @@
                     err.textContent = msg;
                     err.hidden = false;
                 }
+                // JEL-115: arm (or re-arm after a failed shell load) the
+                // first-connect submit path. Once a shell load has started,
+                // later submits belong to boot-shell's own connect handler
+                // (attachConnectForm), so this handler goes inert.
+                window.__hsbConnectStarted = false;
                 document.getElementById('server-form').addEventListener('submit', function(e){
                     e.preventDefault();
+                    if (window.__hsbConnectStarted) return;
                     var raw = document.getElementById('server-input').value.trim();
                     if (!raw) return;
-                    try { localStorage.setItem(SERVER_KEY, raw.replace(/\/+$/, '')); } catch(_){}
-                    location.reload();
+                    // JEL-115: normalize like boot-shell's normalizeServerUrl —
+                    // default bare hosts to http://, strip trailing slashes.
+                    if (!/^https?:\/\//i.test(raw)) raw = 'http://' + raw;
+                    raw = raw.replace(/\/+$/, '');
+                    try { localStorage.setItem(SERVER_KEY, raw); } catch(_){}
+                    window.__hsbConnectStarted = true;
+                    // JEL-115: load the shell in place instead of
+                    // location.reload(). The reload was the one boot step
+                    // unique to a fresh install and black-screened the
+                    // Tizen 5.0 / Chromium 63 webview; in-place load follows
+                    // the exact stored-URL boot path that restarts use.
+                    hsbPhase('connect-submit', 'ok');
+                    loadHostedShell(raw);
                 });
             }
 
