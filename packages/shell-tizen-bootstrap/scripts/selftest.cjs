@@ -53,7 +53,14 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
     const bootRoot = makeElement('div'); bootRoot.id = 'boot-root';
     const bootError = makeElement('p'); bootError.id = 'boot-error'; bootError.hidden = true;
     const form = makeElement('form'); form.id = 'server-form';
-    form.addEventListener = function(ev, cb){ if (ev === 'submit') log.formAttached = true; };
+    form.handlers = [];
+    form.addEventListener = function(ev, cb){
+        if (ev === 'submit') { log.formAttached = true; form.handlers.push(cb); }
+    };
+    form.submit = function(){
+        const ev = { preventDefault: function(){ log.prevented = true; } };
+        this.handlers.forEach(function(cb){ cb(ev); });
+    };
     const input = makeElement('input'); input.id = 'server-input'; input.value = '';
 
     elements['boot-root'] = bootRoot;
@@ -173,6 +180,58 @@ async function runScenario(opts) {
         if (!/^https:\/\/srv\.example\/shell\/shell\.min\.js\?t=\d+$/.test(scripts[0].src))
             fail('scenario 4: unexpected fallback src: ' + scripts[0].src);
         console.log('OK 4: manifest network error → shell.min.js?t=<now>');
+    }
+
+    // JEL-115 scenarios: first-connect submit must load the shell IN PLACE —
+    // never location.reload() (the reload black-screened the M63 webview on
+    // fresh installs) — and must normalize the typed URL like boot-shell's
+    // normalizeServerUrl.
+
+    // Scenario 5: fresh install → submit full URL → no reload, URL saved with
+    // trailing slash stripped, shell load flow starts in place.
+    {
+        const r = await runScenario({ serverUrl: null, manifestResponse: 'error' });
+        const form = r.sandbox.document.getElementById('server-form');
+        r.sandbox.document.getElementById('server-input').value = 'https://srv.example/';
+        form.submit();
+        await new Promise(function(resolve){ setTimeout(resolve, 50); });
+        if (r.log.reloaded) fail('scenario 5: first-connect submit must not location.reload()');
+        const saved = r.sandbox.localStorage.getItem('jellyfin.shell.serverUrl');
+        if (saved !== 'https://srv.example')
+            fail('scenario 5: expected normalized save https://srv.example, got ' + saved);
+        const scripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT'; });
+        if (scripts.length !== 1) fail('scenario 5: expected in-place shell load (1 script), got ' + scripts.length);
+        if (!/^https:\/\/srv\.example\/shell\/shell\.min\.js\?t=\d+$/.test(scripts[0].src))
+            fail('scenario 5: unexpected in-place shell src: ' + scripts[0].src);
+        console.log('OK 5: first-connect submit → in-place shell load, no reload');
+    }
+
+    // Scenario 6: bare host:port input → http:// scheme defaulted on save
+    // (parity with boot-shell normalizeServerUrl).
+    {
+        const r = await runScenario({ serverUrl: null, manifestResponse: 'error' });
+        r.sandbox.document.getElementById('server-input').value = '  192.168.1.5:8096/ ';
+        r.sandbox.document.getElementById('server-form').submit();
+        await new Promise(function(resolve){ setTimeout(resolve, 50); });
+        const saved = r.sandbox.localStorage.getItem('jellyfin.shell.serverUrl');
+        if (saved !== 'http://192.168.1.5:8096')
+            fail('scenario 6: expected http://192.168.1.5:8096, got ' + saved);
+        if (r.log.reloaded) fail('scenario 6: must not reload');
+        console.log('OK 6: bare host normalized to http:// on first connect');
+    }
+
+    // Scenario 7: double submit → exactly one shell load (re-entry guard).
+    {
+        const r = await runScenario({ serverUrl: null, manifestResponse: 'error' });
+        const form = r.sandbox.document.getElementById('server-form');
+        r.sandbox.document.getElementById('server-input').value = 'https://srv.example';
+        form.submit();
+        form.submit();
+        await new Promise(function(resolve){ setTimeout(resolve, 50); });
+        const scripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT'; });
+        if (scripts.length !== 1)
+            fail('scenario 7: double submit must load the shell once, got ' + scripts.length + ' appends');
+        console.log('OK 7: re-entry guard — double submit loads shell once');
     }
 
     console.log('ALL SCENARIOS PASS');
