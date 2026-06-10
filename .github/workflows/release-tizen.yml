@@ -1,71 +1,180 @@
-# Release: publish a pre-built signed Tizen .wgt as a GitHub Release.
-# Triggered by tags matching jellyplug-v* (live scheme) or tizen-v* (legacy).
+# Release: build + sign the shell .wgt in CI at tag time (JEL-123, approved
+# via JEL-122 as Option 1 of JEL-121).
 #
-# The workflow looks for `release-artifacts/v<version>/*.wgt` in the tagged
-# commit (where <version> is everything after the `-v` prefix) and attaches it
-# to the Release. The widget is built and signed locally by the maintainer (see
-# `packages/shell-tizen/scripts/build-wgt.sh` and `release-artifacts/README.md`)
-# until the CI image + Tizen signing secrets are wired up.
+# Tagging jellyplug-v<ver> (or legacy tizen-v<ver>) makes CI stage the widget
+# from the tagged source, sign it with the repo's 4 TIZEN_* secrets, and attach
+# it to a GitHub Release. No pre-built .wgt is committed to the repo and no
+# local build machine is in the signing trust chain anymore.
 #
-# Two guards run before anything is published:
-#   - verify-wgt-signed.sh        (JEL-8)   the artifact IS signed
-#   - verify-wgt-source-match.sh  (JEL-121) the artifact's payload is
-#     byte-identical to the tagged source (signatures excluded), so a
-#     tampered or stale committed .wgt can never ship.
+# This mirrors bootstrap-sign.yml (JEL-10/15) step for step:
+#   0. Install the Tizen Studio Web CLI (checksum-pinned, JEL-119).
+#   1. tooling/ci/configure-tizen-signing.sh  builds the "jellyfin" security
+#      profile from the 4 CI secrets inside an unlocked gnome-keyring session.
+#   2. packages/shell-tizen/scripts/build-wgt.sh with SIGNING_PROFILE set
+#      stages src/** + tizen/config.xml, strips the QA seed (JEL-100), and
+#      emits a signed dist/JellyPlug.wgt.
+#   3. tooling/ci/verify-wgt-signed.sh        (JEL-8)   artifact IS signed.
+#   4. tooling/ci/verify-wgt-source-match.sh  (JEL-121) artifact payload is
+#      byte-identical to the tagged source (signatures excluded) — kept as
+#      defense-in-depth against build-script or staging bugs even though the
+#      build now happens in CI.
+#
+# Triggers:
+#   - workflow_dispatch  — build + sign on demand from the Actions tab
+#     (uploads the artifact, publishes no Release).
+#   - push tag jellyplug-v* / tizen-v*  — also publishes a GitHub Release.
+#
+# Requires the same 4 secrets as bootstrap-sign.yml. Without
+# TIZEN_AUTHOR_P12_BASE64 the configure step is a no-op and the verify step
+# then fails the run (by design) rather than silently shipping unsigned bytes.
 
 name: release-tizen
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "jellyplug-v*"
       - "tizen-v*"
 
 jobs:
-  release:
-    name: attach signed .wgt to Release
+  build-sign-release:
+    name: build + sign shell .wgt
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TIZEN_STUDIO_VER: "5.6"
+      # SHA256 of web-cli_Tizen_Studio_5.6_ubuntu-64.bin as served by
+      # download.tizen.org on 2026-06-10 (JEL-119; must stay in sync with
+      # ci.yml + bootstrap-sign.yml). Fails the run if the installer bytes
+      # ever change upstream.
+      TIZEN_INSTALLER_SHA256: "89c84fbc474dcfb02af193bcc763e2e7bf3259bf34cbf6b7f44ec2da024db7df"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Resolve version + artifact path
+      - name: Resolve version from tag
         id: resolve
+        # On a tag push the tag version must match tizen/config.xml, so a
+        # mistagged release can never ship bytes claiming another version.
+        # workflow_dispatch runs are versioned by commit SHA instead.
         run: |
-          tag="${GITHUB_REF##*/}"            # jellyplug-v1.0.0 / tizen-v1.0.0
-          version="${tag#jellyplug-v}"       # strip whichever prefix matched
-          version="${version#tizen-v}"       # 1.0.0
-          dir="release-artifacts/v${version}"
-          shopt -s nullglob
-          wgts=("$dir"/*.wgt)
-          shopt -u nullglob
-          if [[ ${#wgts[@]} -eq 0 ]]; then
-            echo "::error::No .wgt found in $dir for tag $tag. Build locally and commit it before tagging." >&2
-            exit 1
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF##*/}"            # jellyplug-v1.0.0 / tizen-v1.0.0
+            version="${tag#jellyplug-v}"
+            version="${version#tizen-v}"
+            config_version="$(sed -nE 's/.*<widget[^>]* version="([^"]+)".*/\1/p' \
+              packages/shell-tizen/tizen/config.xml)"
+            if [[ "$version" != "$config_version" ]]; then
+              echo "::error::Tag $tag says v$version but tizen/config.xml says v$config_version. Bump config.xml (or fix the tag) and re-tag." >&2
+              exit 1
+            fi
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
-          {
-            echo "version=$version"
-            echo "wgt_path=${wgts[0]}"
-          } >> "$GITHUB_OUTPUT"
+
+      # Tizen Studio's CLI runs on the JVM; pin a JDK the tooling supports
+      # rather than relying on whatever the runner image defaults to.
+      - name: Set up JDK
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Tizen Studio Web CLI
+        run: |
+          set -euo pipefail
+          ver="${TIZEN_STUDIO_VER}"
+          url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
+          echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
+          curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          echo "${TIZEN_INSTALLER_SHA256}  tizen-installer.bin" | sha256sum -c -
+          chmod +x tizen-installer.bin
+          # --accept-license is required for unattended install.
+          ./tizen-installer.bin --accept-license "${HOME}/tizen-studio"
+          rm -f tizen-installer.bin
+          # Persist the CLI on PATH for every subsequent step.
+          echo "${HOME}/tizen-studio/tools/ide/bin" >> "$GITHUB_PATH"
+
+      - name: Verify tizen CLI is on PATH
+        run: tizen version
+
+      # Tizen encrypts security-profile passwords through libsecret/gnome-keyring
+      # over D-Bus. A headless runner has neither, so `security-profiles add`
+      # silently fails to persist the passwords and `tizen package` then signs
+      # with an empty password ("CertificationException: Invaild password").
+      # Provide a keyring. (JEL-15; mirrors bootstrap-sign.yml.)
+      - name: Install gnome-keyring for Tizen secure storage
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11 libsecret-1-0
+
+      # `configure-tizen-signing.sh` (security-profiles add) and the signing
+      # build (`tizen package` via build-wgt.sh) MUST share one D-Bus / keyring
+      # session for the encrypted profile passwords to round-trip — run both
+      # inside a single dbus-run-session with an unlocked (empty-password)
+      # login keyring.
+      - name: Configure signing profile + build signed .wgt (keyring session)
+        env:
+          TIZEN_AUTHOR_P12_BASE64: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 }}
+          TIZEN_AUTHOR_PASSWORD: ${{ secrets.TIZEN_AUTHOR_PASSWORD }}
+          TIZEN_DISTRIBUTOR_P12_BASE64: ${{ secrets.TIZEN_DISTRIBUTOR_P12_BASE64 }}
+          TIZEN_DISTRIBUTOR_PASSWORD: ${{ secrets.TIZEN_DISTRIBUTOR_PASSWORD }}
+          TIZEN_PROFILE_NAME: jellyfin
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            echo "" | gnome-keyring-daemon --unlock --components=secrets,pkcs11 >/dev/null 2>&1 || true
+            tooling/ci/configure-tizen-signing.sh
+            SIGNING_PROFILE=jellyfin bash packages/shell-tizen/scripts/build-wgt.sh
+          '
+
+      # Tizen's signer writes its real error to cli.log, not stdout, so surface
+      # the tail on failure to keep signing breakage diagnosable from the
+      # Actions log alone. profiles.xml is NOT dumped (real release certs) —
+      # only non-secret signer logs are shown.
+      - name: Dump tizen cli.log on failure
+        if: failure()
+        run: |
+          echo "=== security-profiles list ==="
+          tizen security-profiles list || true
+          echo "=== cli.log tail ==="
+          find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
 
       - name: Verify .wgt is signed (JEL-8 guard)
-        # A Tizen TV refuses to install an unsigned package. Fail the release
-        # before it is published if the artifact lacks author + distributor
-        # signatures, so we never ship an uninstallable .wgt again.
-        run: tooling/ci/verify-wgt-signed.sh "${{ steps.resolve.outputs.wgt_path }}"
+        # A Tizen TV refuses to install an unsigned package. Fail before
+        # publishing if the artifact lacks author + distributor signatures.
+        run: tooling/ci/verify-wgt-signed.sh packages/shell-tizen/dist/JellyPlug.wgt
 
       - name: Verify .wgt payload matches tagged source (JEL-121 guard)
-        # A signature proves who built the artifact, not what was built. Stage
-        # the retail widget payload from this tag's checkout and byte-compare
-        # it against the committed .wgt (signatures excluded) so a compromised
-        # build machine or stale/tampered commit can never publish.
-        run: tooling/ci/verify-wgt-source-match.sh "${{ steps.resolve.outputs.wgt_path }}"
+        # Defense-in-depth even with a CI build: proves the signed payload is
+        # byte-identical to the checked-out source (signatures excluded), so a
+        # build-script or staging regression can never ship silently.
+        run: tooling/ci/verify-wgt-source-match.sh packages/shell-tizen/dist/JellyPlug.wgt
 
-      - name: Create Release + attach .wgt
+      - name: Stamp versioned artifact name
+        # Stable, versioned filename for the Release and for JEL-25-style
+        # on-TV byte-identity verification against the CI-produced artifact.
+        run: |
+          set -euo pipefail
+          cp packages/shell-tizen/dist/JellyPlug.wgt \
+             "packages/shell-tizen/dist/JellyPlug_v${{ steps.resolve.outputs.version }}.wgt"
+          sha256sum "packages/shell-tizen/dist/JellyPlug_v${{ steps.resolve.outputs.version }}.wgt"
+
+      - name: Upload signed .wgt artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jellyplug-shell-${{ steps.resolve.outputs.version }}
+          path: packages/shell-tizen/dist/JellyPlug_v${{ steps.resolve.outputs.version }}.wgt
+
+      - name: Publish GitHub Release
+        # Only when launched from a release tag; workflow_dispatch runs stop
+        # at the uploaded artifact above.
+        if: steps.resolve.outputs.is_release == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: "Tizen Shell v${{ steps.resolve.outputs.version }}"
-          files: ${{ steps.resolve.outputs.wgt_path }}
+          files: packages/shell-tizen/dist/JellyPlug_v${{ steps.resolve.outputs.version }}.wgt
           generate_release_notes: true
           fail_on_unmatched_files: true

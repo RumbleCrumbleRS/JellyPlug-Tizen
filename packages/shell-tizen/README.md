@@ -42,12 +42,17 @@ for retail TVs).
 pnpm -C packages/shell-tizen build
 ```
 
-Outputs: `packages/shell-tizen/dist/JellyfinShell.wgt`.
+Outputs: `packages/shell-tizen/dist/JellyPlug.wgt`.
+
+Release builds are produced in CI, not locally: pushing tag
+`jellyplug-v<version>` makes `.github/workflows/release-tizen.yml` build,
+sign, and publish the `.wgt` from the tagged source (JEL-123). See
+`release-artifacts/README.md` for the runbook.
 
 ## Install + smoke
 
 ```bash
-sdb -s emulator-26101 install dist/JellyfinShell.wgt
+sdb -s emulator-26101 install dist/JellyPlug.wgt
 sdb shell 0 was_kill JelShellTV.Jellyfin
 sdb shell 0 debug JelShellTV.Jellyfin
 # parse port: <N>, then `sdb forward tcp:9223 tcp:<N>` for WebInspector.
