@@ -10,7 +10,7 @@ Pipeline:
      (--shell-src remains as a generic override to bake in some OTHER prebuilt
      shell.min.js, e.g. a shell-tizen build.)
   3. Package {config.xml,index.html,icon.png,boot-shell.min.js,babel.min.js}
-     into JellyfinShellBootstrap_v<ver>.wgt at the tree root.
+     into JellyPlugBootstrap_v<ver>.wgt at the tree root.
        - With --sign-profile NAME (and the Tizen CLI on PATH): runs
          `tizen package -t wgt -s NAME` so the .wgt embeds author-signature.xml
          + signature1.xml and is installable on a real TV.
@@ -98,7 +98,7 @@ def _resolve_tizen_cli(explicit: str | None) -> str | None:
 def build_wgt_unsigned(out_dir: Path, ver: str) -> Path:
     """Raw zip of the payload. UNSIGNED — not installable on a real TV."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"JellyfinShellBootstrap_v{ver}.wgt"
+    out = out_dir / f"JellyPlugBootstrap_v{ver}.wgt"
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for src in WGT_PAYLOAD:
             if not src.exists():
@@ -118,10 +118,10 @@ def build_wgt_signed(out_dir: Path, ver: str, profile: str, tizen_cli: str) -> P
     """Stage the payload and sign it with `tizen package -t wgt -s <profile>`.
 
     Tizen names the output after <name> in config.xml; we rename it to the
-    canonical JellyfinShellBootstrap_v<ver>.wgt so QA/CI always find it.
+    canonical JellyPlugBootstrap_v<ver>.wgt so QA/CI always find it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"JellyfinShellBootstrap_v{ver}.wgt"
+    out = out_dir / f"JellyPlugBootstrap_v{ver}.wgt"
     with tempfile.TemporaryDirectory(prefix="hsb-bootstrap-") as stage:
         stage_dir = Path(stage)
         for src in WGT_PAYLOAD:

@@ -31,7 +31,7 @@ python3 scripts/build_bootstrap.py
 
 Outputs:
 
-- `dist/JellyfinShellBootstrap_v<ver>.wgt` — unsigned WGT, sign with Tizen
+- `dist/JellyPlugBootstrap_v<ver>.wgt` — unsigned WGT, sign with Tizen
   Studio Certificate Manager before pushing to a TV.
 - `manifest.bootstrap.json` — sha256 + size, for advertising in
   `${server}/shell/` bootstrap-install flows.
