@@ -2144,14 +2144,57 @@
       // playback dispatch. Add a generic index-walk iterator to every
       // length-indexed DOM collection prototype that lacks one. Guarded
       // (only installed when missing) so modern engines are untouched.
+      // JEL-111: one-shot install proved insufficient on the M63 — home
+      // still died with iterate-non-iterable AFTER sign-in (infinite
+      // spinner). On-device beacon probes (v2.0.5 QA build) pinned the
+      // mechanism: iterators are healthy through boot and login, then the
+      // LAZY home-route chunks rebind the DOM collection constructors
+      // during eval — NodeList.prototype[Symbol.iterator] reads
+      // `undefined` while window.Symbol stays native — and home renders
+      // (and dies) in the same breath. Timer-based heals race the render
+      // that follows the clobber within the same task. Fix in three
+      // layers: (1) DETERMINISTIC setter traps on window.<ctor> — the
+      // instant a bundle reassigns a collection constructor, patch the
+      // replacement's prototype synchronously, before any render can run;
+      // (2) a 250ms sweep interval for the first 90s, then 3s
+      // maintenance, as backstop for clobbers that bypass assignment
+      // (JEL-21's details-route throw is this same class); (3) the
+      // original install-when-missing sweep at parse + DCL. The `armed`
+      // latch keeps a re-executed copy from stacking intervals or nesting
+      // traps. Counters on window.__shellIterFix let the QA beacon prove
+      // liveness (pass/installed/trapped/trapHits).
       "(function(){",
-      '  if(typeof Symbol==="undefined"||!Symbol.iterator)return;',
+      '  var names=["NodeList","HTMLCollection","HTMLFormControlsCollection","HTMLOptionsCollection","HTMLAllCollection","DOMTokenList","NamedNodeMap","FileList","DOMRectList","DOMStringList","CSSRuleList","StyleSheetList","MediaList","DataTransferItemList","TouchList","SVGLengthList","SVGNumberList","SVGPointList","SVGTransformList","SVGStringList"];',
+      "  var st=window.__shellIterFix=window.__shellIterFix||{pass:0,installed:0,fails:0,noSym:0,trapped:0,trapFails:0,trapHits:0};",
       "  function makeIterable(proto){",
       "    if(!proto||proto[Symbol.iterator])return;",
-      "    try{Object.defineProperty(proto,Symbol.iterator,{configurable:true,writable:true,value:function(){var i=0,self=this;return {next:function(){return i<self.length?{value:self[i++],done:false}:{value:undefined,done:true};}};}});}catch(_){}",
+      "    try{Object.defineProperty(proto,Symbol.iterator,{configurable:true,writable:true,value:function(){var i=0,self=this;return {next:function(){return i<self.length?{value:self[i++],done:false}:{value:undefined,done:true};}};}});st.installed++;}catch(_){st.fails++;}",
       "  }",
-      '  var names=["NodeList","HTMLCollection","HTMLFormControlsCollection","HTMLOptionsCollection","HTMLAllCollection","DOMTokenList","NamedNodeMap","FileList","DOMRectList","DOMStringList","CSSRuleList","StyleSheetList","MediaList","DataTransferItemList","TouchList","SVGLengthList","SVGNumberList","SVGPointList","SVGTransformList","SVGStringList"];',
-      "  for(var i=0;i<names.length;i++){try{var C=window[names[i]];if(C&&C.prototype)makeIterable(C.prototype);}catch(_){}}",
+      "  function sweep(){",
+      '    if(typeof Symbol==="undefined"||!Symbol.iterator){st.noSym++;return;}',
+      "    st.pass++;",
+      "    for(var i=0;i<names.length;i++){try{var C=window[names[i]];if(C&&C.prototype)makeIterable(C.prototype);}catch(_){}}",
+      "  }",
+      "  function trap(name){",
+      "    var cur=window[name];",
+      "    Object.defineProperty(window,name,{configurable:true,enumerable:false,",
+      "      get:function(){return cur;},",
+      "      set:function(v){cur=v;st.trapHits++;try{if(v&&v.prototype)makeIterable(v.prototype);}catch(_){}}",
+      "    });",
+      "    st.trapped++;",
+      "  }",
+      "  sweep();",
+      '  try{document.addEventListener("DOMContentLoaded",sweep);}catch(_){}',
+      "  if(st.armed)return;",
+      "  st.armed=1;",
+      "  for(var t=0;t<names.length;t++){try{if(window[names[t]])trap(names[t]);}catch(_){st.trapFails++;}}",
+      "  try{",
+      "    var fast=setInterval(sweep,250);",
+      "    setTimeout(function(){",
+      "      try{clearInterval(fast);}catch(_){}",
+      "      try{setInterval(sweep,3000);}catch(_){}",
+      "    },90000);",
+      "  }catch(_){}",
       "})();",
       "})();",
     ].join("\n");
