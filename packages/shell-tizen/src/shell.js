@@ -2144,14 +2144,30 @@
       // playback dispatch. Add a generic index-walk iterator to every
       // length-indexed DOM collection prototype that lacks one. Guarded
       // (only installed when missing) so modern engines are untouched.
+      // JEL-111: one-shot install proved insufficient on the M63 — home
+      // still died with iterate-non-iterable AFTER jellyfin-web's bundles
+      // (incl. its core-js) loaded. A later script can replace
+      // window.Symbol, making the well-known Symbol.iterator key a
+      // DIFFERENT property than the one defined at parse time. Re-sweep
+      // after bundles settle, each pass re-reading the CURRENT
+      // Symbol.iterator. Counters on window.__shellIterFix let the QA
+      // beacon prove the polyfill ran and what it installed.
       "(function(){",
-      '  if(typeof Symbol==="undefined"||!Symbol.iterator)return;',
+      '  var names=["NodeList","HTMLCollection","HTMLFormControlsCollection","HTMLOptionsCollection","HTMLAllCollection","DOMTokenList","NamedNodeMap","FileList","DOMRectList","DOMStringList","CSSRuleList","StyleSheetList","MediaList","DataTransferItemList","TouchList","SVGLengthList","SVGNumberList","SVGPointList","SVGTransformList","SVGStringList"];',
+      "  var st=window.__shellIterFix=window.__shellIterFix||{pass:0,installed:0,fails:0,noSym:0};",
       "  function makeIterable(proto){",
       "    if(!proto||proto[Symbol.iterator])return;",
-      "    try{Object.defineProperty(proto,Symbol.iterator,{configurable:true,writable:true,value:function(){var i=0,self=this;return {next:function(){return i<self.length?{value:self[i++],done:false}:{value:undefined,done:true};}};}});}catch(_){}",
+      "    try{Object.defineProperty(proto,Symbol.iterator,{configurable:true,writable:true,value:function(){var i=0,self=this;return {next:function(){return i<self.length?{value:self[i++],done:false}:{value:undefined,done:true};}};}});st.installed++;}catch(_){st.fails++;}",
       "  }",
-      '  var names=["NodeList","HTMLCollection","HTMLFormControlsCollection","HTMLOptionsCollection","HTMLAllCollection","DOMTokenList","NamedNodeMap","FileList","DOMRectList","DOMStringList","CSSRuleList","StyleSheetList","MediaList","DataTransferItemList","TouchList","SVGLengthList","SVGNumberList","SVGPointList","SVGTransformList","SVGStringList"];',
-      "  for(var i=0;i<names.length;i++){try{var C=window[names[i]];if(C&&C.prototype)makeIterable(C.prototype);}catch(_){}}",
+      "  function sweep(){",
+      '    if(typeof Symbol==="undefined"||!Symbol.iterator){st.noSym++;return;}',
+      "    st.pass++;",
+      "    for(var i=0;i<names.length;i++){try{var C=window[names[i]];if(C&&C.prototype)makeIterable(C.prototype);}catch(_){}}",
+      "  }",
+      "  sweep();",
+      '  try{document.addEventListener("DOMContentLoaded",sweep);}catch(_){}',
+      "  var delays=[1000,3000,8000,20000,45000];",
+      "  for(var d=0;d<delays.length;d++){try{setTimeout(sweep,delays[d]);}catch(_){}}",
       "})();",
       "})();",
     ].join("\n");

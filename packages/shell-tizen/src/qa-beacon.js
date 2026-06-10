@@ -67,7 +67,7 @@
   var seenErrors = {};
   function pushError(s) {
     if (!s) return;
-    s = String(s).slice(0, 240);
+    s = String(s).slice(0, 400);
     if (seenErrors[s]) return;
     seenErrors[s] = 1;
     errors.push(s);
@@ -78,9 +78,11 @@
       "error",
       function (ev) {
         try {
+          // JEL-111: keep the top 3 stack lines, not just the message —
+          // minified one-line bundles need file:line:col to pin a throw.
           var msg =
             ev && ev.error && ev.error.stack
-              ? ev.error.stack.split("\n")[0]
+              ? String(ev.error.stack).split("\n").slice(0, 3).join(" @@ ")
               : (ev && ev.message) || "";
           if (msg) pushError(msg);
         } catch (_) {}
@@ -94,7 +96,7 @@
           var r = ev && ev.reason;
           var msg =
             r && r.stack
-              ? r.stack.split("\n")[0]
+              ? String(r.stack).split("\n").slice(0, 3).join(" @@ ")
               : (r && r.message) || String(r || "");
           if (msg) pushError("unhandled: " + msg);
         } catch (_) {}
@@ -209,6 +211,77 @@
     return v;
   }
 
+  // JEL-111: live DOM-iterability + spinner probe. The "main menu spins
+  // forever" failure was iterate-non-iterable inside home render; these
+  // fields prove (a) whether DOM collections are iterable RIGHT NOW under
+  // the CURRENT window.Symbol, (b) whether the shell's iterator polyfill
+  // ran (__shellIterFix counters), and (c) whether a loading spinner is
+  // still on screen. ES5 except the deliberate for-of probe (try/caught).
+  function collectProbe() {
+    var p = {};
+    try {
+      p.nl = typeof NodeList.prototype[Symbol.iterator];
+    } catch (e) {
+      p.nl = "ERR:" + String((e && e.message) || e).slice(0, 60);
+    }
+    try {
+      p.hc = typeof HTMLCollection.prototype[Symbol.iterator];
+    } catch (e) {
+      p.hc = "ERR:" + String((e && e.message) || e).slice(0, 60);
+    }
+    try {
+      p.symNat = String(window.Symbol).indexOf("native code") >= 0 ? 1 : 0;
+    } catch (e) {
+      p.symNat = -1;
+    }
+    try {
+      var nodes = document.querySelectorAll("html");
+      var seen = 0;
+      // eslint-disable-next-line no-unused-vars
+      for (var node of nodes) seen++;
+      p.forof = "ok:" + seen;
+    } catch (e) {
+      p.forof = String((e && e.message) || e).slice(0, 120);
+    }
+    try {
+      p.iterFix = window.__shellIterFix || null;
+    } catch (e) {
+      p.iterFix = null;
+    }
+    try {
+      var d = window.__shellDiag;
+      p.diagErrs =
+        d && d.errors && d.errors.length
+          ? d.errors.slice(-3).map(function (r) {
+              return (
+                (r.f || "") +
+                ":" +
+                (r.l || "") +
+                " " +
+                String(r.m || "").slice(0, 200)
+              );
+            })
+          : null;
+    } catch (e) {
+      p.diagErrs = null;
+    }
+    try {
+      p.spin = document.querySelector(
+        ".docspinner, .mdlSpinner, .loading-spinner, .mdl-spinner",
+      )
+        ? 1
+        : 0;
+    } catch (e) {
+      p.spin = -1;
+    }
+    try {
+      p.realCards = document.querySelectorAll(".card[data-id]").length;
+    } catch (e) {
+      p.realCards = -1;
+    }
+    return p;
+  }
+
   function buildPayload() {
     var active = descActive();
     var hud = getHudText();
@@ -233,6 +306,7 @@
       cards: cards,
       errors: snap,
       qcState: getQcState(),
+      probe: collectProbe(),
       screenshotBase64: null,
       ua: (navigator && navigator.userAgent) || "",
       visibility:
