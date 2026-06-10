@@ -27,6 +27,10 @@ local.properties
 .DS_Store
 Thumbs.db
 
+# Build-script byproducts
+__pycache__/
+*.eb_clean
+
 # Secrets - never commit
 *.p12
 keystore/

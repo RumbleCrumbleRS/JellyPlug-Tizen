@@ -40,9 +40,12 @@ BABEL_FPR_PLACEHOLDER = "__BABEL_FPR__"
 SHELL_VER_PLACEHOLDER = "__SHELL_VER__"
 QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 
-# HARD_CAP is the deployed-blob ceiling (100 KiB) enforced by the assert in
-# main(). JEL-1977 raised the budget 94000 -> 100000; the hard cap is 102400.
-HARD_CAP = 102400
+# HARD_CAP is the deployed-blob ceiling enforced by the assert in main().
+# JEL-1977 raised the budget 94000 -> 100000 (cap 102400); JEL-120 raised the
+# cap 102400 -> 110592 (108 KiB) when the JEL-111 iterator-clobber sweep
+# (mirrored from boot-shell, on-device verified) grew the minified base to
+# ~104.8 KB and the first lockstep rebuild of shell.min.js no longer fit.
+HARD_CAP = 110592
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
 # `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
 MIN_JEL_LINES = 80
@@ -229,7 +232,15 @@ def collect_breadcrumbs(src: str):
 def build_manifest(base_size: int, breadcrumbs) -> str:
     header = "/*! JEL history (passthrough JEL-929):\n"
     footer = "*/\n"
-    budget = TARGET_BYTES - base_size - len(header) - len(footer)
+
+    # JEL-120: budget in UTF-8 BYTES, not str chars — context lines harvested
+    # from source comments can carry non-ASCII (arrows, ≡), and the manifest
+    # is written encoded, so char-based math overshot HARD_CAP by the
+    # multibyte surplus.
+    def blen(s: str) -> int:
+        return len(s.encode("utf-8"))
+
+    budget = TARGET_BYTES - base_size - blen(header) - blen(footer)
 
     lines = ["*" + " ".join(refs) + "\n" for refs, _ in breadcrumbs]
 
@@ -239,7 +250,7 @@ def build_manifest(base_size: int, breadcrumbs) -> str:
     # fits; shedding tail entries holds the deployed blob under the cap without
     # bloating it. Trimming is deterministic, so the output is reproducible.
     kept = len(lines)
-    while kept > MIN_JEL_LINES and sum(len(l) for l in lines[:kept]) > budget:
+    while kept > MIN_JEL_LINES and sum(blen(l) for l in lines[:kept]) > budget:
         kept -= 1
     dropped = len(lines) - kept
     if dropped:
@@ -250,7 +261,7 @@ def build_manifest(base_size: int, breadcrumbs) -> str:
     lines = lines[:kept]
     breadcrumbs = breadcrumbs[:kept]
 
-    bare = sum(len(l) for l in lines)
+    bare = sum(blen(l) for l in lines)
     remaining = budget - bare
 
     for i, (_, ctx) in enumerate(breadcrumbs):
@@ -261,8 +272,10 @@ def build_manifest(base_size: int, breadcrumbs) -> str:
         if max_extra <= 2:
             break
         extra = " " + ctx[: max_extra - 1]
+        while blen(extra) > max_extra:
+            extra = extra[:-1]
         lines[i] = base + extra + "\n"
-        remaining -= len(extra)
+        remaining -= blen(extra)
 
     return header + "".join(lines) + footer
 
@@ -292,7 +305,7 @@ def main() -> int:
     # minified code itself has outgrown the budget — a real cap bump is owed
     # (precedent: JEL-1977). Fail loudly rather than ship an oversized blob.
     assert len(out) <= HARD_CAP, (
-        f"size {len(out)} > {HARD_CAP} (100 KiB cap): minified base "
+        f"size {len(out)} > {HARD_CAP} ({HARD_CAP // 1024} KiB cap): minified base "
         f"{base_size} B leaves no room for the {MIN_JEL_LINES}-line breadcrumb "
         "floor — trim shell.js or raise HARD_CAP with justification (JEL-1977)"
     )
