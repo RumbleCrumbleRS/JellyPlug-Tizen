@@ -24,12 +24,18 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-SHELL_JS = HERE / "shell.js"
-SHELL_MIN = HERE / "shell.min.js"
-CLEAN_MIN = HERE / "shell.min.js.eb_clean"
-BABEL_MIN = HERE / "babel.min.js"
-CONFIG_XML = HERE / "config.xml"
-QA_BEACON_JS = HERE / "qa-beacon.js"  # JEL-1971: optional QA telemetry body
+# JEL-98: the JEL-96 Tizen-only restructure split the formerly-flat package into
+# src/ (shell sources + deployed blobs) and tizen/ (the WGT config), but left
+# these path constants pointing at the script's own scripts/ dir, which silently
+# broke `python3 build_shell_min.py`. Resolve sources from their real homes.
+SRC = HERE.parent / "src"
+TIZEN = HERE.parent / "tizen"
+SHELL_JS = SRC / "shell.js"
+SHELL_MIN = SRC / "shell.min.js"
+CLEAN_MIN = SRC / "shell.min.js.eb_clean"
+BABEL_MIN = SRC / "babel.min.js"
+CONFIG_XML = TIZEN / "config.xml"
+QA_BEACON_JS = SRC / "qa-beacon.js"  # JEL-1971: optional QA telemetry body
 BABEL_FPR_PLACEHOLDER = "__BABEL_FPR__"
 SHELL_VER_PLACEHOLDER = "__SHELL_VER__"
 QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"

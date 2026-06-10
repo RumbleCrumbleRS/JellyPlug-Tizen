@@ -1562,7 +1562,12 @@
       '  el.textContent=lines.join("\\n");',
       "}",
       "function start(){try{render();}catch(_){}setInterval(function(){try{render();}catch(_){}},800);}",
-      'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start);}else{start();}',
+      // JEL-98: the visible on-screen overlay is opt-in via the same debug flag
+      // as shellLog(). Error/warn/stat capture above still runs unconditionally
+      // so harnesses can read window.__shellDiag, but retail users never see the
+      // green diagnostics box unless localStorage['jellyfin.shell.debug']==='1'.
+      'var __diagShow=false;try{__diagShow=localStorage.getItem("jellyfin.shell.debug")==="1";}catch(_){}',
+      'if(__diagShow){if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start);}else{start();}}',
       "})();",
     ].join(`
 `);
