@@ -2265,9 +2265,13 @@
   }
   function armDeferWatchdog() {
     var POLL = 150,
-      CAP = 5500,
-      started = Date.now(),
-      hangHits = 0;
+      // JEL-99: raised from 5500. On the failing Tizen 5.0 (Chromium 63) panel
+      // a HEALTHY cold boot installs ApiClient at ~6100 ms (measured on device:
+      // dcl=3999, api=6097). The cap must clear that with margin or the rescue
+      // clobbers a healthy-but-slow boot. See the tick() note below on why the
+      // old readyState trigger was removed.
+      CAP = 20000,
+      started = Date.now();
     function alreadyRan() {
       return (window.__shellRegElCalls || 0) > 0;
     }
@@ -2302,6 +2306,16 @@
         for (var i = 0; i < defers.length; i++) {
           var src = defers[i].getAttribute("src");
           if (src) {
+            // JEL-99: drop the original (still-unrun) defer node before
+            // re-injecting so it cannot also execute later and double-run the
+            // webpack runtime. The cap only fires while ApiClient /
+            // __webpack_require__ are still absent, i.e. these defers provably
+            // have NOT executed yet, so removing them cancels them rather than
+            // racing a second copy.
+            try {
+              defers[i].parentNode &&
+                defers[i].parentNode.removeChild(defers[i]);
+            } catch (_) {}
             var s2 = document.createElement("script");
             ((s2.src = src),
               s2.setAttribute("data-shell-defer-watchdog", "1"),
@@ -2322,13 +2336,18 @@
           alreadyRan()
         )
           return;
+        // JEL-99: do NOT treat document.readyState === "complete" as a hang
+        // signal. After document.open/write/close into the already-complete
+        // bootstrap document, Chromium 63 reports readyState "complete" almost
+        // immediately (measured 638 ms) while the freshly written defer bundles
+        // are still healthy and pending — ApiClient did not install until
+        // 6097 ms. The old readyState trigger therefore fired at 638 ms,
+        // re-injected all 28 scripts, and the real defers then ALSO ran, which
+        // double-ran the webpack runtime and wedged the SPA forever (JEL-99).
+        // The only sound "defers ran" signals are __webpack_require__ /
+        // ApiClient / registerElement (checked above); absent those, wait out
+        // the cap before assuming a genuine hang.
         var elapsed = Date.now() - started;
-        if (document.readyState === "complete") {
-          if ((hangHits++, hangHits >= 2)) {
-            reinject("readyState-complete@" + elapsed + "ms");
-            return;
-          }
-        } else hangHits = 0;
         if (elapsed >= CAP) {
           reinject("cap@" + elapsed + "ms");
           return;
