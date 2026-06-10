@@ -1629,17 +1629,29 @@
       "}",
       // JEL-111: the one-shot install proved insufficient on the M63 — the
       // home screen still died with "Invalid attempt to iterate non-iterable
-      // instance" / "elements is not iterable" AFTER jellyfin-web's bundles
-      // (incl. its core-js) loaded. A later script can replace window.Symbol,
-      // making the well-known Symbol.iterator key a DIFFERENT property than
-      // the one this polyfill defined at parse time. Re-sweep after the
-      // bundles settle, each pass re-reading the CURRENT Symbol.iterator and
-      // installing it where missing. Counters exposed on
-      // window.__shellIterFix so the QA beacon can prove the polyfill ran
-      // and what it installed.
+      // instance" / "elements is not iterable" AFTER sign-in (infinite
+      // spinner). On-device beacon probes (v2.0.5 QA build) pinned the
+      // mechanism: iterators are healthy through boot and login, then the
+      // LAZY home-route chunks (76542/56213/73233 on jellyfin-web 10.11.11)
+      // rebind the DOM collection constructors during eval —
+      // NodeList.prototype[Symbol.iterator] reads `undefined` while
+      // window.Symbol stays native — and home renders (and dies) in the
+      // same breath. A delayed sweep was observed to restore iterators on
+      // 17 prototypes and stop the errors, but any timer-based heal races
+      // the render that follows the clobber within the same task. Fix in
+      // three layers: (1) DETERMINISTIC setter traps on window.<ctor> —
+      // the instant a bundle reassigns a collection constructor, patch the
+      // replacement's prototype synchronously, before any render can run;
+      // (2) a 250ms sweep interval for the first 90s, then 3s maintenance,
+      // as backstop for clobbers that bypass assignment (e.g. defineProperty
+      // replacing the trap; JEL-21's details-route throw is this same
+      // class); (3) the original install-when-missing sweep at parse + DCL.
+      // The `armed` latch keeps a re-executed copy from stacking intervals
+      // or nesting traps. Counters on window.__shellIterFix let the QA
+      // beacon prove liveness (pass/installed/trapped/trapHits).
       "(function(){",
       '  var names=["NodeList","HTMLCollection","HTMLFormControlsCollection","HTMLOptionsCollection","HTMLAllCollection","DOMTokenList","NamedNodeMap","FileList","DOMRectList","DOMStringList","CSSRuleList","StyleSheetList","MediaList","DataTransferItemList","TouchList","SVGLengthList","SVGNumberList","SVGPointList","SVGTransformList","SVGStringList"];',
-      "  var st=window.__shellIterFix=window.__shellIterFix||{pass:0,installed:0,fails:0,noSym:0};",
+      "  var st=window.__shellIterFix=window.__shellIterFix||{pass:0,installed:0,fails:0,noSym:0,trapped:0,trapFails:0,trapHits:0};",
       "  function makeIterable(proto){",
       "    if(!proto||proto[Symbol.iterator])return;",
       "    try{Object.defineProperty(proto,Symbol.iterator,{configurable:true,writable:true,value:function(){var i=0,self=this;return {next:function(){return i<self.length?{value:self[i++],done:false}:{value:undefined,done:true};}};}});st.installed++;}catch(_){st.fails++;}",
@@ -1649,10 +1661,26 @@
       "    st.pass++;",
       "    for(var i=0;i<names.length;i++){try{var C=window[names[i]];if(C&&C.prototype)makeIterable(C.prototype);}catch(_){}}",
       "  }",
+      "  function trap(name){",
+      "    var cur=window[name];",
+      "    Object.defineProperty(window,name,{configurable:true,enumerable:false,",
+      "      get:function(){return cur;},",
+      "      set:function(v){cur=v;st.trapHits++;try{if(v&&v.prototype)makeIterable(v.prototype);}catch(_){}}",
+      "    });",
+      "    st.trapped++;",
+      "  }",
       "  sweep();",
       '  try{document.addEventListener("DOMContentLoaded",sweep);}catch(_){}',
-      "  var delays=[1000,3000,8000,20000,45000];",
-      "  for(var d=0;d<delays.length;d++){try{setTimeout(sweep,delays[d]);}catch(_){}}",
+      "  if(st.armed)return;",
+      "  st.armed=1;",
+      "  for(var t=0;t<names.length;t++){try{if(window[names[t]])trap(names[t]);}catch(_){st.trapFails++;}}",
+      "  try{",
+      "    var fast=setInterval(sweep,250);",
+      "    setTimeout(function(){",
+      "      try{clearInterval(fast);}catch(_){}",
+      "      try{setInterval(sweep,3000);}catch(_){}",
+      "    },90000);",
+      "  }catch(_){}",
       "})();",
       "})();",
     ].join(`
