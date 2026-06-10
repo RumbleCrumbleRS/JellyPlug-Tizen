@@ -91,7 +91,10 @@ jobs:
           ver="${TIZEN_STUDIO_VER}"
           url="https://download.tizen.org/sdk/Installer/tizen-studio_${ver}/web-cli_Tizen_Studio_${ver}_ubuntu-64.bin"
           echo "Downloading Tizen Studio Web CLI ${ver} from ${url}"
-          curl -fSL --retry 3 -o tizen-installer.bin "$url"
+          # download.tizen.org connects flakily from Actions runners; plain
+          # --retry does NOT retry connect failures, hence --retry-all-errors.
+          curl -fSL --retry 5 --retry-all-errors --retry-delay 15 \
+            --connect-timeout 30 -o tizen-installer.bin "$url"
           echo "${TIZEN_INSTALLER_SHA256}  tizen-installer.bin" | sha256sum -c -
           chmod +x tizen-installer.bin
           # --accept-license is required for unattended install.
