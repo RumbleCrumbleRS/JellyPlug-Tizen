@@ -4,16 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1920, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Jellyfin Shell</title>
-    <!-- QA-ONLY: seed server URL into localStorage so app auto-connects without UI.
-         Remove before production build.
-         JEL-1974 (v68): also seed `jellyfin.qa.bootMarks.enabled='1'` so the
-         boot-mark IIFE persists span-level timings. `babelPreload` flag is
-         the runtime switch between the optimized cold boot (`'1'`, default
-         for v68) and the v66-baseline reproduction (`'0'`, set by the
-         v66m WGT seed). Both flags are localStorage so QA can flip mid-
-         session via webapis if needed; production builds never trip them
-         because this seed block is removed before release. -->
-    <script>try{localStorage.setItem('jellyfin.shell.serverUrl','https://REDACTED-SERVER.example');localStorage.setItem('jellyfin.qa.overlay','1');localStorage.setItem('jellyfin.qa.bootMarks.enabled','1');localStorage.setItem('jellyfin.shell.legacy.babelPreload','__BABEL_PRELOAD_SEED__');localStorage.setItem('jellyfin.shell.indexCache','__INDEX_CACHE_SEED__');}catch(e){}</script>
+    <!-- QA-SEED:START — JEL-100: QA-ONLY localStorage seed (auto-connect server
+         URL + QA overlay/telemetry beacon gate + boot-mark gate + cold-boot
+         tuning flags). This ENTIRE block is DELETED from retail WGTs by
+         scripts/process-qa-seed.sh, which build-wgt.sh runs during staging; a QA
+         build (SHELL_QA_BUILD=1) keeps it and substitutes the __*__ placeholders
+         from the environment. Do NOT rename the QA-SEED markers or remove the
+         placeholders — the build step and qa-seed-strip.test.cjs both key off
+         them, and the personal/server URL must stay OUT of source (JEL-100).
+         JEL-1974 (v68): bootMarks.enabled seeds the boot-mark IIFE that persists
+         span-level timings; babelPreload switches the optimized cold boot ('1',
+         v68 default) vs the v66 baseline reproduction ('0'). All flags are
+         localStorage so QA can flip them mid-session via webapis. -->
+    <script>try{localStorage.setItem('jellyfin.shell.serverUrl','__QA_SERVER_URL__');localStorage.setItem('jellyfin.qa.overlay','1');localStorage.setItem('jellyfin.qa.bootMarks.enabled','1');localStorage.setItem('jellyfin.shell.legacy.babelPreload','__BABEL_PRELOAD_SEED__');localStorage.setItem('jellyfin.shell.indexCache','__INDEX_CACHE_SEED__');}catch(e){}</script>
+    <!-- QA-SEED:END -->
     <!-- JEL-1974 (v68): boot-mark IIFE captures shell-document spans so the
          post-document.write beacon can measure babel preload critical
          path (tBabelPreloadAppend, tBabelScriptAppend, tBabelReady) plus

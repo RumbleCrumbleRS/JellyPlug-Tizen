@@ -45,6 +45,11 @@ mkdir -p "$STAGE_DIR" "$DIST_DIR"
 cp -R "$SRC_DIR"/. "$STAGE_DIR"/
 cp "$CONFIG_XML" "$STAGE_DIR/config.xml"
 
+# JEL-100: strip the QA-only seed block (auto-connect server URL + QA overlay/
+# telemetry-beacon gate + placeholder flags) out of the staged index.html so it
+# never ships in a retail WGT. SHELL_QA_BUILD=1 keeps + substitutes it instead.
+bash "$PKG_DIR/scripts/process-qa-seed.sh" "$STAGE_DIR/index.html"
+
 echo ">> "$TIZEN_CLI" build-web"
 # build-web walks the staged dir, rejects manifest violations, and writes
 # the packaged tree into .buildResult inside the widget root.
