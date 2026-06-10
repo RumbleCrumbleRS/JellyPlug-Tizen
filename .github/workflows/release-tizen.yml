@@ -1,17 +1,24 @@
 # Release: publish a pre-built signed Tizen .wgt as a GitHub Release.
-# Triggered by tags matching tizen-v*.
+# Triggered by tags matching jellyplug-v* (live scheme) or tizen-v* (legacy).
 #
 # The workflow looks for `release-artifacts/v<version>/*.wgt` in the tagged
-# commit (where <version> is everything after `tizen-v`) and attaches it to
-# the Release. The widget is built and signed locally by the maintainer (see
+# commit (where <version> is everything after the `-v` prefix) and attaches it
+# to the Release. The widget is built and signed locally by the maintainer (see
 # `packages/shell-tizen/scripts/build-wgt.sh` and `release-artifacts/README.md`)
 # until the CI image + Tizen signing secrets are wired up.
+#
+# Two guards run before anything is published:
+#   - verify-wgt-signed.sh        (JEL-8)   the artifact IS signed
+#   - verify-wgt-source-match.sh  (JEL-121) the artifact's payload is
+#     byte-identical to the tagged source (signatures excluded), so a
+#     tampered or stale committed .wgt can never ship.
 
 name: release-tizen
 
 on:
   push:
     tags:
+      - "jellyplug-v*"
       - "tizen-v*"
 
 jobs:
@@ -26,8 +33,9 @@ jobs:
       - name: Resolve version + artifact path
         id: resolve
         run: |
-          tag="${GITHUB_REF##*/}"            # tizen-v1.0.0
-          version="${tag#tizen-v}"           # 1.0.0
+          tag="${GITHUB_REF##*/}"            # jellyplug-v1.0.0 / tizen-v1.0.0
+          version="${tag#jellyplug-v}"       # strip whichever prefix matched
+          version="${version#tizen-v}"       # 1.0.0
           dir="release-artifacts/v${version}"
           shopt -s nullglob
           wgts=("$dir"/*.wgt)
@@ -46,6 +54,13 @@ jobs:
         # before it is published if the artifact lacks author + distributor
         # signatures, so we never ship an uninstallable .wgt again.
         run: tooling/ci/verify-wgt-signed.sh "${{ steps.resolve.outputs.wgt_path }}"
+
+      - name: Verify .wgt payload matches tagged source (JEL-121 guard)
+        # A signature proves who built the artifact, not what was built. Stage
+        # the retail widget payload from this tag's checkout and byte-compare
+        # it against the committed .wgt (signatures excluded) so a compromised
+        # build machine or stale/tampered commit can never publish.
+        run: tooling/ci/verify-wgt-source-match.sh "${{ steps.resolve.outputs.wgt_path }}"
 
       - name: Create Release + attach .wgt
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
