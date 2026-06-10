@@ -3004,8 +3004,7 @@
           // have NOT executed yet, so removing them cancels them rather than
           // racing a second copy.
           try {
-            defers[i].parentNode &&
-              defers[i].parentNode.removeChild(defers[i]);
+            defers[i].parentNode && defers[i].parentNode.removeChild(defers[i]);
           } catch (_) {}
           var s2 = document.createElement("script");
           s2.src = src;
