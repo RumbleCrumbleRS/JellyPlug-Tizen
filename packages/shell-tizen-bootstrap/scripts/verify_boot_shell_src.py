@@ -51,12 +51,15 @@ ESBUILD_FLAGS = [
 def resolve_esbuild(explicit: str | None) -> list[str]:
     """Return an argv prefix that runs esbuild.
 
-    Prefers an `esbuild` on PATH (matches build_shell_min.py's
-    `shutil.which("esbuild")`); falls back to `npx --yes esbuild@0.21.5` so the
-    guard is self-contained in a bare CI runner.
+    Prefers the lockfile-pinned workspace install (integrity-checked by pnpm,
+    JEL-119), then an `esbuild` on PATH; falls back to `npx --yes esbuild@0.21.5`
+    so the guard still runs in a bare environment with no node_modules.
     """
     if explicit:
         return [explicit]
+    local = HERE.parent.parent.parent / "node_modules" / ".bin" / "esbuild"
+    if local.exists():
+        return [str(local)]
     found = shutil.which("esbuild")
     if found:
         return [found]
@@ -64,7 +67,7 @@ def resolve_esbuild(explicit: str | None) -> list[str]:
     if npx:
         return [npx, "--yes", "esbuild@0.21.5"]
     raise RuntimeError(
-        "no esbuild found: install esbuild on PATH or make npx available"
+        "no esbuild found: pnpm install at the repo root, or install esbuild on PATH"
     )
 
 

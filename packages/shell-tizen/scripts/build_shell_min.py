@@ -56,7 +56,14 @@ MIN_JEL_LINES = 80
 TARGET_BYTES = HARD_CAP  # manifest budget tracks the hard cap (was 100000)
 BASE_BYTES_PLACEHOLDER = 0  # filled at runtime after esbuild pass
 
-ESBUILD = shutil.which("esbuild") or "esbuild"
+# Prefer the lockfile-pinned workspace install (integrity-checked by pnpm)
+# over PATH or an ad-hoc npx download (JEL-119 supply-chain hardening).
+_LOCAL_ESBUILD = HERE.parent.parent.parent / "node_modules" / ".bin" / "esbuild"
+ESBUILD = (
+    str(_LOCAL_ESBUILD)
+    if _LOCAL_ESBUILD.exists()
+    else (shutil.which("esbuild") or "esbuild")
+)
 
 
 def run_esbuild() -> bytes:

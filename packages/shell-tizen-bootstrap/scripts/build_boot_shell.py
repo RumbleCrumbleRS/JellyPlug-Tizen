@@ -57,6 +57,11 @@ ESBUILD_FLAGS = [
 def resolve_esbuild(explicit: str | None) -> list[str]:
     if explicit:
         return [explicit]
+    # Prefer the lockfile-pinned workspace install (integrity-checked by pnpm)
+    # over PATH or an ad-hoc npx download (JEL-119 supply-chain hardening).
+    local = PKG_ROOT.parent.parent / "node_modules" / ".bin" / "esbuild"
+    if local.exists():
+        return [str(local)]
     found = shutil.which("esbuild")
     if found:
         return [found]
@@ -64,7 +69,7 @@ def resolve_esbuild(explicit: str | None) -> list[str]:
     if npx:
         return [npx, "--yes", "esbuild@0.21.5"]
     raise RuntimeError(
-        "no esbuild found: install esbuild on PATH or make npx available"
+        "no esbuild found: pnpm install at the repo root, or install esbuild on PATH"
     )
 
 
