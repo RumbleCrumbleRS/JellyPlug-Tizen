@@ -7,10 +7,11 @@
 // through pass + every tamper class it must catch:
 //
 //   1. faithful payload + dummy signatures        -> PASS (sigs excluded)
-//   2. one byte changed inside shell.js           -> FAIL (content mismatch)
+//   2. one byte changed inside shell.min.js       -> FAIL (content mismatch)
 //   3. extra smuggled file in the .wgt            -> FAIL (extra entry)
 //   4. payload entry deleted from the .wgt        -> FAIL (missing entry)
 //   5. QA-seeded index.html packaged as retail    -> FAIL (JEL-100 regression)
+//   6. dev-only source (shell.js) in the .wgt     -> FAIL (JEL-124 exclusion)
 //
 // Zip packing shells out to python3 (same dependency the verifier itself
 // uses; ubuntu CI and the sandbox both ship it).
@@ -29,13 +30,21 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jel121-"));
 process.on("exit", () => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 
 // Stage the retail payload exactly like build-wgt.sh: src/** + config.xml,
-// QA seed stripped (retail default).
+// QA seed stripped (retail default), dev-only build inputs dropped (JEL-124).
+function dropDevSources(dir) {
+  for (const f of fs.readdirSync(dir)) {
+    if (f === "shell.js" || f === "qa-beacon.js" || f.endsWith(".eb_clean")) {
+      fs.rmSync(path.join(dir, f), { force: true });
+    }
+  }
+}
 const stageDir = path.join(tmpRoot, "stage");
 fs.cpSync(path.join(PKG_DIR, "src"), stageDir, { recursive: true });
 fs.copyFileSync(
   path.join(PKG_DIR, "tizen", "config.xml"),
   path.join(stageDir, "config.xml"),
 );
+dropDevSources(stageDir);
 execFileSync("bash", [QA_SEED, path.join(stageDir, "index.html")], {
   env: { ...process.env, SHELL_QA_BUILD: "" },
   stdio: "pipe",
@@ -95,19 +104,19 @@ packWgt(stageDir, goodWgt);
 let r = runVerify(goodWgt);
 check("faithful payload passes", r.status === 0, r.out.trim());
 
-// 2. A single tampered byte inside shell.js fails.
+// 2. A single tampered byte inside shell.min.js fails.
 const tamperDir = path.join(tmpRoot, "tamper");
 fs.cpSync(stageDir, tamperDir, { recursive: true });
-const shellJs = path.join(tamperDir, "shell.js");
-const buf = fs.readFileSync(shellJs);
+const shellMinJs = path.join(tamperDir, "shell.min.js");
+const buf = fs.readFileSync(shellMinJs);
 buf[Math.floor(buf.length / 2)] ^= 0xff;
-fs.writeFileSync(shellJs, buf);
+fs.writeFileSync(shellMinJs, buf);
 const tamperWgt = path.join(tmpRoot, "tamper.wgt");
 packWgt(tamperDir, tamperWgt);
 r = runVerify(tamperWgt);
 check(
-  "tampered shell.js fails",
-  r.status !== 0 && r.out.includes("content mismatch: shell.js"),
+  "tampered shell.min.js fails",
+  r.status !== 0 && r.out.includes("content mismatch: shell.min.js"),
   r.out.trim(),
 );
 
@@ -123,7 +132,7 @@ check(
 
 // 4. A deleted payload entry fails.
 const missingWgt = path.join(tmpRoot, "missing.wgt");
-packWgt(stageDir, missingWgt, { dropEntry: "qa-beacon.js" });
+packWgt(stageDir, missingWgt, { dropEntry: "icon.png" });
 r = runVerify(missingWgt);
 check(
   "missing payload entry fails",
@@ -136,6 +145,7 @@ check(
 const qaDir = path.join(tmpRoot, "qa");
 fs.cpSync(path.join(PKG_DIR, "src"), qaDir, { recursive: true });
 fs.copyFileSync(path.join(PKG_DIR, "tizen", "config.xml"), path.join(qaDir, "config.xml"));
+dropDevSources(qaDir);
 // src/index.html still carries the QA-SEED block — pack it unstripped.
 const qaWgt = path.join(tmpRoot, "qa.wgt");
 packWgt(qaDir, qaWgt);
@@ -146,8 +156,22 @@ check(
   r.out.trim(),
 );
 
+// 6. A .wgt that still ships a dev-only build input fails as an extra entry —
+// pins the JEL-124 payload diet (shell.js/qa-beacon.js/*.eb_clean are build
+// inputs baked into shell.min.js, never shipped).
+const devWgt = path.join(tmpRoot, "dev.wgt");
+packWgt(stageDir, devWgt, {
+  extraEntries: { "shell.js": "// dev source must not ship" },
+});
+r = runVerify(devWgt);
+check(
+  "dev-only shell.js in .wgt fails",
+  r.status !== 0 && r.out.includes("extra in .wgt (not in tagged source): shell.js"),
+  r.out.trim(),
+);
+
 if (failures > 0) {
   console.error(`\nwgt-source-match: ${failures} check(s) failed`);
   process.exit(1);
 }
-console.log("\nwgt-source-match: all 5 checks passed");
+console.log("\nwgt-source-match: all 6 checks passed");

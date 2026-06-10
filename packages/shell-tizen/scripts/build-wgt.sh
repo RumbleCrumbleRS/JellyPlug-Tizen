@@ -45,6 +45,15 @@ mkdir -p "$STAGE_DIR" "$DIST_DIR"
 cp -R "$SRC_DIR"/. "$STAGE_DIR"/
 cp "$CONFIG_XML" "$STAGE_DIR/config.xml"
 
+# JEL-124: drop build-input sources the widget never loads. index.html loads
+# shell.min.js (and lazily babel.min.js); shell.js is the editable source that
+# build_shell_min.py compiles, qa-beacon.js is baked INTO shell.min.js at build
+# time, and *.eb_clean is a build_shell_min.py byproduct. Shipping them costs
+# every TV ~200 KB of download/install/storage for bytes that are never parsed.
+# MUST stay in lockstep with tooling/ci/verify-wgt-source-match.sh and
+# scripts/wgt-source-match.test.cjs (JEL-121 guard).
+rm -f "$STAGE_DIR/shell.js" "$STAGE_DIR/qa-beacon.js" "$STAGE_DIR"/*.eb_clean
+
 # JEL-100: strip the QA-only seed block (auto-connect server URL + QA overlay/
 # telemetry-beacon gate + placeholder flags) out of the staged index.html so it
 # never ships in a retail WGT. SHELL_QA_BUILD=1 keeps + substitutes it instead.

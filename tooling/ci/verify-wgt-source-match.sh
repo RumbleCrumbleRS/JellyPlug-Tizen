@@ -14,6 +14,7 @@
 # Payload definition (must mirror packages/shell-tizen/scripts/build-wgt.sh):
 #   packages/shell-tizen/src/**        -> widget root
 #   packages/shell-tizen/tizen/config.xml -> config.xml
+#   minus dev-only build inputs: shell.js, qa-beacon.js, *.eb_clean (JEL-124)
 #   index.html QA-seed-stripped via process-qa-seed.sh (retail default;
 #   SHELL_QA_BUILD is forcibly unset so a QA-seeded artifact always fails)
 #
@@ -49,6 +50,9 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 # Mirror build-wgt.sh staging exactly.
 cp -R "$SRC_DIR"/. "$STAGE_DIR"/
 cp "$CONFIG_XML" "$STAGE_DIR/config.xml"
+# JEL-124: build-input sources are excluded from the shipped payload (see
+# build-wgt.sh) — a .wgt that still carries them now fails as "extra in .wgt".
+rm -f "$STAGE_DIR/shell.js" "$STAGE_DIR/qa-beacon.js" "$STAGE_DIR"/*.eb_clean
 if [[ -f "$QA_SEED_SCRIPT" ]]; then
   # Retail strip, never the QA substitution path — a release artifact carrying
   # the QA seed must fail this check (JEL-100).
