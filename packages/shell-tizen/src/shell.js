@@ -1131,6 +1131,64 @@
       "      };",
       "    }catch(_){}",
       "  })();}catch(_){}",
+      // JEL-129: late window.onload rescue (legacy Chromium only). After the
+      // document.open/write handoff on Chromium 56, deferred jellyfin-web
+      // bundles never auto-execute (JEL-99) — the rewritten document's
+      // `load` event fires long before the defer-watchdog runs the bundles,
+      // so an inlined/jQuery-gated plugin body that assigns
+      // `window.onload = fn` (e.g. EditorsChoice, the home "media bar"
+      // spotlight) registers AFTER load already fired and the handler is
+      // silently dead: no MutationObserver, no setup(), no Splide, no UI —
+      // exactly the JEL-88 telemetry (tx executed, ecAdded=0,
+      // splide=undefined). In a real browser the same plugin runs as a true
+      // deferred <script> BEFORE load, so it works. Restore browser parity:
+      // take over window.onload dispatch and invoke late-registered load
+      // handlers (property assignment or addEventListener) once, async.
+      // Kill switch: localStorage["jellyfin.shell.lateOnloadDisabled"]="1".
+      "  try{(function(){",
+      '    try{if(localStorage.getItem("jellyfin.shell.lateOnloadDisabled")==="1")return;}catch(_){}',
+      '    var ua=navigator.userAgent||"";',
+      "    var m=/(?:Chrome|Chromium)\\/(\\d+)\\./.exec(ua);",
+      "    var legacy=!!(m&&parseInt(m[1],10)<70);",
+      '    if(!legacy){try{new Function("var a={};return a?.b");}catch(_){legacy=true;}}',
+      "    if(!legacy)return;",
+      "    if(window.__shellLateOnloadShim)return;window.__shellLateOnloadShim=1;",
+      "    var fired=false;",
+      '    function isFired(){return fired||document.readyState==="complete";}',
+      "    function invoke(fn){",
+      "      try{fn.__shellLateRan=1;}catch(_){}",
+      '      var ev;try{ev=document.createEvent("Event");ev.initEvent("load",false,false);}catch(_){ev={type:"load",target:window};}',
+      "      try{",
+      '        if(typeof fn==="function")fn.call(window,ev);',
+      '        else if(fn&&typeof fn.handleEvent==="function")fn.handleEvent(ev);',
+      '      }catch(e){try{console.error("shell: late onload handler failed",e&&e.message);}catch(_){}}',
+      "    }",
+      "    function callLate(fn){",
+      "      try{window.__shellLateOnloadAssigns=(window.__shellLateOnloadAssigns||0)+1;}catch(_){}",
+      "      setTimeout(function(){",
+      "        try{window.__shellLateOnloadRuns=(window.__shellLateOnloadRuns||0)+1;}catch(_){}",
+      "        invoke(fn);",
+      "      },0);",
+      "    }",
+      "    var cur=null;",
+      // Single native dispatcher: marks load-fired and runs the property-
+      // assigned handler (we shadow window.onload below, so the native
+      // event system no longer dispatches it).
+      '    try{window.addEventListener("load",function(){fired=true;if(cur&&!cur.__shellLateRan)invoke(cur);},true);}catch(_){}',
+      "    try{",
+      '      Object.defineProperty(window,"onload",{configurable:true,',
+      "        get:function(){return cur;},",
+      "        set:function(fn){cur=fn;if(fn&&isFired()&&!fn.__shellLateRan)callLate(fn);}});",
+      "    }catch(_){}",
+      "    try{",
+      "      var origAddL=window.addEventListener;",
+      "      window.addEventListener=function(type,fn){",
+      "        var r=origAddL.apply(window,arguments);",
+      '        if(type==="load"&&fn&&isFired())callLate(fn);',
+      "        return r;",
+      "      };",
+      "    }catch(_){}",
+      "  })();}catch(_){}",
       // QA debug overlay — opt-in via localStorage item "jellyfin.qa.overlay" === "1".
       // JEL-202: also dumps Settings form-field IDs so PowerShell+PIL can OCR
       // a DOM-evidence list off the emulator. Activates when the active page
