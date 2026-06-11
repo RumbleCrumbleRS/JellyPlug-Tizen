@@ -1711,6 +1711,62 @@
         doc.head.appendChild(beaconTag));
     }
   }
+  // JEL-126: compositor-driven boot progress indicator for the written
+  // document — three pulsing dots (CSS transform/opacity keyframes) that
+  // keep animating through the ~20 s main-thread blackout while the M63
+  // parses+executes the jellyfin-web bundles (JEL-125 decomposition).
+  // Additive-defensive (full try/catch, pointer-events:none, aria-hidden),
+  // removed by a 500 ms poll when jellyfin-web paints anything real
+  // (selectors mirrored from qa-beacon.js; all view-rendered, none static
+  // in jellyfin-web's index.html) with a 120 s hard cap. ES5, no
+  // `</script>` literal (fast path splices it as HTML). Kill switch:
+  // localStorage['jellyfin.shell.bootProgressDisabled'] = '1'.
+  function bootProgressBody() {
+    return (
+      "(function(){try{" +
+      "if(window.__shellBootProgressOn)return;" +
+      'try{if(localStorage.getItem("jellyfin.shell.bootProgressDisabled")==="1")return}catch(_){}' +
+      "var de=document.documentElement;" +
+      "if(!de||!de.appendChild)return;" +
+      "window.__shellBootProgressOn=1;" +
+      'var st=document.createElement("style");' +
+      'st.id="__shell_boot_progress_css";' +
+      'st.textContent="' +
+      "#__shell_boot_progress{position:fixed;left:0;right:0;bottom:8vh;text-align:center;pointer-events:none;z-index:2147483647}" +
+      "#__shell_boot_progress span{display:inline-block;width:14px;height:14px;margin:0 9px;border-radius:50%;background:#fff;opacity:.25;will-change:transform,opacity;animation:__sbp-pulse 1.2s ease-in-out infinite both}" +
+      "#__shell_boot_progress span:nth-child(2){animation-delay:.15s}" +
+      "#__shell_boot_progress span:nth-child(3){animation-delay:.3s}" +
+      "@keyframes __sbp-pulse{0%,80%,100%{transform:scale(.55);opacity:.25}40%{transform:scale(1);opacity:1}}" +
+      '";' +
+      "(document.head||de).appendChild(st);" +
+      'var el=document.createElement("div");' +
+      'el.id="__shell_boot_progress";' +
+      'el.setAttribute("aria-hidden","true");' +
+      'el.innerHTML="<span></span><span></span><span></span>";' +
+      "de.appendChild(el);" +
+      "var t0=+new Date(),timer=null,done=false;" +
+      "function clear(){if(done)return;done=true;" +
+      "try{timer&&clearInterval(timer)}catch(_){}" +
+      "try{el.parentNode&&el.parentNode.removeChild(el)}catch(_){}" +
+      "try{st.parentNode&&st.parentNode.removeChild(st)}catch(_){}" +
+      "try{window.__shellBootProgressClearedMs=+new Date()-t0}catch(_){}}" +
+      "try{window.__shellBootProgressClear=clear}catch(_){}" +
+      'var SEL=".userItemContainer,.btnUser,.manualLoginForm,.loginForm,#txtUserName,#txtManualName,.btnUseQuickConnect,.qcCode,.card,.itemsContainer,.docspinner,.mdlSpinner,.loading-spinner,.mdl-spinner,.dialogContainer";' +
+      "timer=setInterval(function(){try{" +
+      "if(+new Date()-t0>120000)return clear();" +
+      "if(document.querySelector(SEL))clear()" +
+      "}catch(_){clear()}},500);" +
+      "}catch(_){}})();"
+    );
+  }
+  function injectBootProgress(doc) {
+    if (isLegacyChromium()) {
+      var progressTag = doc.createElement("script");
+      (progressTag.setAttribute("data-shell-boot-progress", "1"),
+        (progressTag.textContent = bootProgressBody()),
+        doc.head.appendChild(progressTag));
+    }
+  }
   var BABEL_NEEDED_KEY = "jellyfin.shell.legacy.babelNeeded",
     BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak";
   function markBabelNeeded() {
@@ -2504,6 +2560,10 @@
         beaconBody && beaconBody !== "__QA_BEACON_BODY__"
           ? '<script data-shell-beacon="1">' + beaconBody + "</script>"
           : "",
+      progressTag =
+        '<script data-shell-boot-progress="1">' +
+        bootProgressBody() +
+        "</script>",
       injected =
         '<script data-shell-diag="1">' +
         diagBody +
@@ -2514,7 +2574,8 @@
         '</script><script data-shell-polyfill="1">' +
         polyBody +
         "</script>" +
-        beaconTag,
+        beaconTag +
+        progressTag,
       insertAt = headIdx + 6,
       patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     if (
@@ -2813,6 +2874,7 @@
           : doc.head.appendChild(seedTag),
         injectChromium56Polyfills(doc),
         injectQaBeacon(doc),
+        injectBootProgress(doc),
         Promise.all([
           patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
           transpileLegacyScripts(doc, baseUrl),

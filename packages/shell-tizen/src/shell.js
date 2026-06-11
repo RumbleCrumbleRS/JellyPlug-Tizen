@@ -2235,6 +2235,76 @@
     doc.head.appendChild(beaconTag);
   }
 
+  // JEL-126: compositor-driven boot progress indicator for the written
+  // document. The M63 spends ~40 s parsing + executing the jellyfin-web
+  // bundles after the document.write handoff, including a ~20 s
+  // main-thread blackout where the splash sits frozen and the boot looks
+  // hung (JEL-125 decomposition). This inline script runs at head parse
+  // time in the written document and overlays three pulsing dots above
+  // the splash, animated purely via CSS transform/opacity keyframes so
+  // the compositor keeps them moving while the main thread is blocked.
+  // Additive-defensive: the whole body is try/caught, the overlay is
+  // pointer-events:none + aria-hidden (never intercepts input), and a
+  // 500 ms poll removes it the moment jellyfin-web paints anything real
+  // (login / user-picker / card / spinner / dialog selectors mirrored
+  // from qa-beacon.js getQcState+collectProbe — none are statically
+  // present in jellyfin-web's index.html, all are view-rendered), with a
+  // 120 s hard-cap so the overlay can never outlive a boot. The overlay
+  // is appended to documentElement because <body> does not exist yet at
+  // head parse time; fixed positioning renders it regardless. Body must
+  // not contain a `</script>` literal (the fast path splices it as HTML)
+  // and stays ES5 (runs pre-polyfill on Chromium 56/63). Kill switch:
+  // localStorage['jellyfin.shell.bootProgressDisabled'] = '1'.
+  function bootProgressBody() {
+    return (
+      "(function(){try{" +
+      "if(window.__shellBootProgressOn)return;" +
+      'try{if(localStorage.getItem("jellyfin.shell.bootProgressDisabled")==="1")return}catch(_){}' +
+      "var de=document.documentElement;" +
+      "if(!de||!de.appendChild)return;" +
+      "window.__shellBootProgressOn=1;" +
+      'var st=document.createElement("style");' +
+      'st.id="__shell_boot_progress_css";' +
+      'st.textContent="' +
+      "#__shell_boot_progress{position:fixed;left:0;right:0;bottom:8vh;text-align:center;pointer-events:none;z-index:2147483647}" +
+      "#__shell_boot_progress span{display:inline-block;width:14px;height:14px;margin:0 9px;border-radius:50%;background:#fff;opacity:.25;will-change:transform,opacity;animation:__sbp-pulse 1.2s ease-in-out infinite both}" +
+      "#__shell_boot_progress span:nth-child(2){animation-delay:.15s}" +
+      "#__shell_boot_progress span:nth-child(3){animation-delay:.3s}" +
+      "@keyframes __sbp-pulse{0%,80%,100%{transform:scale(.55);opacity:.25}40%{transform:scale(1);opacity:1}}" +
+      '";' +
+      "(document.head||de).appendChild(st);" +
+      'var el=document.createElement("div");' +
+      'el.id="__shell_boot_progress";' +
+      'el.setAttribute("aria-hidden","true");' +
+      'el.innerHTML="<span></span><span></span><span></span>";' +
+      "de.appendChild(el);" +
+      "var t0=+new Date(),timer=null,done=false;" +
+      "function clear(){if(done)return;done=true;" +
+      "try{timer&&clearInterval(timer)}catch(_){}" +
+      "try{el.parentNode&&el.parentNode.removeChild(el)}catch(_){}" +
+      "try{st.parentNode&&st.parentNode.removeChild(st)}catch(_){}" +
+      "try{window.__shellBootProgressClearedMs=+new Date()-t0}catch(_){}}" +
+      "try{window.__shellBootProgressClear=clear}catch(_){}" +
+      'var SEL=".userItemContainer,.btnUser,.manualLoginForm,.loginForm,#txtUserName,#txtManualName,.btnUseQuickConnect,.qcCode,.card,.itemsContainer,.docspinner,.mdlSpinner,.loading-spinner,.mdl-spinner,.dialogContainer";' +
+      "timer=setInterval(function(){try{" +
+      "if(+new Date()-t0>120000)return clear();" +
+      "if(document.querySelector(SEL))clear()" +
+      "}catch(_){clear()}},500);" +
+      "}catch(_){}})();"
+    );
+  }
+
+  // Legacy-only: modern engines parse the bundles in ~1 s and the dots
+  // would just flash. The string fast path is legacy-gated upstream, so
+  // only the DOMParser path needs this check.
+  function injectBootProgress(doc) {
+    if (!isLegacyChromium()) return;
+    var progressTag = doc.createElement("script");
+    progressTag.setAttribute("data-shell-boot-progress", "1");
+    progressTag.textContent = bootProgressBody();
+    doc.head.appendChild(progressTag);
+  }
+
   // JEL-554 (v32): tx cache constants shared with the in-document seed
   // script. transpileLegacyScripts (widget-origin, runs before document.write)
   // and srcPipeline/rewrite (runs inside the rewritten document) both write
@@ -3200,6 +3270,12 @@
       beaconBody && beaconBody !== "__QA_BEACON_BODY__"
         ? '<script data-shell-beacon="1">' + beaconBody + "</script>"
         : "";
+    // JEL-126: fast path is legacy-only by construction (bailed "modern"
+    // above), so the boot progress dots are always spliced here.
+    var progressTag =
+      '<script data-shell-boot-progress="1">' +
+      bootProgressBody() +
+      "</script>";
     var injected =
       '<script data-shell-diag="1">' +
       diagBody +
@@ -3213,7 +3289,8 @@
       '<script data-shell-polyfill="1">' +
       polyBody +
       "</script>" +
-      beaconTag;
+      beaconTag +
+      progressTag;
     var insertAt = headIdx + 6;
     var patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     // Init bundle counters so HUD reads consistent values whether or
@@ -3514,6 +3591,9 @@
       // JEL-1971: append QA HTTP beacon script tag (no-op in prod;
       // gated inside the body on localStorage['jellyfin.qa.overlay']).
       injectQaBeacon(doc);
+      // JEL-126: boot progress dots that survive the ~20 s main-thread
+      // blackout while jellyfin-web parses+executes (legacy-only).
+      injectBootProgress(doc);
       // JEL-554 (v29): run bundle patch + legacy transpile in parallel.
       // They touch disjoint <script> sets (bundle patcher gates on
       // main.*.bundle.js, transpileLegacyScripts skips bundles via
