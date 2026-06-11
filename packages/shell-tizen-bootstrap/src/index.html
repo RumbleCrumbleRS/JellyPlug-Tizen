@@ -167,7 +167,61 @@
                     });
             }
 
+            // JEL-125: overlap the heavy boot inputs with the manifest-probe →
+            // hosted-404 → baked-shell chain instead of serializing after it.
+            // boot-shell (and the hosted shell) already adopt an in-flight
+            // window.__shellPrefetch when its baseUrl matches (JEL-58 pattern
+            // from shell-tizen's index.html); the bootstrap just never primed
+            // it, so every boot paid the /web/ RTT pair only after the baked
+            // shell was parsed. Also kick the 2.4 MB babel fetch+parse on
+            // legacy engines where a transpile is unlearned-or-known-needed —
+            // on a fresh first connect the verdict is unlearned and babel
+            // otherwise loads lazily inside the pre-write critical path.
+            function primeWebBoot(server) {
+                try {
+                    if (typeof fetch === 'function') {
+                        var webBase = server + '/web/';
+                        var init = { credentials: 'omit' };
+                        // Last submit wins: boot-shell ignores a stale prefetch
+                        // via its baseUrl equality check, but re-priming here
+                        // keeps the common retry path warm too.
+                        window.__shellPrefetch = {
+                            baseUrl: webBase,
+                            index: fetch(webBase + 'index.html', init),
+                            config: fetch(webBase + 'config.json', init)
+                        };
+                    }
+                } catch(_){}
+                try {
+                    if (localStorage.getItem('jellyfin.shell.legacy.babelPrime') === '0') return;
+                } catch(_){}
+                try {
+                    var ua = navigator.userAgent || '';
+                    var m = /(?:Chrome|Chromium)\/(\d+)\./.exec(ua);
+                    var legacy = !!(m && parseInt(m[1], 10) < 70);
+                    if (!legacy) { try { new Function('var a={};return a?.b'); } catch(_) { legacy = true; } }
+                    if (!legacy) return;
+                    var verdict = null, streak = 0;
+                    try { verdict = localStorage.getItem('jellyfin.shell.legacy.babelNeeded'); } catch(_){}
+                    try { streak = parseInt(localStorage.getItem('jellyfin.shell.legacy.babelUnusedStreak') || '0', 10) || 0; } catch(_){}
+                    // Unlearned verdict (fresh install) or learned-needed with a
+                    // live streak — mirror shell.js's JEL-1984 prime predicate,
+                    // extended to the unlearned case this ticket is about.
+                    if (verdict !== '1' && verdict !== null) return;
+                    if (verdict === '1' && streak >= 2) return;
+                    // Defer one tick: on the stored-URL path this runs while the
+                    // bootloader <script> is still parsing, before the IIFE below
+                    // has defined window.__ensureBabel.
+                    setTimeout(function(){
+                        try {
+                            if (typeof window.__ensureBabel === 'function') window.__ensureBabel();
+                        } catch(_){}
+                    }, 0);
+                } catch(_){}
+            }
+
             function loadHostedShell(server) {
+                primeWebBoot(server);
                 var base = server.replace(/\/+$/, '') + '/shell/';
                 hsbState.server = server;
                 hsbState.manifestUrl = base + 'manifest.json';
@@ -271,22 +325,41 @@
             if (typeof window.Babel !== 'undefined') return Promise.resolve();
             if (pending) return pending;
             pending = new Promise(function(resolve){
+                // JEL-125: settle through one funnel. The eager prime kick can
+                // race document.open()/write() — the written document discards
+                // a still-pending <script> WITHOUT firing onload/onerror, which
+                // would leave this promise unsettled forever and hang every
+                // later transpile that awaits it. A window.Babel poll catches a
+                // parse that completed without its event, and a 10 s give-up
+                // settles the discarded case (callers re-check window.Babel and
+                // skip-transpile, same as today's load-failure path).
+                var settled = false, poll = null, giveUp = null;
+                function settle(){
+                    if (settled) return;
+                    settled = true;
+                    if (poll) clearInterval(poll);
+                    if (giveUp) clearTimeout(giveUp);
+                    if (typeof window.Babel === 'undefined') pending = null; // allow a later retry
+                    resolve(); // ensureBabelReady() re-checks window.Babel
+                }
                 try {
                     var s = document.createElement('script');
                     s.src = BABEL_SRC;
                     s.onload = function(){
                         try { console.warn('shell: babel loaded for legacy transpile'); } catch(_){}
-                        resolve();
+                        settle();
                     };
                     s.onerror = function(){
                         try { console.warn('shell: babel.min.js failed to load'); } catch(_){}
-                        pending = null; // allow a later retry
-                        resolve();      // resolve anyway; ensureBabelReady() re-checks window.Babel
+                        settle();
                     };
                     document.head.appendChild(s);
+                    poll = setInterval(function(){
+                        if (typeof window.Babel !== 'undefined') settle();
+                    }, 250);
+                    giveUp = setTimeout(settle, 10000);
                 } catch (e) {
-                    pending = null;
-                    resolve();
+                    settle();
                 }
             });
             return pending;

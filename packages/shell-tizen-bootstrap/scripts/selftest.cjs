@@ -20,7 +20,7 @@ const SOURCE = match[1];
 
 function fail(msg) { console.error('FAIL:', msg); process.exit(1); }
 
-function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk }) {
+function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, navigatorUA, ensureBabelSpy, extraStore }) {
     const log = { appended: [], formAttached: false, errorShown: null };
     const head = { tagName: 'HEAD', appendChild(node) {
         log.appended.push({ tag: node.tagName, src: node.src });
@@ -76,10 +76,21 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
 
     let savedUrl = serverUrl;
     const localStorage = {
-        store: { 'jellyfin.shell.serverUrl': savedUrl },
+        store: Object.assign({ 'jellyfin.shell.serverUrl': savedUrl }, extraStore || {}),
         getItem(k){ return Object.prototype.hasOwnProperty.call(this.store, k) ? this.store[k] : null; },
         setItem(k, v){ this.store[k] = String(v); },
     };
+    if (savedUrl == null) delete localStorage.store['jellyfin.shell.serverUrl'];
+
+    // JEL-125: prime-path observability — record prefetch URLs and eager
+    // babel kicks issued by primeWebBoot.
+    log.fetched = [];
+    function fakeFetch(url){ log.fetched.push(url); return new Promise(function(){}); }
+    const win = { __qaMarks: null };
+    if (ensureBabelSpy) {
+        log.babelKicks = 0;
+        win.__ensureBabel = function(){ log.babelKicks++; return Promise.resolve(); };
+    }
 
     function FakeXHR(){
         this.open = function(method, url){ this.url = url; };
@@ -101,21 +112,23 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         };
     }
 
-    return {
-        log,
-        sandbox: {
-            window: { __qaMarks: null },
-            document,
-            location: { reload: function(){ log.reloaded = true; } },
-            localStorage,
-            XMLHttpRequest: FakeXHR,
-            setTimeout, clearTimeout, setImmediate,
-            console: { warn: function(){}, log: function(){} },
-            Date,
-            encodeURIComponent,
-            JSON,
-        },
+    const sandbox = {
+        window: win,
+        document,
+        location: { reload: function(){ log.reloaded = true; } },
+        localStorage,
+        XMLHttpRequest: FakeXHR,
+        fetch: fakeFetch,
+        setTimeout, clearTimeout, setImmediate,
+        console: { warn: function(){}, log: function(){} },
+        Date,
+        encodeURIComponent,
+        JSON,
+        parseInt,
+        Function,
     };
+    if (navigatorUA) sandbox.navigator = { userAgent: navigatorUA };
+    return { log, sandbox };
 }
 
 async function runScenario(opts) {
@@ -232,6 +245,84 @@ async function runScenario(opts) {
         if (scripts.length !== 1)
             fail('scenario 7: double submit must load the shell once, got ' + scripts.length + ' appends');
         console.log('OK 7: re-entry guard — double submit loads shell once');
+    }
+
+    // JEL-125 scenarios: loadHostedShell must prime window.__shellPrefetch
+    // (boot-shell adopts it when baseUrl matches) and eagerly kick babel on
+    // legacy engines, overlapping both with the manifest-probe chain.
+
+    // Scenario 8: stored-URL boot → prefetch primed with verbatim-URL /web/ base.
+    {
+        const r = await runScenario({ serverUrl: 'https://srv.example', manifestResponse: 'error' });
+        const pf = r.sandbox.window.__shellPrefetch;
+        if (!pf || pf.baseUrl !== 'https://srv.example/web/')
+            fail('scenario 8: expected prefetch baseUrl https://srv.example/web/, got ' + (pf && pf.baseUrl));
+        if (!r.log.fetched.includes('https://srv.example/web/index.html') ||
+            !r.log.fetched.includes('https://srv.example/web/config.json'))
+            fail('scenario 8: expected index+config prefetch, got ' + JSON.stringify(r.log.fetched));
+        console.log('OK 8: stored-URL boot primes __shellPrefetch (index + config)');
+    }
+
+    // Scenario 9: first-connect submit on a legacy UA → prefetch primed from the
+    // normalized URL + eager babel kick.
+    {
+        const r = await runScenario({
+            serverUrl: null, manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/537.36 Chrome/63.0.3239.84 TV Safari/537.36',
+            ensureBabelSpy: true,
+        });
+        r.sandbox.document.getElementById('server-input').value = 'srv.example:8096/';
+        r.sandbox.document.getElementById('server-form').submit();
+        await new Promise(function(resolve){ setTimeout(resolve, 50); });
+        const pf = r.sandbox.window.__shellPrefetch;
+        if (!pf || pf.baseUrl !== 'http://srv.example:8096/web/')
+            fail('scenario 9: expected prefetch baseUrl http://srv.example:8096/web/, got ' + (pf && pf.baseUrl));
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9: expected 1 eager babel kick on legacy UA fresh connect, got ' + r.log.babelKicks);
+        console.log('OK 9: first-connect submit primes prefetch + eager babel on legacy UA');
+    }
+
+    // Scenario 10: modern UA → prefetch primed, NO babel kick.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36',
+            ensureBabelSpy: true,
+        });
+        if (!r.sandbox.window.__shellPrefetch)
+            fail('scenario 10: prefetch must still prime on modern UA');
+        if (r.log.babelKicks !== 0)
+            fail('scenario 10: modern UA must not kick babel, got ' + r.log.babelKicks);
+        console.log('OK 10: modern UA primes prefetch without babel kick');
+    }
+
+    // Scenario 11: babelPrime='0' kill switch + learned-unused streak both block the kick.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true,
+            extraStore: { 'jellyfin.shell.legacy.babelPrime': '0' },
+        });
+        if (r.log.babelKicks !== 0)
+            fail('scenario 11: babelPrime=0 must block the kick, got ' + r.log.babelKicks);
+        const r2 = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true,
+            extraStore: { 'jellyfin.shell.legacy.babelNeeded': '1', 'jellyfin.shell.legacy.babelUnusedStreak': '2' },
+        });
+        if (r2.log.babelKicks !== 0)
+            fail('scenario 11: babelUnusedStreak>=2 must block the kick, got ' + r2.log.babelKicks);
+        const r3 = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true,
+            extraStore: { 'jellyfin.shell.legacy.babelNeeded': '1' },
+        });
+        if (r3.log.babelKicks !== 1)
+            fail('scenario 11: learned-needed verdict with live streak must kick, got ' + r3.log.babelKicks);
+        console.log('OK 11: babel kick gating — kill switch, unused streak, learned-needed');
     }
 
     console.log('ALL SCENARIOS PASS');
