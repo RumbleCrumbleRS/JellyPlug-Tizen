@@ -45,7 +45,13 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # cap 102400 -> 110592 (108 KiB) when the JEL-111 iterator-clobber sweep
 # (mirrored from boot-shell, on-device verified) grew the minified base to
 # ~104.8 KB and the first lockstep rebuild of shell.min.js no longer fit.
-HARD_CAP = 110592
+# JEL-131 raised it 110592 -> 122880 (120 KiB): the login-idle tx-cache
+# primer (seed-side string block, mirrored in boot-shell) grew the minified
+# base to ~116.1 KB. shell.min.js is the HOSTED shell (served from /shell/,
+# not packaged in the .wgt since JEL-124), so the cap guards manifest
+# breadcrumb budget only — boot-shell.min.js (the wgt-shipped blob) has no
+# such cap and took the same block.
+HARD_CAP = 122880
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
 # `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
 MIN_JEL_LINES = 80

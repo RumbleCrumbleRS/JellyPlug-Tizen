@@ -773,6 +773,7 @@
       '    function dispatchEvt(node,type){try{var ev=document.createEvent("Event");ev.initEvent(type,false,false);node.dispatchEvent(ev);}catch(_){}try{var fn=node["on"+type];if(typeof fn==="function")fn.call(node,{type:type,target:node});}catch(_){}}',
       "    function rewrite(parent,node,ref,origMethod){",
       '      var src=node.getAttribute("src");',
+      "      __recDyn(src);",
       '      node.setAttribute("data-shell-rewriting","1");',
       '      var stub=document.createComment("shell-pending:"+src);',
       "      var ret;",
@@ -842,6 +843,7 @@
       "    function srcPipeline(node,src){",
       "      if(node.__shellPiped)return;",
       "      node.__shellPiped=true;",
+      "      __recDyn(src);",
       "      var __cb=__txGet(src);",
       "      if(__cb!=null){",
       '        var ns0=document.createElement("script");',
@@ -912,6 +914,166 @@
       "        }catch(_){}",
       "        return origSetAttr.call(this,name,value);",
       "      };",
+      "    }catch(_){}",
+      // JEL-131: cold tx-cache priming. On a FRESH install the JEL-557 cache
+      // is empty, so JellyfinEnhanced's post-login PARALLEL load of ~54
+      // sub-module scripts (loadScripts() fires them all at once — the
+      // serial-RTT model in the JEL-557 comment above is outdated) costs
+      // ~1.9 MB of Babel.transform serialized on the M63 main thread
+      // (~21-42 s, measured offline 2026-06-11) and starves the home
+      // render — the user-reported ~30 s login→home. JE only starts once
+      // ApiClient.getCurrentUserId() is truthy, so the login idle window
+      // (user typing credentials on a TV remote) is free main-thread time
+      // that ends exactly when the storm begins. Use it:
+      //   1. __recDyn persists intercepted dynamic URLs (JEL-1654 pattern,
+      //      dynamic side) for next-boot priming after TX_VER bumps;
+      //   2. on a true first boot, scrape the statically-inlined plugin
+      //      bodies (script[data-shell-transpiled-from]) for module-list
+      //      literals; probe-then-commit candidate dirs so wrong guesses
+      //      cost ~4 probe 404s, not a combinatorial spray;
+      //   3. prime only while ApiClient exists (bundles executed — never
+      //      competes with the parse blackout) and the user is logged out;
+      //      abort the moment auth appears. Fetches run 4-wide; transforms
+      //      run one per 120 ms macrotask to keep the login form usable.
+      // Cache writes mirror the on-demand pipelines (maybeTranspile + jq
+      // gate + __txSet) so primed entries are byte-identical, same TX_VER
+      // prefix, same LRU. Counters: window.__shellTxPrime {q,f,t,e,st,done}
+      // (q=queued, f=fetched, t=transpiled+cached, e=errors, st=stop
+      // reason). Kill switch: localStorage["jellyfin.shell.txPrimeDisabled"]
+      // ="1" (recording stays on — it is inert without the primer).
+      '    var __DYNKEY="jellyfin.shell.dynPluginUrls";',
+      "    var __dynRec=null,__dynRecT=null;",
+      "    function __recDyn(src){try{",
+      "      if(!src)return;",
+      "      var abs;try{abs=new URL(src,document.baseURI).href;}catch(_){return;}",
+      '      if(!__dynRec){__dynRec={};try{var prev=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");for(var i=0;i<prev.length;i++)__dynRec[prev[i]]=1;}catch(_){}}',
+      "      if(__dynRec[abs])return;",
+      "      __dynRec[abs]=1;",
+      "      if(__dynRecT)return;",
+      "      __dynRecT=setTimeout(function(){__dynRecT=null;try{var ks=Object.keys(__dynRec);if(ks.length>100)ks=ks.slice(ks.length-100);localStorage.setItem(__DYNKEY,JSON.stringify(ks));}catch(_){}},1000);",
+      "    }catch(_){}}",
+      // Scrape: relative .js names need a base dir. Collect quoted absolute
+      // dir literals from the same body (capped 6, ranked /js|/scripts|
+      // /modules last-segment first) plus the script's own directory; the
+      // primer probes names[0] across them and commits to the dir that
+      // answers 200. Absolute .js literals are exact candidates as-is.
+      "    function __txScrapeBodies(items){",
+      "      var REL=/([\"'])(\\/?[A-Za-z0-9_@%-]+(?:\\/[A-Za-z0-9_@%.-]+)*\\.js)(\\?[^\"']*)?\\1/g;",
+      "      var ABS=/([\"'])(\\/[A-Za-z0-9_@%-]+(?:\\/[A-Za-z0-9_@%-]+){0,4})\\1/g;",
+      "      var groups=[],exact=[],gi,m;",
+      "      for(gi=0;gi<items.length;gi++){",
+      '        var body=String(items[gi].body||""),from=String(items[gi].src||"");',
+      "        var names=[],seenN={},dirs=[],seenD={};",
+      "        REL.lastIndex=0;",
+      '        while((m=REL.exec(body))&&names.length<80){var nm=m[2];if(seenN[nm])continue;seenN[nm]=1;if(nm.charAt(0)==="/")exact.push(nm);else names.push(nm);}',
+      "        if(!names.length)continue;",
+      "        ABS.lastIndex=0;",
+      '        while((m=ABS.exec(body))&&dirs.length<6){var d=m[2];if(d.indexOf(".")>=0||d.length>64||seenD[d])continue;seenD[d]=1;dirs.push(d);}',
+      "        dirs.sort(function(a,b){return (/\\/(js|scripts|modules)$/.test(a)?0:1)-(/\\/(js|scripts|modules)$/.test(b)?0:1);});",
+      '        if(from){var qi=from.indexOf("?");var fp=qi<0?from:from.slice(0,qi);var sl=fp.lastIndexOf("/");if(sl>0&&!seenD[fp.slice(0,sl)])dirs.push(fp.slice(0,sl));}',
+      "        if(dirs.length)groups.push({dirs:dirs,names:names});",
+      "      }",
+      "      return {exact:exact,groups:groups};",
+      "    }",
+      "    function __txPrimeStart(P){",
+      '      var origin="";try{origin=new URL(document.baseURI).origin;}catch(_){}',
+      "      var seen={},fq=[],bodies=[],pend=0,busy=false,stopped=false;",
+      '      function authed(){try{return !!(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId());}catch(_){return false;}}',
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
+      '      function stopAuth(){stopped=true;P.st="auth";}',
+      "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
+      "      function drain(){",
+      "        if(busy||stopped)return;",
+      "        var it=bodies.shift();",
+      "        if(!it){finishMaybe();return;}",
+      "        busy=true;",
+      "        setTimeout(function(){",
+      "          if(authed()){stopAuth();busy=false;return;}",
+      '          var __p=needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "          __p.then(function(){",
+      "            try{",
+      "              var out=maybeTranspile(it.c);",
+      "              if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
+      "            }catch(_){P.e++;}",
+      "            busy=false;",
+      "            drain();",
+      "          });",
+      "        },120);",
+      "      }",
+      "      function pump(){",
+      "        if(stopped)return;",
+      "        if(authed()){stopAuth();return;}",
+      "        while(pend<4&&fq.length){",
+      "          (function(u){",
+      "            pend++;",
+      '            window.fetch(u,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(code){pend--;P.f++;bodies.push({u:u,c:code});drain();pump();}).catch(function(){pend--;P.e++;pump();});',
+      "          })(fq.shift());",
+      "        }",
+      "        finishMaybe();",
+      "      }",
+      "      function probe(g){",
+      "        var name=g.names[0],left=0,best=null;",
+      // Warm/partial cache: if names[0] is already cached under one of the
+      // candidate dirs, that dir won the probe on an earlier boot — commit
+      // to it without any network probe (a fully-warm boot fetches nothing)
+      // and let enq's cached-skip fill only the gaps.
+      "        for(var w=0;w<g.dirs.length;w++){",
+      '          var wAbs;try{wAbs=new URL(g.dirs[w]+"/"+name,document.baseURI).href;}catch(_){continue;}',
+      "          var wHit=null;try{wHit=localStorage.getItem(__TXPFX+__txKey(wAbs));}catch(_){}",
+      "          if(wHit!=null){",
+      '            for(var w2=1;w2<g.names.length;w2++)enq(g.dirs[w]+"/"+g.names[w2]);',
+      "            pump();",
+      "            return;",
+      "          }",
+      "        }",
+      "        function settle(){",
+      "          if(best!=null&&!stopped){",
+      "            bodies.push({u:best.abs,c:best.code});drain();",
+      '            for(var j=1;j<g.names.length;j++)enq(g.dirs[best.rank]+"/"+g.names[j]);',
+      "          }",
+      "          pump();",
+      "        }",
+      "        for(var i=0;i<g.dirs.length;i++){",
+      '          var cand=norm(g.dirs[i]+"/"+name);',
+      "          if(cand==null)continue;",
+      "          left++;P.q++;",
+      "          (function(rank,abs){",
+      "            pend++;",
+      '            window.fetch(abs,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(code){pend--;P.f++;if(best==null||rank<best.rank)best={rank:rank,code:code,abs:abs};if(--left===0)settle();}).catch(function(){pend--;P.e++;if(--left===0)settle();});',
+      "          })(i,cand);",
+      "        }",
+      "        if(!left)pump();",
+      "      }",
+      '      try{var stored=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");for(var si=0;si<stored.length;si++)enq(stored[si]);}catch(_){}',
+      "      var scraped={exact:[],groups:[]};",
+      "      try{",
+      '        var sc=document.querySelectorAll("script[data-shell-transpiled-from]");',
+      "        var items=[];",
+      '        for(var ii=0;ii<sc.length;ii++)items.push({body:sc[ii].textContent||"",src:sc[ii].getAttribute("data-shell-transpiled-from")||""});',
+      "        scraped=__txScrapeBodies(items);",
+      "      }catch(_){}",
+      "      for(var ei=0;ei<scraped.exact.length;ei++)enq(scraped.exact[ei]);",
+      "      for(var pi=0;pi<scraped.groups.length;pi++)probe(scraped.groups[pi]);",
+      "      pump();",
+      "    }",
+      "    try{",
+      '      if(localStorage.getItem("jellyfin.shell.txPrimeDisabled")!=="1"){',
+      '        var __tpP={q:0,f:0,t:0,e:0,st:"",done:0};',
+      "        window.__shellTxPrime=__tpP;",
+      "        var __tpN=0;",
+      "        var __tpT=setInterval(function(){",
+      "          try{",
+      "            __tpN++;",
+      '            if(__tpN>360){clearInterval(__tpT);__tpP.st="cap";return;}',
+      '            if(!window.ApiClient||typeof window.ApiClient.getCurrentUserId!=="function")return;',
+      "            var uid=null;try{uid=window.ApiClient.getCurrentUserId();}catch(_){}",
+      "            clearInterval(__tpT);",
+      '            if(uid){__tpP.st="auth";return;}',
+      "            __txPrimeStart(__tpP);",
+      "          }catch(_){try{clearInterval(__tpT);}catch(__){}}",
+      "        },500);",
+      "      }",
       "    }catch(_){}",
       "  })();}catch(_){}",
       // JEL-129: late window.onload rescue (legacy Chromium only). After the
@@ -1078,7 +1240,13 @@
       '        "SS:"+((window.__shellStylesheetPrefetch)||0)+"/"+(function(){try{return JSON.parse(localStorage.getItem("jellyfin.shell.stylesheetUrls")||"[]").length;}catch(_){return 0;}})(),',
       '        "PL:"+((window.__shellPreloadScripts)||0)+"/"+((window.__shellPreloadSecondaries)||0)+"/"+((window.__shellPreloadStylesheets)||0)+"/"+(((window.__shellPreloadScripts)||0)+((window.__shellPreloadSecondaries)||0)+((window.__shellPreloadStylesheets)||0)),',
       '        "CSS:"+((window.__shellCssInlineAdopted)||0)+"/"+((window.__shellCssInlineHits)||0)+" b="+((window.__shellCssInlineBytes)||0)+" m="+((window.__shellCssInlineMisses)||0)+" q="+((window.__shellCssInlineQuota)||0),',
-      '        "FP:"+((window.__shellFastPathHits)||0)+"/"+((window.__shellFastPathFallbacks)||0)+" tx="+((window.__shellFastPathTxInlines)||0)+" lb="+((window.__shellFastPathLastBail)||"-")',
+      '        "FP:"+((window.__shellFastPathHits)||0)+"/"+((window.__shellFastPathFallbacks)||0)+" tx="+((window.__shellFastPathTxInlines)||0)+" lb="+((window.__shellFastPathLastBail)||"-"),',
+      // JEL-131: login-idle tx-cache primer status. TP:f/t/e/q(:stop)
+      // d=N where f=fetched, t=transpiled+cached, e=errors, q=queued,
+      // stop=auth|cap when the primer aborted, d=done flag, plus the
+      // tx hit/miss pair so one row answers cold-vs-warm on a beacon
+      // screenshot. "-" when the kill switch disabled the primer.
+      '        "TP:"+(function(){var P=window.__shellTxPrime;return P?P.f+"/"+P.t+"/"+P.e+"/"+P.q+(P.st?":"+P.st:"")+" d="+P.done:"-";})()+" txh="+(window.__shellTxCacheHits||0)+"/"+(window.__shellTxCacheMisses||0)',
       "      ];",
       "      var ids=__qaCollectFieldIds();",
       "      if(ids.length){",
@@ -1608,7 +1776,9 @@
         shellVersion +
         ' legacy="+(init.legacy?"1":"0")+" babel="+(init.babel?"1":"0")+" poly="+(init.polyfilled?"1":"0"),',
       '    "plugins found="+(init.scriptsFound||0)+" tr="+(init.transpiled||0)+" fail="+(init.transpileFailed||0)+" skip="+(init.skipped||0)+" pp="+(init.pluginPrefetchAdopted||0)+" ppk="+(window.__shellPluginPrefetch?Object.keys(window.__shellPluginPrefetch).length:0),',
-      '    "tx h="+(window.__shellTxCacheHits||0)+" m="+(window.__shellTxCacheMisses||0)+" sk="+(window.__shellTxSkipCount||0)+" do="+(window.__shellTxDoCount||0)+" tv="+(window.__TXVER||"?"),',
+      // JEL-131: pr= prime counters f/t/e/q(+stop reason) from
+      // window.__shellTxPrime — "-" when the primer is disabled/absent.
+      '    "tx h="+(window.__shellTxCacheHits||0)+" m="+(window.__shellTxCacheMisses||0)+" sk="+(window.__shellTxSkipCount||0)+" do="+(window.__shellTxDoCount||0)+" tv="+(window.__TXVER||"?")+" pr="+(function(){var P=window.__shellTxPrime;return P?P.f+"/"+P.t+"/"+P.e+"/"+P.q+(P.st?":"+P.st:""):"-";})(),',
       '    "IC:"+(window.__shellIndexCacheRecords||0)+"/"+(window.__shellIndexCacheHits||0)+" ms="+(window.__shellIndexCacheSavedMs||0)+" a="+(window.__shellWebIndexCacheAdopted||0),',
       '    "MB:"+(window.__shellMainBundleLSAdopted||0)+"/"+(window.__shellMainBundleInlineHits||0)+" b="+(window.__shellMainBundleLSBytes||0)+" q="+(window.__shellMainBundleQuotaErr||0),',
       '    "VB:"+(window.__shellVendorsBundleLSAdopted||0)+"/"+(window.__shellVendorsBundleInlineHits||0)+" b="+(window.__shellVendorsBundleLSBytes||0)+" q="+(window.__shellVendorsBundleQuotaErr||0),',
