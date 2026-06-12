@@ -1,8 +1,8 @@
 {
-  "version": "2.0.11",
+  "version": "2.0.12",
   "kind": "bootstrap-wgt",
-  "filename": "JellyPlugBootstrap_v2.0.11.wgt",
-  "sha256": "2bc589bef5908c095523a80df8c2b64ed5763a50f61e5371d734f2fe5eb651a9",
-  "sizeBytes": 587923,
+  "filename": "JellyPlugBootstrap_v2.0.12.wgt",
+  "sha256": "63845a09e7aa3c8436a8866167279f5cca439fe60d48ee324103a916b1bb4837",
+  "sizeBytes": 588907,
   "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required."
 }
