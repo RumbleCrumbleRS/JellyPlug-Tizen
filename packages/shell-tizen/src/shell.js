@@ -86,7 +86,7 @@
   // non-word/non-`$`/non-`.` boundary restricts it to genuine BigInt
   // literals (`10n`) the way Chromium 63 actually needs.
   var MODERN_SYNTAX_RE_SRC =
-    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{";
+    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{";
   var MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC);
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
@@ -989,7 +989,7 @@
       // plugin parses fine on Chromium 56 as-is.
       // JEL-26: keep this seed-side pre-check in lockstep with the widget-side
       // MODERN_SYNTAX_RE_SRC above, including the BigInt false-positive anchor.
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
@@ -2061,6 +2061,19 @@
       "    function __shellWalkWebpack(){",
       "      window.__shellCMTries++;",
       "      try{",
+      // JEL-137: never force-require modules before the webpack entry
+      // completed (window.ApiClient is set by the entry). A premature
+      // wr(mid) mid-bundle-sequence throws on missing cross-bundle deps
+      // (swallowed by the per-module catch below) and leaves
+      // ServerConnections/its consumers half-evaluated in the module cache
+      // forever => login route tF getter TypeError => black login page.
+      // The CM/PM/PluginManager instances this walker hunts only exist
+      // after the entry ran anyway, so waiting loses nothing.
+      '        if(typeof window.ApiClient==="undefined"){',
+      "          if(window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
+      '          else window.__shellCMErr=\"noApiClient\";',
+      "          return;",
+      "        }",
       "        var chunkKey=null;",
       "        for(var k in window){if(/^webpackChunk/.test(k)){chunkKey=k;break;}}",
       "        if(!chunkKey){setTimeout(__shellWalkWebpack,300);return;}",
@@ -2098,13 +2111,13 @@
       '                 fs.indexOf("pluginsList")===-1&&',
       '                 fs.indexOf("loadPlugin")===-1)continue;',
       "              var modEx=null;",
-      "              try{modEx=wr(mid);}catch(_){continue;}",
+      "              try{modEx=wr(mid);}catch(e){window.__shellCMReqErrs=(window.__shellCMReqErrs||0)+1;continue;}",
       "              if(modEx)__shellScanExports(modEx);",
       "              if(window.__shellCMPatched&&window.__shellPMPatched&&window.__shellPluginManager)break;",
       "            }catch(_){}",
       "          }",
       "        }",
-      "        if((!window.__shellCMPatched||!window.__shellPMPatched||!window.__shellPluginManager)&&window.__shellCMTries<60)setTimeout(__shellWalkWebpack,500);",
+      "        if((!window.__shellCMPatched||!window.__shellPMPatched||!window.__shellPluginManager)&&window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
       '      }catch(e){window.__shellCMErr="walk:"+String(e.message).slice(0,40);setTimeout(__shellWalkWebpack,500);}',
       "    }",
       "    setTimeout(__shellWalkWebpack,200);",
@@ -3393,6 +3406,25 @@
       try {
         if (typeof window.ApiClient !== "undefined") return;
         if (typeof window.__webpack_require__ !== "undefined") return;
+        // JEL-137: a partially-executed defer sequence is NOT the JEL-99
+        // wedge. Every jellyfin-web bundle starts with
+        // `(self.webpackChunk=self.webpackChunk||[]).push(...)`, so the
+        // array's existence proves at least one defer already executed and
+        // the sequence is alive — just slow. Re-injecting then re-runs every
+        // already-run bundle: two webpack runtimes, two module caches, and
+        // route chunks bind half-evaluated modules from the stale cache
+        // (login tF getter TypeError -> black login page). Only re-inject
+        // when NO bundle ever executed.
+        var wpc = null;
+        try {
+          wpc = window.webpackChunk || window.webpackJsonp;
+        } catch (_) {}
+        if (wpc) {
+          window.__shellDeferWatchdogSkipped =
+            (window.__shellDeferWatchdogSkipped || 0) + 1;
+          window.__shellDeferWatchdogSkipReason = "webpackChunkExists";
+          return;
+        }
         var defers = document.querySelectorAll("script[defer][src]");
         if (!defers || !defers.length) return;
         try {
