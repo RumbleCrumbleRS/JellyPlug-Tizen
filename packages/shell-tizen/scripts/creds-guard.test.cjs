@@ -34,6 +34,42 @@
 //     B11. config.json seed shim still short-circuits through the guard's
 //          fetch wrapper (interplay).
 //
+// JEL-134 (JEL-132 v2) — IndexedDB creds vault. The on-device trail capture
+// (tooling/tv-validate/creds-guard/jel132-trail-capture.md) proved hard TV
+// restarts roll localStorage back to the last durable commit, destroying a
+// freshly-saved token — no setItem veto survives that. The guard now mirrors
+// tokened jellyfin_credentials writes into IDB (jellyfin_shell/kv, key
+// credsBackup) and both shells restore from the vault in the pre-rewrite
+// boot path (restoreCredsVault, gated into the document.write Promise.all).
+//
+//   PART C — VAULT MIRROR POLICY (both src seeds, vm harness):
+//     C1. tokened creds write → mirrored into the vault (counter vm).
+//     C2. boot-time mirror: LS already tokened when the seed runs → vault
+//         primed without any setItem (pre-JEL-134 login convergence).
+//     C3. observed POST /Sessions/Logout + tokenless write → vault synced
+//         tokenless (intentional sign-outs never resurrected).
+//     C4. 401 validate + tokenless write → vault synced tokenless (revoked
+//         tokens never resurrected).
+//     C5. causeless tokenless write (rollback-recreated server entry) →
+//         vault NOT overwritten.
+//     C6. enableAutoLogin === "false" → no mirroring at all.
+//     C7. kill switch jellyfin.shell.credsGuardDisabled=1 → vault off.
+//     C8. vetoed strip → vault re-mirrors the merged (tokened) value.
+//   PART D — VAULT RESTORE POLICY (both shells' restoreCredsVault):
+//     D1. LS creds key absent + tokened vault → whole vault value restored,
+//         trail {e:"restore"} recorded, __shellCredsRestored counter set.
+//     D2. LS creds present tokenless (same server Id) + tokened vault →
+//         token+UserId merged by Id, other fields of the LS write kept.
+//     D3. LS already tokened → no restore.
+//     D4. tokenless vault → no restore (post-invalidation state).
+//     D5. enableAutoLogin === "false" → no restore.
+//     D6. kill switch → no restore.
+//     D7. indexedDB missing/broken → resolves without restoring (boot
+//         never stalls; promise always settles).
+//     D8. vault server Id ≠ LS server Id → no cross-server resurrection.
+//     D9. composite no-loop: restore → 401 validate → strip passes AND
+//         invalidates the vault → second restore is a no-op.
+//
 // Run: node scripts/creds-guard.test.cjs
 //   or: pnpm --filter @jellyfin-tv/shell-tizen test
 
@@ -102,6 +138,15 @@ for (const [name, src] of ARTIFACTS) {
   );
   check(name + ": diag object present", src.includes("__shellCredsGuard"));
   check(name + ": XHR tap marker present", src.includes("__shellCgU"));
+  check(
+    name + ": vault DB/store/key present",
+    src.includes("jellyfin_shell") && src.includes("credsBackup"),
+  );
+  check(
+    name + ": restore diag counter present",
+    src.includes("__shellCredsRestored"),
+  );
+  check(name + ": autoLogin opt-out honored", src.includes("enableAutoLogin"));
 }
 
 // ============================================================================
@@ -161,6 +206,71 @@ function buildSeed(src) {
   vm.createContext(sb);
   const build = vm.runInContext("(" + fnSrc + ")", sb);
   return build(SERVER, {});
+}
+
+function extractRestoreFn(src) {
+  return extractTopFn(src, "restoreCredsVault").replace(
+    /^  function restoreCredsVault/,
+    "function",
+  );
+}
+
+// ---- IndexedDB fake: ES5 callback API, microtask-async like the real one.
+// Shared `store` object = the durable vault ({credsBackup: {v,ts,t}}).
+function makeIndexedDB(store) {
+  function fire(fn) {
+    Promise.resolve().then(() => {
+      if (typeof fn === "function") fn();
+    });
+  }
+  const api = {
+    _store: store,
+    _opens: 0,
+    _puts: 0,
+    open(name) {
+      api._opens++;
+      api._lastName = name;
+      const rq = {};
+      const db = {
+        close() {},
+        createObjectStore() {},
+        transaction() {
+          const tx = {};
+          tx.objectStore = function () {
+            return {
+              put(val, key) {
+                api._puts++;
+                store[key] = val;
+                fire(() => {
+                  if (tx.oncomplete) tx.oncomplete();
+                });
+                return {};
+              },
+              get(key) {
+                const r = {};
+                r.result = store[key];
+                fire(() => {
+                  if (r.onsuccess) r.onsuccess();
+                });
+                return r;
+              },
+            };
+          };
+          return tx;
+        },
+      };
+      rq.result = db;
+      fire(() => {
+        if (!api._upgraded) {
+          api._upgraded = true;
+          if (rq.onupgradeneeded) rq.onupgradeneeded();
+        }
+        if (rq.onsuccess) rq.onsuccess();
+      });
+      return rq;
+    },
+  };
+  return api;
 }
 
 function makeHarness(seedText, opts) {
@@ -228,6 +338,9 @@ function makeHarness(seedText, opts) {
   for (const k of Object.keys(opts.localStorage || {}))
     localStorage._s[k] = String(opts.localStorage[k]);
 
+  // ---- IndexedDB fake: opts.vault seeds the durable store -----------------
+  const idb = opts.noIndexedDB ? undefined : makeIndexedDB(opts.vault || {});
+
   function Response(body, init) {
     this._body = String(body);
     this.status = (init && init.status) || 200;
@@ -280,6 +393,7 @@ function makeHarness(seedText, opts) {
     setInterval: noopTimer,
     clearInterval() {},
     localStorage,
+    indexedDB: idb,
     Node: function () {},
     HTMLScriptElement: function () {},
     Element: function () {},
@@ -289,6 +403,7 @@ function makeHarness(seedText, opts) {
   sandbox.Element.prototype = {};
   win.addEventListener = () => {};
   win.fetch = vFetch;
+  win.indexedDB = idb;
   win.location = { replace() {}, hash: "", search: "" };
   win.setTimeout = noopTimer;
   win.setInterval = noopTimer;
@@ -302,13 +417,30 @@ function makeHarness(seedText, opts) {
   win.navigator = sandbox.navigator;
 
   vm.createContext(sandbox);
-  vm.runInContext(seedText, sandbox, { filename: "seed.js" });
+  if (seedText) vm.runInContext(seedText, sandbox, { filename: "seed.js" });
 
   async function drainMicro() {
     for (let i = 0; i < 20; i++) await Promise.resolve();
   }
 
-  return { win, sandbox, localStorage, sessionStorage, fetched, drainMicro };
+  // runs the lifted restoreCredsVault() inside this sandbox (pre-rewrite
+  // boot path uses the same globals: localStorage, indexedDB, window).
+  function runRestore(restoreFnSrc) {
+    return vm.runInContext("(" + restoreFnSrc + ")()", sandbox, {
+      filename: "restore.js",
+    });
+  }
+
+  return {
+    win,
+    sandbox,
+    localStorage,
+    sessionStorage,
+    fetched,
+    drainMicro,
+    idb,
+    runRestore,
+  };
 }
 
 function trailOf(h) {
@@ -546,9 +678,359 @@ async function scenarios(name, seedText) {
   }
 }
 
+// ============================================================================
+// PART C — VAULT MIRROR POLICY (seed-side)
+// ============================================================================
+const CREDS_FULL_2 = JSON.stringify({
+  Servers: [
+    {
+      Id: "srv1",
+      AccessToken: "tok456",
+      UserId: "u1",
+      ManualAddress: SERVER,
+      DateLastAccessed: 333,
+    },
+  ],
+});
+
+function vaultRec(h) {
+  return h.idb && h.idb._store ? h.idb._store.credsBackup : undefined;
+}
+
+async function vaultMirrorScenarios(name, seedText) {
+  // ---- C1: tokened creds write → mirrored -----------------------------------
+  {
+    const h = makeHarness(seedText, {});
+    h.localStorage.setItem(CK, CREDS_FULL);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    check(
+      name + " C1: login write mirrored into vault",
+      rec && rec.t === 1 && rec.v === CREDS_FULL,
+      JSON.stringify(rec),
+    );
+    check(
+      name + " C1: mirror counter vm=1",
+      h.win.__shellCredsGuard.vm === 1,
+      JSON.stringify(h.win.__shellCredsGuard),
+    );
+  }
+
+  // ---- C2: boot-time mirror of an already-tokened localStorage ---------------
+  {
+    const h = makeHarness(seedText, { localStorage: { [CK]: CREDS_FULL } });
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    check(
+      name + " C2: pre-existing token boot-mirrored",
+      rec &&
+        rec.t === 1 &&
+        rec.v === CREDS_FULL &&
+        h.win.__shellCredsGuard.vm === 1,
+      JSON.stringify(rec),
+    );
+  }
+
+  // ---- C3: logout → tokenless write syncs the vault tokenless ----------------
+  {
+    const h = makeHarness(seedText, {
+      localStorage: { [CK]: CREDS_FULL },
+      net: { "/Sessions/Logout": { status: 204 } },
+    });
+    await h.win.fetch(SERVER + "/Sessions/Logout");
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_STRIPPED);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    const G = h.win.__shellCredsGuard;
+    check(
+      name + " C3: logout invalidates the vault",
+      rec && rec.t === 0 && G.vinv === 1,
+      JSON.stringify({ rec, G }),
+    );
+  }
+
+  // ---- C4: 401 validate → tokenless write syncs the vault tokenless ----------
+  {
+    const h = makeHarness(seedText, {
+      localStorage: { [CK]: CREDS_FULL },
+      net: { "/System/Info": { status: 401 } },
+    });
+    await h.win.fetch(SERVER + "/System/Info");
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_STRIPPED);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    check(
+      name + " C4: 401-revoked token invalidates the vault",
+      rec && rec.t === 0 && h.win.__shellCredsGuard.vinv === 1,
+      JSON.stringify(rec),
+    );
+  }
+
+  // ---- C5: causeless tokenless write does NOT overwrite the vault ------------
+  {
+    const h = makeHarness(seedText, { localStorage: { [CK]: CREDS_FULL } });
+    await h.drainMicro(); // boot mirror lands first
+    h.localStorage.setItem(CK, CREDS_STRIPPED);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    const G = h.win.__shellCredsGuard;
+    check(
+      name + " C5: causeless strip leaves the vault tokened",
+      rec && rec.t === 1 && rec.v === CREDS_FULL && G.vinv === 0,
+      JSON.stringify({ rec, G }),
+    );
+  }
+
+  // ---- C6: enableAutoLogin === "false" → no mirroring at all -----------------
+  {
+    const h = makeHarness(seedText, {
+      localStorage: { [CK]: CREDS_FULL, enableAutoLogin: "false" },
+    });
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_FULL_2);
+    await h.drainMicro();
+    const G = h.win.__shellCredsGuard;
+    check(
+      name + " C6: autoLogin opt-out → vault never written",
+      vaultRec(h) === undefined && G.vm === 0 && G.vinv === 0,
+      JSON.stringify({ rec: vaultRec(h), G }),
+    );
+  }
+
+  // ---- C7: kill switch disables the vault too --------------------------------
+  {
+    const h = makeHarness(seedText, {
+      localStorage: {
+        [CK]: CREDS_FULL,
+        "jellyfin.shell.credsGuardDisabled": "1",
+      },
+    });
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_FULL_2);
+    await h.drainMicro();
+    check(
+      name + " C7: kill switch → no vault writes, no IDB opens",
+      vaultRec(h) === undefined && h.idb._opens === 0,
+      JSON.stringify(vaultRec(h)),
+    );
+  }
+
+  // ---- C8: vetoed strip re-mirrors the merged (tokened) value ----------------
+  {
+    const h = makeHarness(seedText, {
+      localStorage: { [CK]: CREDS_FULL },
+      net: { "/System/Info": "reject" },
+    });
+    await h.win.fetch(SERVER + "/System/Info").catch(() => {});
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_STRIPPED);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    let merged = null;
+    try {
+      merged = JSON.parse(rec.v).Servers[0];
+    } catch (_) {}
+    check(
+      name + " C8: vetoed strip mirrors the merged tokened value",
+      rec &&
+        rec.t === 1 &&
+        merged &&
+        merged.AccessToken === "tok123" &&
+        merged.DateLastAccessed === 222,
+      JSON.stringify(rec),
+    );
+  }
+}
+
+// ============================================================================
+// PART D — VAULT RESTORE POLICY (boot-side restoreCredsVault)
+// ============================================================================
+const VAULT_FULL = { v: CREDS_FULL, ts: 1111, t: 1 };
+const VAULT_TOKENLESS = { v: CREDS_STRIPPED, ts: 2222, t: 0 };
+const CREDS_OTHER_SERVER = JSON.stringify({
+  Servers: [
+    {
+      Id: "srv2",
+      AccessToken: null,
+      UserId: null,
+      ManualAddress: "https://other.test",
+      DateLastAccessed: 444,
+    },
+  ],
+});
+
+async function restoreScenarios(name, restoreFnSrc, seedText) {
+  // ---- D1: creds key absent + tokened vault → wholesale restore --------------
+  {
+    const h = makeHarness(null, { vault: { credsBackup: VAULT_FULL } });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D1: vault restored wholesale when creds key absent",
+      h.localStorage.getItem(CK) === CREDS_FULL,
+      h.localStorage.getItem(CK),
+    );
+    check(name + " D1: restore counter set", h.win.__shellCredsRestored === 1);
+    const tr = trailOf(h);
+    check(
+      name + " D1: trail records {e:restore,t:1}",
+      tr && tr.length === 1 && tr[0].e === "restore" && tr[0].t === 1,
+      JSON.stringify(tr),
+    );
+  }
+
+  // ---- D2: tokenless creds (same Id) + tokened vault → merge by Id -----------
+  {
+    const h = makeHarness(null, {
+      localStorage: { [CK]: CREDS_STRIPPED },
+      vault: { credsBackup: VAULT_FULL },
+    });
+    await h.runRestore(restoreFnSrc);
+    const after = JSON.parse(h.localStorage.getItem(CK));
+    check(
+      name + " D2: token+UserId merged by server Id, new fields kept",
+      after.Servers[0].AccessToken === "tok123" &&
+        after.Servers[0].UserId === "u1" &&
+        after.Servers[0].DateLastAccessed === 222,
+      h.localStorage.getItem(CK),
+    );
+  }
+
+  // ---- D3: localStorage already tokened → no restore --------------------------
+  {
+    const h = makeHarness(null, {
+      localStorage: { [CK]: CREDS_FULL_2 },
+      vault: { credsBackup: VAULT_FULL },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D3: tokened localStorage left untouched",
+      h.localStorage.getItem(CK) === CREDS_FULL_2 &&
+        h.win.__shellCredsRestored === undefined,
+      h.localStorage.getItem(CK),
+    );
+  }
+
+  // ---- D4: tokenless vault → no restore ---------------------------------------
+  {
+    const h = makeHarness(null, {
+      vault: { credsBackup: VAULT_TOKENLESS },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D4: tokenless vault restores nothing",
+      h.localStorage.getItem(CK) === null &&
+        h.win.__shellCredsRestored === undefined,
+    );
+  }
+
+  // ---- D5: enableAutoLogin === "false" → no restore ---------------------------
+  {
+    const h = makeHarness(null, {
+      localStorage: { enableAutoLogin: "false" },
+      vault: { credsBackup: VAULT_FULL },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D5: autoLogin opt-out skips restore",
+      h.localStorage.getItem(CK) === null && h.idb._opens === 0,
+    );
+  }
+
+  // ---- D6: kill switch → no restore -------------------------------------------
+  {
+    const h = makeHarness(null, {
+      localStorage: { "jellyfin.shell.credsGuardDisabled": "1" },
+      vault: { credsBackup: VAULT_FULL },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D6: kill switch skips restore",
+      h.localStorage.getItem(CK) === null && h.idb._opens === 0,
+    );
+  }
+
+  // ---- D7: indexedDB missing → resolves without restoring ---------------------
+  {
+    const h = makeHarness(null, { noIndexedDB: true });
+    let settled = false;
+    await h.runRestore(restoreFnSrc).then(() => {
+      settled = true;
+    });
+    check(
+      name + " D7: missing indexedDB → promise settles, no restore",
+      settled && h.localStorage.getItem(CK) === null,
+    );
+  }
+
+  // ---- D8: vault Id ≠ creds Id → no cross-server resurrection ------------------
+  {
+    const h = makeHarness(null, {
+      localStorage: { [CK]: CREDS_OTHER_SERVER },
+      vault: { credsBackup: VAULT_FULL },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D8: foreign server entry never gets the vaulted token",
+      h.localStorage.getItem(CK) === CREDS_OTHER_SERVER &&
+        h.win.__shellCredsRestored === undefined,
+      h.localStorage.getItem(CK),
+    );
+  }
+
+  // ---- D9: composite no-loop — restore → 401 → invalidation → no re-restore ---
+  {
+    const h = makeHarness(seedText, {
+      vault: { credsBackup: VAULT_FULL },
+      net: { "/System/Info": { status: 401 } },
+    });
+    await h.runRestore(restoreFnSrc);
+    check(
+      name + " D9: first restore lands the vaulted token",
+      h.localStorage.getItem(CK) === CREDS_FULL &&
+        h.win.__shellCredsRestored === 1,
+    );
+    // jellyfin-web validates the restored token; the server says 401.
+    await h.win.fetch(SERVER + "/System/Info");
+    await h.drainMicro();
+    h.localStorage.setItem(CK, CREDS_STRIPPED);
+    await h.drainMicro();
+    const rec = vaultRec(h);
+    check(
+      name + " D9: 401 strip passes through AND invalidates the vault",
+      JSON.parse(h.localStorage.getItem(CK)).Servers[0].AccessToken === null &&
+        rec &&
+        rec.t === 0,
+      JSON.stringify(rec),
+    );
+    await h.runRestore(restoreFnSrc);
+    const tr = trailOf(h);
+    check(
+      name + " D9: second restore is a no-op (no loop)",
+      JSON.parse(h.localStorage.getItem(CK)).Servers[0].AccessToken === null &&
+        h.win.__shellCredsRestored === 1 &&
+        tr.filter((e) => e.e === "restore").length === 1,
+      JSON.stringify(tr),
+    );
+  }
+}
+
 (async () => {
   await scenarios("shell.js seed", buildSeed(tvSrc));
   await scenarios("boot-shell.src.js seed", buildSeed(bootSrc));
+  await vaultMirrorScenarios("shell.js seed", buildSeed(tvSrc));
+  await vaultMirrorScenarios("boot-shell.src.js seed", buildSeed(bootSrc));
+  await restoreScenarios(
+    "shell.js restore",
+    extractRestoreFn(tvSrc),
+    buildSeed(tvSrc),
+  );
+  await restoreScenarios(
+    "boot-shell.src.js restore",
+    extractRestoreFn(bootSrc),
+    buildSeed(bootSrc),
+  );
 
   if (failures) {
     console.error("\n" + failures + " FAILURE(S)");

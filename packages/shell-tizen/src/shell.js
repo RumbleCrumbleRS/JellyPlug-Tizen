@@ -723,16 +723,41 @@
       //     attributable: key absent at boot right after a token=1 boot
       //     means store-level loss (the JEL-132 alternate hypothesis),
       //     while a strip event pins the validate-clear path.
+      // JEL-134 (JEL-132 v2): creds vault. The on-device trail capture
+      // (tooling/tv-validate/creds-guard/jel132-trail-capture.md) proved a
+      // hard TV restart rolls localStorage back to the last durable commit
+      // (76 -> 16 keys observed), destroying a freshly-saved login token —
+      // no setItem veto can survive a storage-level rollback. IndexedDB
+      // transactions ARE durable across power cuts, so the guard now also
+      // mirrors every tokened jellyfin_credentials write into IDB
+      // (jellyfin_shell/kv, key credsBackup) and restoreCredsVault() (the
+      // pre-rewrite boot path) writes the token back when localStorage
+      // lost it. Tokenless writes sync the vault tokenless ONLY with a
+      // legitimate cause (observed POST /Sessions/Logout, or a recent
+      // 401/403 validate) so intentional sign-outs and revoked tokens are
+      // never resurrected; causeless tokenless writes (rollback-recreated
+      // server entries) leave the vault alone. Mirroring is skipped
+      // entirely when enableAutoLogin === "false" (user opted out of
+      // persistent login — the shell must not out-persist that choice).
+      // Token values never appear in trail/diag — presence + counters only
+      // (vm = mirrors, vinv = tokenless invalidations on G).
       // Kill switch: localStorage["jellyfin.shell.credsGuardDisabled"]="1".
-      // Diag: window.__shellCredsGuard={st,strips,vetoes,lastVal,lo,boot}.
+      // Diag: window.__shellCredsGuard={st,strips,vetoes,vm,vinv,lastVal,lo,boot}.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.credsGuardDisabled")==="1"){window.__shellCredsGuard={st:"off"};return;}',
       '    var CK="jellyfin_credentials",TRK="jellyfin.shell.credsTrail";',
-      '    var G={st:"on",strips:0,vetoes:0,lastVal:null,lo:0,boot:null};window.__shellCredsGuard=G;',
+      '    var G={st:"on",strips:0,vetoes:0,vm:0,vinv:0,lastVal:null,lo:0,boot:null};window.__shellCredsGuard=G;',
       "    function rd(){try{var c=localStorage.getItem(CK);if(c==null)return{p:0,n:0,t:0};var j=JSON.parse(c);var sv=(j&&j.Servers)||[];var t=0;for(var i=0;i<sv.length;i++)if(sv[i]&&sv[i].AccessToken)t++;return{p:1,n:sv.length,t:t};}catch(_){return{p:-1,n:0,t:0};}}",
       '    function trail(ev){try{var r;try{r=JSON.parse(localStorage.getItem(TRK)||"[]");}catch(_){r=null;}if(!r||!r.push)r=[];r.push(ev);while(r.length>8)r.shift();localStorage.setItem(TRK,JSON.stringify(r));}catch(_){}}',
+      "    function tokCnt(s){try{var j=JSON.parse(s);var sv=(j&&j.Servers)||[];var t=0;for(var i=0;i<sv.length;i++)if(sv[i]&&sv[i].AccessToken)t++;return t;}catch(_){return -1;}}",
+      '    function idbPut(val){try{var rq=indexedDB.open("jellyfin_shell",1);rq.onupgradeneeded=function(){try{rq.result.createObjectStore("kv");}catch(_){}};rq.onsuccess=function(){try{var db=rq.result,tx=db.transaction("kv","readwrite");tx.objectStore("kv").put(val,"credsBackup");tx.oncomplete=tx.onabort=tx.onerror=function(){try{db.close();}catch(_){}};}catch(_){}};rq.onerror=function(){};}catch(_){}}',
+      "    function loCause(){if(G.lo&&Date.now()-G.lo<120000)return true;var v=G.lastVal;return !!(v&&Date.now()-v.ts<=60000&&(v.s===401||v.s===403));}",
+      '    function vault(v){try{if(localStorage.getItem("enableAutoLogin")==="false")return;var t=tokCnt(v);if(t>0){G.vm++;idbPut({v:String(v),ts:Date.now(),t:t});}else if(t===0&&loCause()){G.vinv++;idbPut({v:String(v),ts:Date.now(),t:0});}}catch(_){}}',
       "    var b=rd(),ln=-1;try{ln=localStorage.length;}catch(_){}",
       '    G.boot={ts:Date.now(),p:b.p,n:b.n,t:b.t,ls:ln};trail({e:"boot",ts:G.boot.ts,p:b.p,n:b.n,t:b.t,ls:ln});',
+      // boot-time mirror: converge the vault on a token that was written
+      // before the vault existed (e.g. a login on a pre-JEL-134 build).
+      "    try{if(b.t>0)vault(localStorage.getItem(CK));}catch(_){}",
       '    function isVal(u){return /\\/System\\/Info(\\?|$)/.test(String(u||""));}',
       '    function isLo(u){return /\\/Sessions\\/Logout(\\?|$)/.test(String(u||""));}',
       "    function mark(u,s){try{if(isVal(u))G.lastVal={s:s|0,ts:Date.now()};}catch(_){}}",
@@ -740,7 +765,7 @@
       '    try{var gO=XMLHttpRequest.prototype.open,gS=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(m,u){this.__shellCgU=String(u||"");return gO.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){var x=this,u=x.__shellCgU||"";if(isLo(u))G.lo=Date.now();if(isVal(u)){try{x.addEventListener("loadend",function(){mark(u,x.status);});}catch(_){}}return gS.apply(this,arguments);};}catch(_){}',
       "    function merge(os,ns){try{if(os==null||ns==null)return null;var o=JSON.parse(os),n=JSON.parse(ns);var ov=(o&&o.Servers)||[],nv=(n&&n.Servers)||[];if(!ov.length||!nv.length)return null;var m={},i;for(i=0;i<ov.length;i++)if(ov[i]&&ov[i].Id&&ov[i].AccessToken)m[ov[i].Id]={t:ov[i].AccessToken,u:ov[i].UserId};var hit=0;for(i=0;i<nv.length;i++){var s=nv[i];if(s&&s.Id&&!s.AccessToken&&m[s.Id]){hit++;s.AccessToken=m[s.Id].t;if(!s.UserId&&m[s.Id].u)s.UserId=m[s.Id].u;}}return hit?JSON.stringify(n):null;}catch(_){return null;}}",
       "    function vetoOk(){if(G.lo&&Date.now()-G.lo<120000)return false;var v=G.lastVal;if(!v)return false;if(Date.now()-v.ts>60000)return false;var s=v.s;if(s===401||s===403)return false;return s===0||s>=500;}",
-      '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
+      '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});vault(mg);return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}vault(v);}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
       "  })();}catch(_){}",
       // JEL-1580: post-login Home leaves activeElement on <body> on
       // Tizen — focusManager.nav() searches geometrically beyond the
@@ -3633,6 +3658,137 @@
     } catch (_) {}
   }
 
+  function restoreCredsVault() {
+    // JEL-134 (JEL-132 v2): boot-time restore from the IndexedDB creds
+    // vault. A hard TV restart rolls localStorage back to the last durable
+    // commit (on-device evidence: 76 -> 16 keys), destroying a
+    // freshly-saved login token; the seed's creds-guard mirrors tokened
+    // jellyfin_credentials writes into IDB (durable across power cuts).
+    // This runs in the async pre-rewrite boot path — gated into the
+    // document.write Promise.all — so jellyfin-web always boots against
+    // the restored creds. Policy:
+    //   - no-op when localStorage already holds any AccessToken, when the
+    //     vault is tokenless/absent, when enableAutoLogin === "false", or
+    //     when the shared kill switch jellyfin.shell.credsGuardDisabled=1;
+    //   - merge by server Id (a vaulted token never attaches to a
+    //     different server); creds key absent entirely -> restore whole
+    //     vault value (the observed post-rollback state);
+    //   - records trail event {e:"restore"} + window.__shellCredsRestored.
+    // No restore loop: a restored token the next validate 401s gets
+    // stripped (guard allows legit clears) AND that strip syncs the vault
+    // tokenless, so the next boot has nothing to restore.
+    // Always resolves (never rejects, 3 s bound) so a wedged IndexedDB
+    // cannot stall boot. Token values never logged.
+    return new Promise(function (resolve) {
+      var done = false;
+      function fin() {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      }
+      setTimeout(fin, 3000);
+      try {
+        if (
+          localStorage.getItem("jellyfin.shell.credsGuardDisabled") === "1" ||
+          localStorage.getItem("enableAutoLogin") === "false"
+        )
+          return fin();
+        var CK = "jellyfin_credentials";
+        var cur = null;
+        try {
+          cur = localStorage.getItem(CK);
+        } catch (_) {}
+        var curJ = null;
+        var curT = 0;
+        try {
+          curJ = cur == null ? null : JSON.parse(cur);
+          var sv = (curJ && curJ.Servers) || [];
+          for (var i = 0; i < sv.length; i++)
+            if (sv[i] && sv[i].AccessToken) curT++;
+        } catch (_) {
+          curJ = null;
+        }
+        if (curT > 0) return fin();
+        var rq = indexedDB.open("jellyfin_shell", 1);
+        rq.onupgradeneeded = function () {
+          try {
+            rq.result.createObjectStore("kv");
+          } catch (_) {}
+        };
+        rq.onerror = fin;
+        rq.onsuccess = function () {
+          var db = rq.result;
+          function settle() {
+            try {
+              db.close();
+            } catch (_) {}
+            fin();
+          }
+          try {
+            var get = db
+              .transaction("kv", "readonly")
+              .objectStore("kv")
+              .get("credsBackup");
+            get.onerror = settle;
+            get.onsuccess = function () {
+              try {
+                var rec = get.result;
+                if (rec && rec.t > 0 && typeof rec.v === "string") {
+                  var next = null;
+                  var vj = JSON.parse(rec.v);
+                  var vsv = (vj && vj.Servers) || [];
+                  if (curJ && curJ.Servers && curJ.Servers.length) {
+                    var m = {};
+                    var hit = 0;
+                    var k;
+                    for (k = 0; k < vsv.length; k++)
+                      if (vsv[k] && vsv[k].Id && vsv[k].AccessToken)
+                        m[vsv[k].Id] = vsv[k];
+                    for (k = 0; k < curJ.Servers.length; k++) {
+                      var s = curJ.Servers[k];
+                      if (s && s.Id && !s.AccessToken && m[s.Id]) {
+                        s.AccessToken = m[s.Id].AccessToken;
+                        if (!s.UserId && m[s.Id].UserId)
+                          s.UserId = m[s.Id].UserId;
+                        hit++;
+                      }
+                    }
+                    if (hit) next = JSON.stringify(curJ);
+                  } else if (vsv.length) {
+                    next = rec.v;
+                  }
+                  if (next != null) {
+                    localStorage.setItem(CK, next);
+                    window.__shellCredsRestored =
+                      (window.__shellCredsRestored || 0) + 1;
+                    try {
+                      var TRK = "jellyfin.shell.credsTrail";
+                      var r;
+                      try {
+                        r = JSON.parse(localStorage.getItem(TRK) || "[]");
+                      } catch (_) {
+                        r = null;
+                      }
+                      if (!r || !r.push) r = [];
+                      r.push({ e: "restore", ts: Date.now(), t: rec.t });
+                      while (r.length > 8) r.shift();
+                      localStorage.setItem(TRK, JSON.stringify(r));
+                    } catch (_) {}
+                  }
+                }
+              } catch (_) {}
+              settle();
+            };
+          } catch (_) {
+            settle();
+          }
+        };
+      } catch (_) {
+        fin();
+      }
+    });
+  }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/";
     // JEL-1034 (v53): speculative babel prime, flag-gated.
@@ -3814,136 +3970,143 @@
               throw new Error("Failed to parse web config");
             }
           });
-    return Promise.all([indexPromise, configPromise]).then(function (results) {
-      var html = results[0];
-      var upstreamCfg = results[1];
-      // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
-      // (~200-500 ms on Chromium 56) when caches are primed.
-      var fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
-      if (fast) {
-        window.__jellyfinShellBootDone = true;
-        markDocumentWrite();
-        document.open("text/html", "replace");
-        document.write(fast);
-        document.close();
-        armDeferWatchdog();
-        return;
-      }
-      var doc = new DOMParser().parseFromString(html, "text/html");
-      // Force <base href> so relative links resolve to the server.
-      var existingBase = doc.querySelector("base");
-      if (existingBase) existingBase.remove();
-      var baseTag = doc.createElement("base");
-      baseTag.href = baseUrl;
-      doc.head.insertBefore(baseTag, doc.head.firstChild);
-      // Diagnostic HUD seed runs before EVERYTHING else so it can
-      // capture parse-time errors from polyfills, plugins, and
-      // jellyfin-web itself. Pre-seed init values now; transpile
-      // counts are filled in below before document.write.
-      window.__shellDiagInit = window.__shellDiagInit || {};
-      window.__shellDiagInit.legacy = isLegacyChromium();
-      window.__shellDiagInit.babel = typeof window.Babel !== "undefined";
-      window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy;
-      var diagTag = doc.createElement("script");
-      diagTag.setAttribute("data-shell-diag", "1");
-      // JEL-1034 (v53): lazy-load babel; defer 3.13 MB fetch until
-      // first plugin actually needs transpile.
-      // JEL-1215: '__SHELL_VER__' is build-time substituted by
-      // build_shell_min.py with config.xml's widget version so the
-      // HUD reports the deployed widget version (single source of
-      // truth = config.xml). Unbuilt loads keep the placeholder.
-      diagTag.textContent = buildDiagSeedScript("__SHELL_VER__");
-      doc.head.insertBefore(diagTag, baseTag);
-      // Seed config.json BEFORE any jellyfin-web script runs so the
-      // user only enters the server URL once (in the shell).
-      var seedTag = doc.createElement("script");
-      seedTag.setAttribute("data-shell-seed", "1");
-      seedTag.textContent = buildSeedScript(serverUrl, upstreamCfg);
-      if (baseTag.nextSibling)
-        doc.head.insertBefore(seedTag, baseTag.nextSibling);
-      else doc.head.appendChild(seedTag);
-      injectChromium56Polyfills(doc);
-      // JEL-1971: append QA HTTP beacon script tag (no-op in prod;
-      // gated inside the body on localStorage['jellyfin.qa.overlay']).
-      injectQaBeacon(doc);
-      // JEL-126: boot progress dots that survive the ~20 s main-thread
-      // blackout while jellyfin-web parses+executes (legacy-only).
-      injectBootProgress(doc);
-      // JEL-554 (v29): run bundle patch + legacy transpile in parallel.
-      // They touch disjoint <script> sets (bundle patcher gates on
-      // main.*.bundle.js, transpileLegacyScripts skips bundles via
-      // isJellyfinWebBundle) so there's no contention.
-      return Promise.all([
-        patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
-        transpileLegacyScripts(doc, baseUrl),
-      ]).then(function () {
-        window.__jellyfinShellBootDone = true;
-        markDocumentWrite();
-        document.open("text/html", "replace");
-        document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
-        document.close();
-        // JEL-554 (v32): Chromium 56 defer-script lifecycle bug.
-        //
-        // QA on JEL-555 v29 (verdict reassigned to FoundingEngineer)
-        // proved that after document.open + document.write +
-        // document.close on Tizen 5.0 (Chromium 56), <script defer
-        // src=...> tags in the freshly-written document silently
-        // NEVER execute. readyState reaches "complete" but the
-        // webpack runtime is never installed; the SPA hangs at
-        // splashLogo and never reaches mainPage.
-        //
-        // The original verdict explained the trigger as inline
-        // bundles (patchPlaybackBundles cache hit) racing the defer
-        // queue. v31 still inlines main.jellyfin.bundle.js on
-        // legacy Chromium (the serverId patch path) and the QA
-        // re-run on physical TV shows warm boot still hangs after
-        // shellBoot. Reproducer-confirmed unblock: manually
-        // appending the deferred runtime.bundle.js as a fresh
-        // <script> immediately resumes the SPA.
-        //
-        // Watchdog: 5.5 s after document.close, if window.ApiClient
-        // and __webpack_require__ are both undefined, re-inject
-        // every <script defer src> in source order as a NON-defer
-        // script. Safe on modern Chromium (ApiClient will be
-        // present, watchdog no-ops). Safe on cold boot success
-        // (same no-op exit). Fires only when the defer queue
-        // genuinely failed.
-        //
-        // JEL-554 (v34): timeout was 2000 ms. QA confirmed normal
-        // cold-boot defers on physical TV take 2.5-3.5 s to install
-        // ApiClient — the 2 s watchdog fired BEFORE healthy defers
-        // finished and double-injected all 28 scripts, adding
-        // 5-10 s of CPU overhead (cold hasCards 30.98 s with
-        // double-inject vs 26.20 s without). Bumped to 5500 ms so
-        // the watchdog only fires for the genuine warm-boot hang
-        // (which is permanent — 5.5 s still catches it).
-        //
-        // JEL-723: the fixed 5500 ms blind wait was the wrong
-        // signal. The defer hang is INTERMITTENT (profiled on
-        // physical TV: one cold boot self-ran defers, api=2948 ms,
-        // watchdog never fired; another hung, watchdog fired at
-        // ~5.5 s). On the hung boots the 5500 ms timer is pure
-        // dead time — and you cannot shorten a blind timer without
-        // risking the v34 double-inject on slow-but-healthy boots
-        // (re-injecting at setTimeout(0) races the browser's own
-        // defer queue and double-runs the webpack runtime — JEL-723
-        // v45/v46 confirmed that breaks boot outright).
-        //
-        // Replace the blind timer with a POSITIVE hang signal:
-        // poll every 150 ms; the defer queue has provably been
-        // abandoned once document.readyState === 'complete' while
-        // __webpack_require__ is still undefined (per the v32
-        // analysis above — readyState reaches complete but the
-        // runtime is never installed). Require the signal to hold
-        // for 2 consecutive polls (~300 ms grace) so a healthy
-        // defer that runs a tick after 'complete' is not mistaken
-        // for a hang. The instant __webpack_require__/ApiClient
-        // appears the poll cancels with no re-inject (healthy
-        // boot, zero cost — identical to the old timer no-op).
-        // 5500 ms stays as the hard-cap fallback.
-        armDeferWatchdog();
-      });
-    });
+    // JEL-134: vault restore joins the document.write gate so jellyfin-web
+    // always boots against restored creds. It overlaps the index/config
+    // RTTs (IDB read is ~ms) and is 3 s-bounded, never-rejecting — it can
+    // delay boot only when the network is faster than IndexedDB.
+    var credsRestorePromise = restoreCredsVault();
+    return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
+      function (results) {
+        var html = results[0];
+        var upstreamCfg = results[1];
+        // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
+        // (~200-500 ms on Chromium 56) when caches are primed.
+        var fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
+        if (fast) {
+          window.__jellyfinShellBootDone = true;
+          markDocumentWrite();
+          document.open("text/html", "replace");
+          document.write(fast);
+          document.close();
+          armDeferWatchdog();
+          return;
+        }
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        // Force <base href> so relative links resolve to the server.
+        var existingBase = doc.querySelector("base");
+        if (existingBase) existingBase.remove();
+        var baseTag = doc.createElement("base");
+        baseTag.href = baseUrl;
+        doc.head.insertBefore(baseTag, doc.head.firstChild);
+        // Diagnostic HUD seed runs before EVERYTHING else so it can
+        // capture parse-time errors from polyfills, plugins, and
+        // jellyfin-web itself. Pre-seed init values now; transpile
+        // counts are filled in below before document.write.
+        window.__shellDiagInit = window.__shellDiagInit || {};
+        window.__shellDiagInit.legacy = isLegacyChromium();
+        window.__shellDiagInit.babel = typeof window.Babel !== "undefined";
+        window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy;
+        var diagTag = doc.createElement("script");
+        diagTag.setAttribute("data-shell-diag", "1");
+        // JEL-1034 (v53): lazy-load babel; defer 3.13 MB fetch until
+        // first plugin actually needs transpile.
+        // JEL-1215: '__SHELL_VER__' is build-time substituted by
+        // build_shell_min.py with config.xml's widget version so the
+        // HUD reports the deployed widget version (single source of
+        // truth = config.xml). Unbuilt loads keep the placeholder.
+        diagTag.textContent = buildDiagSeedScript("__SHELL_VER__");
+        doc.head.insertBefore(diagTag, baseTag);
+        // Seed config.json BEFORE any jellyfin-web script runs so the
+        // user only enters the server URL once (in the shell).
+        var seedTag = doc.createElement("script");
+        seedTag.setAttribute("data-shell-seed", "1");
+        seedTag.textContent = buildSeedScript(serverUrl, upstreamCfg);
+        if (baseTag.nextSibling)
+          doc.head.insertBefore(seedTag, baseTag.nextSibling);
+        else doc.head.appendChild(seedTag);
+        injectChromium56Polyfills(doc);
+        // JEL-1971: append QA HTTP beacon script tag (no-op in prod;
+        // gated inside the body on localStorage['jellyfin.qa.overlay']).
+        injectQaBeacon(doc);
+        // JEL-126: boot progress dots that survive the ~20 s main-thread
+        // blackout while jellyfin-web parses+executes (legacy-only).
+        injectBootProgress(doc);
+        // JEL-554 (v29): run bundle patch + legacy transpile in parallel.
+        // They touch disjoint <script> sets (bundle patcher gates on
+        // main.*.bundle.js, transpileLegacyScripts skips bundles via
+        // isJellyfinWebBundle) so there's no contention.
+        return Promise.all([
+          patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
+          transpileLegacyScripts(doc, baseUrl),
+        ]).then(function () {
+          window.__jellyfinShellBootDone = true;
+          markDocumentWrite();
+          document.open("text/html", "replace");
+          document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML);
+          document.close();
+          // JEL-554 (v32): Chromium 56 defer-script lifecycle bug.
+          //
+          // QA on JEL-555 v29 (verdict reassigned to FoundingEngineer)
+          // proved that after document.open + document.write +
+          // document.close on Tizen 5.0 (Chromium 56), <script defer
+          // src=...> tags in the freshly-written document silently
+          // NEVER execute. readyState reaches "complete" but the
+          // webpack runtime is never installed; the SPA hangs at
+          // splashLogo and never reaches mainPage.
+          //
+          // The original verdict explained the trigger as inline
+          // bundles (patchPlaybackBundles cache hit) racing the defer
+          // queue. v31 still inlines main.jellyfin.bundle.js on
+          // legacy Chromium (the serverId patch path) and the QA
+          // re-run on physical TV shows warm boot still hangs after
+          // shellBoot. Reproducer-confirmed unblock: manually
+          // appending the deferred runtime.bundle.js as a fresh
+          // <script> immediately resumes the SPA.
+          //
+          // Watchdog: 5.5 s after document.close, if window.ApiClient
+          // and __webpack_require__ are both undefined, re-inject
+          // every <script defer src> in source order as a NON-defer
+          // script. Safe on modern Chromium (ApiClient will be
+          // present, watchdog no-ops). Safe on cold boot success
+          // (same no-op exit). Fires only when the defer queue
+          // genuinely failed.
+          //
+          // JEL-554 (v34): timeout was 2000 ms. QA confirmed normal
+          // cold-boot defers on physical TV take 2.5-3.5 s to install
+          // ApiClient — the 2 s watchdog fired BEFORE healthy defers
+          // finished and double-injected all 28 scripts, adding
+          // 5-10 s of CPU overhead (cold hasCards 30.98 s with
+          // double-inject vs 26.20 s without). Bumped to 5500 ms so
+          // the watchdog only fires for the genuine warm-boot hang
+          // (which is permanent — 5.5 s still catches it).
+          //
+          // JEL-723: the fixed 5500 ms blind wait was the wrong
+          // signal. The defer hang is INTERMITTENT (profiled on
+          // physical TV: one cold boot self-ran defers, api=2948 ms,
+          // watchdog never fired; another hung, watchdog fired at
+          // ~5.5 s). On the hung boots the 5500 ms timer is pure
+          // dead time — and you cannot shorten a blind timer without
+          // risking the v34 double-inject on slow-but-healthy boots
+          // (re-injecting at setTimeout(0) races the browser's own
+          // defer queue and double-runs the webpack runtime — JEL-723
+          // v45/v46 confirmed that breaks boot outright).
+          //
+          // Replace the blind timer with a POSITIVE hang signal:
+          // poll every 150 ms; the defer queue has provably been
+          // abandoned once document.readyState === 'complete' while
+          // __webpack_require__ is still undefined (per the v32
+          // analysis above — readyState reaches complete but the
+          // runtime is never installed). Require the signal to hold
+          // for 2 consecutive polls (~300 ms grace) so a healthy
+          // defer that runs a tick after 'complete' is not mistaken
+          // for a hang. The instant __webpack_require__/ApiClient
+          // appears the poll cancels with no re-inject (healthy
+          // boot, zero cost — identical to the old timer no-op).
+          // 5500 ms stays as the hard-cap fallback.
+          armDeferWatchdog();
+        });
+      },
+    );
   }
 
   // ---- Connect screen flow ----------------------------------------------
