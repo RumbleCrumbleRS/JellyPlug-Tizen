@@ -695,6 +695,53 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JEL-132: creds-guard. jellyfin-web 10.11's connection manager
+      // (validateAuthentication) nulls UserId/AccessToken on ANY failure of
+      // the authenticated GET /System/Info it issues at boot — network blip,
+      // DNS hiccup, reverse-proxy 502 — not just a real 401 — and then
+      // persists the strip through the credential provider. One transient
+      // outage at TV boot permanently logs the TV out: server stays in the
+      // list, user is re-asked to log in. Confirmed in the bundle served by
+      // the user's 10.11.11 server (the ajax reject handler is
+      // `()=>{e.UserId=null,e.AccessToken=null}` with no status check).
+      //
+      // Guard = observe-only network taps + a localStorage.setItem veto:
+      //   - tap fetch/XHR for the /System/Info validate status and for
+      //     POST /Sessions/Logout (explicit sign-out marker);
+      //   - when a jellyfin_credentials write strips a previously-present
+      //     AccessToken for the same server Id, re-attach the token UNLESS
+      //     the last observed validate outcome was 401/403 or a logout was
+      //     seen (those clears are legitimate and pass through);
+      //   - we never fabricate network responses, so the in-memory session
+      //     still lands on the login page for that one boot — but the
+      //     stored creds keep the token and the NEXT launch signs in. A
+      //     genuinely revoked token self-heals: the next validate 401s and
+      //     the strip is allowed through.
+      //   - a boot trail ring (jellyfin.shell.credsTrail, 8 entries)
+      //     records creds presence/token count/localStorage.length per
+      //     boot plus every strip/veto, so the next field incident is
+      //     attributable: key absent at boot right after a token=1 boot
+      //     means store-level loss (the JEL-132 alternate hypothesis),
+      //     while a strip event pins the validate-clear path.
+      // Kill switch: localStorage["jellyfin.shell.credsGuardDisabled"]="1".
+      // Diag: window.__shellCredsGuard={st,strips,vetoes,lastVal,lo,boot}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.credsGuardDisabled")==="1"){window.__shellCredsGuard={st:"off"};return;}',
+      '    var CK="jellyfin_credentials",TRK="jellyfin.shell.credsTrail";',
+      '    var G={st:"on",strips:0,vetoes:0,lastVal:null,lo:0,boot:null};window.__shellCredsGuard=G;',
+      "    function rd(){try{var c=localStorage.getItem(CK);if(c==null)return{p:0,n:0,t:0};var j=JSON.parse(c);var sv=(j&&j.Servers)||[];var t=0;for(var i=0;i<sv.length;i++)if(sv[i]&&sv[i].AccessToken)t++;return{p:1,n:sv.length,t:t};}catch(_){return{p:-1,n:0,t:0};}}",
+      '    function trail(ev){try{var r;try{r=JSON.parse(localStorage.getItem(TRK)||"[]");}catch(_){r=null;}if(!r||!r.push)r=[];r.push(ev);while(r.length>8)r.shift();localStorage.setItem(TRK,JSON.stringify(r));}catch(_){}}',
+      "    var b=rd(),ln=-1;try{ln=localStorage.length;}catch(_){}",
+      '    G.boot={ts:Date.now(),p:b.p,n:b.n,t:b.t,ls:ln};trail({e:"boot",ts:G.boot.ts,p:b.p,n:b.n,t:b.t,ls:ln});',
+      '    function isVal(u){return /\\/System\\/Info(\\?|$)/.test(String(u||""));}',
+      '    function isLo(u){return /\\/Sessions\\/Logout(\\?|$)/.test(String(u||""));}',
+      "    function mark(u,s){try{if(isVal(u))G.lastVal={s:s|0,ts:Date.now()};}catch(_){}}",
+      '    try{var gF=window.fetch;window.fetch=function(i){var u=typeof i==="string"?i:(i&&i.url)||"";if(isLo(u))G.lo=Date.now();var p=gF.apply(this,arguments);if(isVal(u)&&p&&p.then)p.then(function(r){mark(u,r&&r.status);},function(){mark(u,0);});return p;};}catch(_){}',
+      '    try{var gO=XMLHttpRequest.prototype.open,gS=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(m,u){this.__shellCgU=String(u||"");return gO.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){var x=this,u=x.__shellCgU||"";if(isLo(u))G.lo=Date.now();if(isVal(u)){try{x.addEventListener("loadend",function(){mark(u,x.status);});}catch(_){}}return gS.apply(this,arguments);};}catch(_){}',
+      "    function merge(os,ns){try{if(os==null||ns==null)return null;var o=JSON.parse(os),n=JSON.parse(ns);var ov=(o&&o.Servers)||[],nv=(n&&n.Servers)||[];if(!ov.length||!nv.length)return null;var m={},i;for(i=0;i<ov.length;i++)if(ov[i]&&ov[i].Id&&ov[i].AccessToken)m[ov[i].Id]={t:ov[i].AccessToken,u:ov[i].UserId};var hit=0;for(i=0;i<nv.length;i++){var s=nv[i];if(s&&s.Id&&!s.AccessToken&&m[s.Id]){hit++;s.AccessToken=m[s.Id].t;if(!s.UserId&&m[s.Id].u)s.UserId=m[s.Id].u;}}return hit?JSON.stringify(n):null;}catch(_){return null;}}",
+      "    function vetoOk(){if(G.lo&&Date.now()-G.lo<120000)return false;var v=G.lastVal;if(!v)return false;if(Date.now()-v.ts>60000)return false;var s=v.s;if(s===401||s===403)return false;return s===0||s>=500;}",
+      '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
+      "  })();}catch(_){}",
       // JEL-1580: post-login Home leaves activeElement on <body> on
       // Tizen — focusManager.nav() searches geometrically beyond the
       // body rect so D-pad nav from <body> matches nothing. Seed
