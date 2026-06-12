@@ -667,16 +667,41 @@
       //     attributable: key absent at boot right after a token=1 boot
       //     means store-level loss (the JEL-132 alternate hypothesis),
       //     while a strip event pins the validate-clear path.
+      // JEL-134 (JEL-132 v2): creds vault. The on-device trail capture
+      // (tooling/tv-validate/creds-guard/jel132-trail-capture.md) proved a
+      // hard TV restart rolls localStorage back to the last durable commit
+      // (76 -> 16 keys observed), destroying a freshly-saved login token —
+      // no setItem veto can survive a storage-level rollback. IndexedDB
+      // transactions ARE durable across power cuts, so the guard now also
+      // mirrors every tokened jellyfin_credentials write into IDB
+      // (jellyfin_shell/kv, key credsBackup) and restoreCredsVault() (the
+      // pre-rewrite boot path) writes the token back when localStorage
+      // lost it. Tokenless writes sync the vault tokenless ONLY with a
+      // legitimate cause (observed POST /Sessions/Logout, or a recent
+      // 401/403 validate) so intentional sign-outs and revoked tokens are
+      // never resurrected; causeless tokenless writes (rollback-recreated
+      // server entries) leave the vault alone. Mirroring is skipped
+      // entirely when enableAutoLogin === "false" (user opted out of
+      // persistent login — the shell must not out-persist that choice).
+      // Token values never appear in trail/diag — presence + counters only
+      // (vm = mirrors, vinv = tokenless invalidations on G).
       // Kill switch: localStorage["jellyfin.shell.credsGuardDisabled"]="1".
-      // Diag: window.__shellCredsGuard={st,strips,vetoes,lastVal,lo,boot}.
+      // Diag: window.__shellCredsGuard={st,strips,vetoes,vm,vinv,lastVal,lo,boot}.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.credsGuardDisabled")==="1"){window.__shellCredsGuard={st:"off"};return;}',
       '    var CK="jellyfin_credentials",TRK="jellyfin.shell.credsTrail";',
-      '    var G={st:"on",strips:0,vetoes:0,lastVal:null,lo:0,boot:null};window.__shellCredsGuard=G;',
+      '    var G={st:"on",strips:0,vetoes:0,vm:0,vinv:0,lastVal:null,lo:0,boot:null};window.__shellCredsGuard=G;',
       "    function rd(){try{var c=localStorage.getItem(CK);if(c==null)return{p:0,n:0,t:0};var j=JSON.parse(c);var sv=(j&&j.Servers)||[];var t=0;for(var i=0;i<sv.length;i++)if(sv[i]&&sv[i].AccessToken)t++;return{p:1,n:sv.length,t:t};}catch(_){return{p:-1,n:0,t:0};}}",
       '    function trail(ev){try{var r;try{r=JSON.parse(localStorage.getItem(TRK)||"[]");}catch(_){r=null;}if(!r||!r.push)r=[];r.push(ev);while(r.length>8)r.shift();localStorage.setItem(TRK,JSON.stringify(r));}catch(_){}}',
+      "    function tokCnt(s){try{var j=JSON.parse(s);var sv=(j&&j.Servers)||[];var t=0;for(var i=0;i<sv.length;i++)if(sv[i]&&sv[i].AccessToken)t++;return t;}catch(_){return -1;}}",
+      '    function idbPut(val){try{var rq=indexedDB.open("jellyfin_shell",1);rq.onupgradeneeded=function(){try{rq.result.createObjectStore("kv");}catch(_){}};rq.onsuccess=function(){try{var db=rq.result,tx=db.transaction("kv","readwrite");tx.objectStore("kv").put(val,"credsBackup");tx.oncomplete=tx.onabort=tx.onerror=function(){try{db.close();}catch(_){}};}catch(_){}};rq.onerror=function(){};}catch(_){}}',
+      "    function loCause(){if(G.lo&&Date.now()-G.lo<120000)return true;var v=G.lastVal;return !!(v&&Date.now()-v.ts<=60000&&(v.s===401||v.s===403));}",
+      '    function vault(v){try{if(localStorage.getItem("enableAutoLogin")==="false")return;var t=tokCnt(v);if(t>0){G.vm++;idbPut({v:String(v),ts:Date.now(),t:t});}else if(t===0&&loCause()){G.vinv++;idbPut({v:String(v),ts:Date.now(),t:0});}}catch(_){}}',
       "    var b=rd(),ln=-1;try{ln=localStorage.length;}catch(_){}",
       '    G.boot={ts:Date.now(),p:b.p,n:b.n,t:b.t,ls:ln};trail({e:"boot",ts:G.boot.ts,p:b.p,n:b.n,t:b.t,ls:ln});',
+      // boot-time mirror: converge the vault on a token that was written
+      // before the vault existed (e.g. a login on a pre-JEL-134 build).
+      "    try{if(b.t>0)vault(localStorage.getItem(CK));}catch(_){}",
       '    function isVal(u){return /\\/System\\/Info(\\?|$)/.test(String(u||""));}',
       '    function isLo(u){return /\\/Sessions\\/Logout(\\?|$)/.test(String(u||""));}',
       "    function mark(u,s){try{if(isVal(u))G.lastVal={s:s|0,ts:Date.now()};}catch(_){}}",
@@ -684,7 +709,7 @@
       '    try{var gO=XMLHttpRequest.prototype.open,gS=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(m,u){this.__shellCgU=String(u||"");return gO.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){var x=this,u=x.__shellCgU||"";if(isLo(u))G.lo=Date.now();if(isVal(u)){try{x.addEventListener("loadend",function(){mark(u,x.status);});}catch(_){}}return gS.apply(this,arguments);};}catch(_){}',
       "    function merge(os,ns){try{if(os==null||ns==null)return null;var o=JSON.parse(os),n=JSON.parse(ns);var ov=(o&&o.Servers)||[],nv=(n&&n.Servers)||[];if(!ov.length||!nv.length)return null;var m={},i;for(i=0;i<ov.length;i++)if(ov[i]&&ov[i].Id&&ov[i].AccessToken)m[ov[i].Id]={t:ov[i].AccessToken,u:ov[i].UserId};var hit=0;for(i=0;i<nv.length;i++){var s=nv[i];if(s&&s.Id&&!s.AccessToken&&m[s.Id]){hit++;s.AccessToken=m[s.Id].t;if(!s.UserId&&m[s.Id].u)s.UserId=m[s.Id].u;}}return hit?JSON.stringify(n):null;}catch(_){return null;}}",
       "    function vetoOk(){if(G.lo&&Date.now()-G.lo<120000)return false;var v=G.lastVal;if(!v)return false;if(Date.now()-v.ts>60000)return false;var s=v.s;if(s===401||s===403)return false;return s===0||s>=500;}",
-      '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
+      '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});vault(mg);return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}vault(v);}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
       "  })();}catch(_){}",
       '  try{localStorage.setItem("layout","tv");}catch(_){}',
       `  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S='a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;setInterval(function(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;},600);})();}catch(_){}`,
@@ -2982,6 +3007,137 @@
             ));
     } catch (_) {}
   }
+  function restoreCredsVault() {
+    // JEL-134 (JEL-132 v2): boot-time restore from the IndexedDB creds
+    // vault. A hard TV restart rolls localStorage back to the last durable
+    // commit (on-device evidence: 76 -> 16 keys), destroying a
+    // freshly-saved login token; the seed's creds-guard mirrors tokened
+    // jellyfin_credentials writes into IDB (durable across power cuts).
+    // This runs in the async pre-rewrite boot path — gated into the
+    // document.write Promise.all — so jellyfin-web always boots against
+    // the restored creds. Policy:
+    //   - no-op when localStorage already holds any AccessToken, when the
+    //     vault is tokenless/absent, when enableAutoLogin === "false", or
+    //     when the shared kill switch jellyfin.shell.credsGuardDisabled=1;
+    //   - merge by server Id (a vaulted token never attaches to a
+    //     different server); creds key absent entirely -> restore whole
+    //     vault value (the observed post-rollback state);
+    //   - records trail event {e:"restore"} + window.__shellCredsRestored.
+    // No restore loop: a restored token the next validate 401s gets
+    // stripped (guard allows legit clears) AND that strip syncs the vault
+    // tokenless, so the next boot has nothing to restore.
+    // Always resolves (never rejects, 3 s bound) so a wedged IndexedDB
+    // cannot stall boot. Token values never logged.
+    return new Promise(function (resolve) {
+      var done = false;
+      function fin() {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      }
+      setTimeout(fin, 3000);
+      try {
+        if (
+          localStorage.getItem("jellyfin.shell.credsGuardDisabled") === "1" ||
+          localStorage.getItem("enableAutoLogin") === "false"
+        )
+          return fin();
+        var CK = "jellyfin_credentials";
+        var cur = null;
+        try {
+          cur = localStorage.getItem(CK);
+        } catch (_) {}
+        var curJ = null;
+        var curT = 0;
+        try {
+          curJ = cur == null ? null : JSON.parse(cur);
+          var sv = (curJ && curJ.Servers) || [];
+          for (var i = 0; i < sv.length; i++)
+            if (sv[i] && sv[i].AccessToken) curT++;
+        } catch (_) {
+          curJ = null;
+        }
+        if (curT > 0) return fin();
+        var rq = indexedDB.open("jellyfin_shell", 1);
+        rq.onupgradeneeded = function () {
+          try {
+            rq.result.createObjectStore("kv");
+          } catch (_) {}
+        };
+        rq.onerror = fin;
+        rq.onsuccess = function () {
+          var db = rq.result;
+          function settle() {
+            try {
+              db.close();
+            } catch (_) {}
+            fin();
+          }
+          try {
+            var get = db
+              .transaction("kv", "readonly")
+              .objectStore("kv")
+              .get("credsBackup");
+            get.onerror = settle;
+            get.onsuccess = function () {
+              try {
+                var rec = get.result;
+                if (rec && rec.t > 0 && typeof rec.v === "string") {
+                  var next = null;
+                  var vj = JSON.parse(rec.v);
+                  var vsv = (vj && vj.Servers) || [];
+                  if (curJ && curJ.Servers && curJ.Servers.length) {
+                    var m = {};
+                    var hit = 0;
+                    var k;
+                    for (k = 0; k < vsv.length; k++)
+                      if (vsv[k] && vsv[k].Id && vsv[k].AccessToken)
+                        m[vsv[k].Id] = vsv[k];
+                    for (k = 0; k < curJ.Servers.length; k++) {
+                      var s = curJ.Servers[k];
+                      if (s && s.Id && !s.AccessToken && m[s.Id]) {
+                        s.AccessToken = m[s.Id].AccessToken;
+                        if (!s.UserId && m[s.Id].UserId)
+                          s.UserId = m[s.Id].UserId;
+                        hit++;
+                      }
+                    }
+                    if (hit) next = JSON.stringify(curJ);
+                  } else if (vsv.length) {
+                    next = rec.v;
+                  }
+                  if (next != null) {
+                    localStorage.setItem(CK, next);
+                    window.__shellCredsRestored =
+                      (window.__shellCredsRestored || 0) + 1;
+                    try {
+                      var TRK = "jellyfin.shell.credsTrail";
+                      var r;
+                      try {
+                        r = JSON.parse(localStorage.getItem(TRK) || "[]");
+                      } catch (_) {
+                        r = null;
+                      }
+                      if (!r || !r.push) r = [];
+                      r.push({ e: "restore", ts: Date.now(), t: rec.t });
+                      while (r.length > 8) r.shift();
+                      localStorage.setItem(TRK, JSON.stringify(r));
+                    } catch (_) {}
+                  }
+                }
+              } catch (_) {}
+              settle();
+            };
+          } catch (_) {
+            settle();
+          }
+        };
+      } catch (_) {
+        fin();
+      }
+    });
+  }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
@@ -3113,63 +3269,70 @@
                 throw new Error("Failed to parse web config");
               }
             });
-    return Promise.all([indexPromise, configPromise]).then(function (results) {
-      var html = results[0],
-        upstreamCfg = results[1],
-        fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
-      if (fast) {
-        ((window.__jellyfinShellBootDone = !0),
-          markDocumentWrite(),
-          document.open("text/html", "replace"),
-          document.write(fast),
-          document.close(),
-          armDeferWatchdog());
-        return;
-      }
-      var doc = new DOMParser().parseFromString(html, "text/html"),
-        existingBase = doc.querySelector("base");
-      existingBase && existingBase.remove();
-      var baseTag = doc.createElement("base");
-      ((baseTag.href = baseUrl),
-        doc.head.insertBefore(baseTag, doc.head.firstChild),
-        (window.__shellDiagInit = window.__shellDiagInit || {}),
-        (window.__shellDiagInit.legacy = isLegacyChromium()),
-        (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
-        (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy));
-      var diagTag = doc.createElement("script");
-      (diagTag.setAttribute("data-shell-diag", "1"),
-        (diagTag.textContent = buildDiagSeedScript("1.0.87")),
-        doc.head.insertBefore(diagTag, baseTag));
-      var seedTag = doc.createElement("script");
-      return (
-        seedTag.setAttribute("data-shell-seed", "1"),
-        (seedTag.textContent = buildSeedScript(serverUrl, upstreamCfg)),
-        baseTag.nextSibling
-          ? doc.head.insertBefore(seedTag, baseTag.nextSibling)
-          : doc.head.appendChild(seedTag),
-        injectChromium56Polyfills(doc),
-        injectQaBeacon(doc),
-        injectBootProgress(doc),
-        Promise.all([
-          patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
-          transpileLegacyScripts(doc, baseUrl),
-        ]).then(function () {
-          try {
-            var ssOrigin = null;
-            try {
-              ssOrigin = new URL(baseUrl).origin;
-            } catch (_) {}
-            rewriteStylesheetsFromCache(doc, baseUrl, ssOrigin);
-          } catch (_) {}
+    // JEL-134: vault restore joins the document.write gate so jellyfin-web
+    // always boots against restored creds. It overlaps the index/config
+    // RTTs (IDB read is ~ms) and is 3 s-bounded, never-rejecting — it can
+    // delay boot only when the network is faster than IndexedDB.
+    var credsRestorePromise = restoreCredsVault();
+    return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
+      function (results) {
+        var html = results[0],
+          upstreamCfg = results[1],
+          fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
+        if (fast) {
           ((window.__jellyfinShellBootDone = !0),
             markDocumentWrite(),
             document.open("text/html", "replace"),
-            document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML),
+            document.write(fast),
             document.close(),
             armDeferWatchdog());
-        })
-      );
-    });
+          return;
+        }
+        var doc = new DOMParser().parseFromString(html, "text/html"),
+          existingBase = doc.querySelector("base");
+        existingBase && existingBase.remove();
+        var baseTag = doc.createElement("base");
+        ((baseTag.href = baseUrl),
+          doc.head.insertBefore(baseTag, doc.head.firstChild),
+          (window.__shellDiagInit = window.__shellDiagInit || {}),
+          (window.__shellDiagInit.legacy = isLegacyChromium()),
+          (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
+          (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy));
+        var diagTag = doc.createElement("script");
+        (diagTag.setAttribute("data-shell-diag", "1"),
+          (diagTag.textContent = buildDiagSeedScript("1.0.87")),
+          doc.head.insertBefore(diagTag, baseTag));
+        var seedTag = doc.createElement("script");
+        return (
+          seedTag.setAttribute("data-shell-seed", "1"),
+          (seedTag.textContent = buildSeedScript(serverUrl, upstreamCfg)),
+          baseTag.nextSibling
+            ? doc.head.insertBefore(seedTag, baseTag.nextSibling)
+            : doc.head.appendChild(seedTag),
+          injectChromium56Polyfills(doc),
+          injectQaBeacon(doc),
+          injectBootProgress(doc),
+          Promise.all([
+            patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
+            transpileLegacyScripts(doc, baseUrl),
+          ]).then(function () {
+            try {
+              var ssOrigin = null;
+              try {
+                ssOrigin = new URL(baseUrl).origin;
+              } catch (_) {}
+              rewriteStylesheetsFromCache(doc, baseUrl, ssOrigin);
+            } catch (_) {}
+            ((window.__jellyfinShellBootDone = !0),
+              markDocumentWrite(),
+              document.open("text/html", "replace"),
+              document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML),
+              document.close(),
+              armDeferWatchdog());
+          })
+        );
+      },
+    );
   }
   function showError(msg) {
     var err = document.getElementById("boot-error");

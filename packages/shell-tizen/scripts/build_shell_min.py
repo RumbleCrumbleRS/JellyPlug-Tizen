@@ -51,7 +51,11 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # not packaged in the .wgt since JEL-124), so the cap guards manifest
 # breadcrumb budget only — boot-shell.min.js (the wgt-shipped blob) has no
 # such cap and took the same block.
-HARD_CAP = 122880
+# JEL-134 raised it 122880 -> 131072 (128 KiB): the IndexedDB creds vault
+# (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
+# in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
+# the 80-line breadcrumb floor under the old cap.
+HARD_CAP = 131072
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
 # `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
 MIN_JEL_LINES = 80
