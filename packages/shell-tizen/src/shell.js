@@ -809,6 +809,33 @@
       // HUD row "AF:a/s sc=h/N" added alongside the v58 RS row.
       '  try{localStorage.setItem("layout","tv");}catch(_){}',
       '  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S=\'a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])\';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;setInterval(function(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;},600);})();}catch(_){}',
+      // JEL-138: default the login "Remember Me" checkbox to CHECKED.
+      // Field report + browser-verified root cause (results-JEL-138.md):
+      // jellyfin-web's `enableAutoLogin` localStorage flag is sticky — one
+      // login with the box unchecked flips it to "false", and every later
+      // login form then renders the box unchecked. OSK Enter submits from
+      // the password field WITHOUT the user ever passing the (visible-only-
+      // on-D-pad) checkbox, so each Enter-login silently reuses the stale
+      // "off" state: the token is written then discarded at the next launch.
+      // Board decision (JEL-138 interaction c0b35a10 = "default_checked"):
+      // make the box start checked each time the login screen appears, while
+      // an explicit uncheck for that login still works and is honored.
+      //
+      // We DO NOT mutate the stored enableAutoLogin flag — only the checkbox
+      // DOM state. jellyfin-web reads chkRememberLogin.checked at SUBMIT and
+      // writes the flag itself, so the user's actual choice (as submitted)
+      // still wins, and restoreCredsVault()'s `enableAutoLogin === "false"`
+      // opt-out gate keeps honoring a genuine opt-out (it reads the stored
+      // flag, which we leave alone until the user submits a checked login).
+      // jellyfin-web applies the stored-false state to the checkbox AFTER
+      // creating the element, so a one-shot flip loses the race; we re-assert
+      // checked on a poll until a real `change` event (user toggle — emby-
+      // checkbox programmatic sets don't fire change) reveals a deliberate
+      // uncheck, then we back off for that element. Per-element WeakSets, so
+      // a fresh login form (new document) re-defaults checked = no carryover.
+      // Kill switch: localStorage["jellyfin.shell.rememberMeDefaultDisabled"]="1".
+      // Diag: window.__shellRememberMeChecks (count of corrective flips).
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}try{setInterval(nudge,300);}catch(_){}try{document.addEventListener("DOMContentLoaded",nudge,false);}catch(_){}nudge();})();}catch(_){}',
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
