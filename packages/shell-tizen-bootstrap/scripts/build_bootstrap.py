@@ -10,7 +10,19 @@ Pipeline:
      (--shell-src remains as a generic override to bake in some OTHER prebuilt
      shell.min.js, e.g. a shell-tizen build.)
   3. Package {config.xml,index.html,icon.png,boot-shell.min.js,babel.min.js}
-     into JellyPlugBootstrap_v<ver>.wgt at the tree root.
+     into JellyPlug.wgt at the tree root.
+
+Variants (JEL-143):
+  - Retail (default): index.html ships as committed. Both diagnostic overlays
+    stay opt-in (off on a fresh install). Output -> JellyPlug.wgt.
+  - Debug (--debug): a tiny seed <script> is injected as the first element of
+    <body> so it runs BEFORE the bootloader IIFE, setting
+    localStorage['jellyfin.shell.debug']='1' and
+    localStorage['jellyfin.shell.hsbDebug']='1'. That turns on BOTH the HSB
+    bootstrap overlay (#hsb-status) and the shell diagnostics overlay
+    (#__shell_diag) + shellLog() for every boot of that WGT. Output ->
+    JellyPlug-Debug.wgt. The seed is build-time only — the committed
+    src/index.html (and the selftest that reads it) is never modified.
        - With --sign-profile NAME (and the Tizen CLI on PATH): runs
          `tizen package -t wgt -s NAME` so the .wgt embeds author-signature.xml
          + signature1.xml and is installable on a real TV.
@@ -28,8 +40,10 @@ profile (tooling/ci/configure-tizen-signing.sh) and then passes
 before release.
 
 Usage:
-  python3 build_bootstrap.py                       # raw zip (UNSIGNED, emulator only)
+  python3 build_bootstrap.py                       # JellyPlug.wgt, raw zip (UNSIGNED, emulator only)
+  python3 build_bootstrap.py --debug               # JellyPlug-Debug.wgt, debug overlays on
   python3 build_bootstrap.py --sign-profile jellyfin   # signed, installable
+  python3 build_bootstrap.py --debug --sign-profile jellyfin   # signed debug build
   python3 build_bootstrap.py --shell-src ../some-prebuilt-shell --out ../
 
 NOTE (JEL-24): the historical `--shell-src ../_jel*_v80_src` flow is gone — that
@@ -59,6 +73,47 @@ BOOT_SHELL = SRC / "boot-shell.min.js"
 BABEL_MIN = SRC / "babel.min.js"
 
 WGT_PAYLOAD = [CONFIG_XML, INDEX_HTML, ICON_PNG, BOOT_SHELL, BABEL_MIN]
+
+RETAIL_WGT_NAME = "JellyPlug.wgt"
+DEBUG_WGT_NAME = "JellyPlug-Debug.wgt"
+
+# JEL-143: injected as the FIRST child of <body> in the --debug variant so it
+# executes before the bootloader IIFE captures hsbDebugOn and before
+# boot-shell.min.js reads jellyfin.shell.debug. Seeds both diagnostic overlays
+# on for every boot of the debug WGT. ES5-only so it parses on M63/Chromium 63.
+DEBUG_SEED_MARKER = "JellyPlug-Debug build (JEL-143)"
+DEBUG_SEED_SCRIPT = (
+    '    <script>/* ' + DEBUG_SEED_MARKER + ': force both diagnostic overlays on */'
+    "try{localStorage.setItem('jellyfin.shell.debug','1');"
+    "localStorage.setItem('jellyfin.shell.hsbDebug','1');}catch(_){}</script>\n"
+)
+
+
+def debug_index_html() -> str:
+    """Return src/index.html with the debug seed injected after <body>.
+
+    Raises if the <body> anchor is missing so a future markup change can never
+    silently ship a debug WGT that is identical to retail.
+    """
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    if DEBUG_SEED_MARKER in html:
+        return html  # already seeded (defensive; src is never committed seeded)
+    anchor = "<body>\n"
+    if anchor not in html:
+        raise RuntimeError("index.html: '<body>' anchor not found; cannot inject debug seed")
+    return html.replace(anchor, anchor + DEBUG_SEED_SCRIPT, 1)
+
+
+def stage_payload(stage_dir: Path, *, debug: bool) -> None:
+    """Copy the WGT payload into stage_dir, substituting a debug-seeded
+    index.html for the --debug variant."""
+    for src in WGT_PAYLOAD:
+        if not src.exists():
+            raise RuntimeError(f"bootstrap payload missing: {src}")
+        if debug and src == INDEX_HTML:
+            (stage_dir / src.name).write_text(debug_index_html(), encoding="utf-8")
+        else:
+            shutil.copy2(src, stage_dir / src.name)
 
 
 def bootstrap_version() -> str:
@@ -95,15 +150,20 @@ def _resolve_tizen_cli(explicit: str | None) -> str | None:
     return None
 
 
-def build_wgt_unsigned(out_dir: Path, ver: str) -> Path:
+def variant_wgt_name(debug: bool) -> str:
+    return DEBUG_WGT_NAME if debug else RETAIL_WGT_NAME
+
+
+def build_wgt_unsigned(out_dir: Path, ver: str, *, debug: bool) -> Path:
     """Raw zip of the payload. UNSIGNED — not installable on a real TV."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"JellyPlugBootstrap_v{ver}.wgt"
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for src in WGT_PAYLOAD:
-            if not src.exists():
-                raise RuntimeError(f"bootstrap payload missing: {src}")
-            zf.write(src, arcname=src.name)
+    out = out_dir / variant_wgt_name(debug)
+    with tempfile.TemporaryDirectory(prefix="hsb-bootstrap-") as stage:
+        stage_dir = Path(stage)
+        stage_payload(stage_dir, debug=debug)
+        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for src in WGT_PAYLOAD:
+                zf.write(stage_dir / src.name, arcname=src.name)
     print(
         "WARNING: produced an UNSIGNED bootstrap .wgt. A retail Tizen TV will "
         "refuse to install it (JEL-8).\n"
@@ -114,35 +174,34 @@ def build_wgt_unsigned(out_dir: Path, ver: str) -> Path:
     return out
 
 
-def build_wgt_signed(out_dir: Path, ver: str, profile: str, tizen_cli: str) -> Path:
+def build_wgt_signed(out_dir: Path, ver: str, profile: str, tizen_cli: str, *, debug: bool) -> Path:
     """Stage the payload and sign it with `tizen package -t wgt -s <profile>`.
 
     Tizen names the output after <name> in config.xml; we rename it to the
-    canonical JellyPlugBootstrap_v<ver>.wgt so QA/CI always find it.
+    canonical JellyPlug.wgt / JellyPlug-Debug.wgt so QA/CI always find it.
+    The signed package is staged in its own tmp dir so two variants built into
+    the same out_dir don't collide on the `*.wgt` glob below.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"JellyPlugBootstrap_v{ver}.wgt"
+    out = out_dir / variant_wgt_name(debug)
     with tempfile.TemporaryDirectory(prefix="hsb-bootstrap-") as stage:
         stage_dir = Path(stage)
-        for src in WGT_PAYLOAD:
-            if not src.exists():
-                raise RuntimeError(f"bootstrap payload missing: {src}")
-            shutil.copy2(src, stage_dir / src.name)
-        cmd = [tizen_cli, "package", "-t", "wgt", "-s", profile, "-o", str(out_dir.resolve()), "--", "."]
+        stage_payload(stage_dir, debug=debug)
+        sign_out = stage_dir / "_signed"
+        sign_out.mkdir()
+        cmd = [tizen_cli, "package", "-t", "wgt", "-s", profile, "-o", str(sign_out.resolve()), "--", "."]
         print(f">> {' '.join(cmd)}  (cwd={stage_dir})")
         subprocess.run(cmd, cwd=stage_dir, check=True)
 
-    emitted = sorted(out_dir.glob("*.wgt"))
-    if not emitted:
-        raise RuntimeError(f"tizen package produced no .wgt in {out_dir}")
-    # Rename whatever tizen emitted (if different) to the canonical name.
-    produced = emitted[0]
-    if produced.name != out.name:
-        produced.replace(out)
+        emitted = sorted(sign_out.glob("*.wgt"))
+        if not emitted:
+            raise RuntimeError(f"tizen package produced no .wgt in {sign_out}")
+        # Move whatever tizen emitted to the canonical variant name in out_dir.
+        emitted[0].replace(out)
     return out
 
 
-def build_wgt(out_dir: Path, ver: str, *, sign_profile: str | None, tizen_cli: str | None) -> Path:
+def build_wgt(out_dir: Path, ver: str, *, sign_profile: str | None, tizen_cli: str | None, debug: bool) -> Path:
     if sign_profile:
         cli = _resolve_tizen_cli(tizen_cli)
         if not cli:
@@ -150,8 +209,8 @@ def build_wgt(out_dir: Path, ver: str, *, sign_profile: str | None, tizen_cli: s
                 "--sign-profile requires the Tizen CLI on PATH (tizen / tizen.bat). "
                 "Run inside a Tizen Studio image or pass --tizen-cli."
             )
-        return build_wgt_signed(out_dir, ver, sign_profile, cli)
-    return build_wgt_unsigned(out_dir, ver)
+        return build_wgt_signed(out_dir, ver, sign_profile, cli, debug=debug)
+    return build_wgt_unsigned(out_dir, ver, debug=debug)
 
 
 def emit_manifest_stub(wgt: Path, ver: str) -> Path:
@@ -182,6 +241,16 @@ def main() -> int:
     ap.add_argument("--tizen-cli", default=None,
                     help="path/name of the Tizen CLI (default: auto-detect "
                          "tizen / tizen.bat). Only used with --sign-profile.")
+    ap.add_argument("--debug", action="store_true",
+                    help="build the JellyPlug-Debug.wgt variant: seed both "
+                         "diagnostic overlays on (jellyfin.shell.debug + "
+                         "jellyfin.shell.hsbDebug) for every boot (JEL-143). "
+                         "Retail src/index.html is untouched.")
+    ap.add_argument("--no-manifest", action="store_true",
+                    help="skip writing manifest.bootstrap.json (which always "
+                         "lands in the package root regardless of --out). Used "
+                         "by tests so a throwaway build never mutates the "
+                         "committed manifest.")
     args = ap.parse_args()
 
     if args.shell_src is not None:
@@ -189,11 +258,18 @@ def main() -> int:
 
     ver = bootstrap_version()
     wgt = build_wgt(args.out, ver, sign_profile=args.sign_profile,
-                    tizen_cli=args.tizen_cli)
-    manifest = emit_manifest_stub(wgt, ver)
+                    tizen_cli=args.tizen_cli, debug=args.debug)
 
-    print(f"bootstrap_wgt  path={wgt}  bytes={wgt.stat().st_size}  ver={ver}")
-    print(f"bootstrap_manifest  path={manifest}  sha256={sha256_file(wgt)}")
+    print(f"bootstrap_wgt  path={wgt}  bytes={wgt.stat().st_size}  ver={ver}  "
+          f"variant={'debug' if args.debug else 'retail'}")
+    # The manifest stub advertises the retail WGT the server-side /shell/ host
+    # serves; the debug build never overwrites it, and --no-manifest skips it
+    # entirely (throwaway/test builds).
+    if not args.debug and not args.no_manifest:
+        manifest = emit_manifest_stub(wgt, ver)
+        print(f"bootstrap_manifest  path={manifest}  sha256={sha256_file(wgt)}")
+    else:
+        print(f"bootstrap_wgt_sha256  {sha256_file(wgt)}")
     return 0
 
 

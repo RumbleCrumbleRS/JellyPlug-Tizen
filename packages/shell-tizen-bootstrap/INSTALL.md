@@ -45,12 +45,17 @@ sdbd `shell:` channel.
    - Build a **signed** bootstrap WGT (requires a Tizen signing profile on the
      host — same TV profile as v80 builds):
      `python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py --sign-profile <profile>`.
-     Output: `packages/shell-tizen-bootstrap/dist/JellyPlugBootstrap_v<ver>.wgt`.
+     Output: `packages/shell-tizen-bootstrap/dist/JellyPlug.wgt`.
      Running the script **without** `--sign-profile` produces a raw, UNSIGNED
      zip that a TV will refuse to install — that mode is for the wgt-emulate
      Tier-2 harness only (JEL-8).
+     - For an on-screen-diagnostics build, add `--debug` (JEL-143): outputs
+       `dist/JellyPlug-Debug.wgt`, which forces both the HSB and shell
+       diagnostic overlays on for every boot. Install the retail `JellyPlug.wgt`
+       for normal use; the debug WGT is for troubleshooting a TV that can't run
+       Web Inspector.
    - Confirm the package is signed before installing:
-     `tooling/ci/verify-wgt-signed.sh packages/shell-tizen-bootstrap/dist/JellyPlugBootstrap_v<ver>.wgt`
+     `tooling/ci/verify-wgt-signed.sh packages/shell-tizen-bootstrap/dist/JellyPlug.wgt`
      (must print `OK ... signed (author + distributor)`; it checks for
      `author-signature.xml` + `signature1.xml`). In CI the release pipeline
      configures the profile via `tooling/ci/configure-tizen-signing.sh` and
@@ -61,7 +66,7 @@ sdbd `shell:` channel.
      toolbar and re-add via IP. `intershell_support:disabled` does **not**
      block this — connection only needs the sync/forward channels.
 4. Right-click the TV row → **Install Application**.
-5. Browse to `JellyPlugBootstrap_v<ver>.wgt`. Click OK.
+5. Browse to `JellyPlug.wgt`. Click OK.
 6. Watch the bottom log pane. A clean install ends with:
    ```
    ... Successfully installed JelShellTV.Jellyfin
@@ -93,7 +98,7 @@ chosen path each boot.
 If Device Manager refuses for a particular firmware:
 
 ```
-sdb -s 192.168.0.10:26101 install C:/path/JellyPlugBootstrap_v<ver>.wgt
+sdb -s 192.168.0.10:26101 install C:/path/JellyPlug.wgt
 ```
 
 This uses sdbd's `install:` service which **may** be independent of

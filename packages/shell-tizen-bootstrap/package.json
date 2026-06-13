@@ -6,7 +6,7 @@
   "license": "GPL-2.0-only",
   "scripts": {
     "build": "python3 scripts/build_bootstrap.py",
-    "test": "node scripts/selftest.cjs && node scripts/babel-transpile.test.cjs && node scripts/defer-watchdog.test.cjs && node scripts/boot-progress.test.cjs && node scripts/connect-form-parity.test.cjs && node scripts/iterator-resweep.test.cjs && node scripts/jel137-login-wedge.test.cjs",
+    "test": "node scripts/selftest.cjs && node scripts/babel-transpile.test.cjs && node scripts/defer-watchdog.test.cjs && node scripts/boot-progress.test.cjs && node scripts/connect-form-parity.test.cjs && node scripts/iterator-resweep.test.cjs && node scripts/jel137-login-wedge.test.cjs && node scripts/debug-variant.test.cjs",
     "clean": "rm -rf dist manifest.bootstrap.json"
   }
 }

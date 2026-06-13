@@ -26,15 +26,29 @@ See `INSTALL.md` for the install procedure and
 ```bash
 pnpm --filter @jellyfin-tv/shell-tizen-bootstrap build
 # or directly:
-python3 scripts/build_bootstrap.py
+python3 scripts/build_bootstrap.py            # retail  -> dist/JellyPlug.wgt
+python3 scripts/build_bootstrap.py --debug    # debug   -> dist/JellyPlug-Debug.wgt
 ```
 
 Outputs:
 
-- `dist/JellyPlugBootstrap_v<ver>.wgt` — unsigned WGT, sign with Tizen
-  Studio Certificate Manager before pushing to a TV.
-- `manifest.bootstrap.json` — sha256 + size, for advertising in
-  `${server}/shell/` bootstrap-install flows.
+- `dist/JellyPlug.wgt` — retail WGT (unsigned locally; sign with Tizen
+  Studio Certificate Manager before pushing to a TV). Both on-screen
+  diagnostic overlays stay opt-in (off on a fresh install).
+- `dist/JellyPlug-Debug.wgt` (`--debug`, JEL-143) — identical shell with a
+  one-line seed `<script>` injected as the first element of `<body>` so it
+  runs before the bootloader. It sets `jellyfin.shell.debug=1` and
+  `jellyfin.shell.hsbDebug=1` in `localStorage` on every boot, forcing on
+  both the HSB bootstrap overlay (`#hsb-status`) and the shell diagnostics
+  overlay (`#__shell_diag`). The committed `src/index.html` is never modified
+  — the seed is a build-time transform.
+- `manifest.bootstrap.json` — sha256 + size of the **retail** WGT, for
+  advertising in `${server}/shell/` bootstrap-install flows. The `--debug`
+  build never overwrites it.
+
+The release pipeline (`.github/workflows/bootstrap-sign.yml`, tag
+`bootstrap-v*`) signs **both** variants and attaches them to one GitHub
+Release.
 
 ### Baked-in shell source (JEL-24)
 
@@ -83,6 +97,7 @@ packages/shell-tizen-bootstrap/
 │   ├── build_bootstrap.py       # Builds the WGT + emits manifest stub
 │   ├── build_boot_shell.py      # Rebuilds boot-shell.min.js from .src.js (JEL-24)
 │   ├── verify_boot_shell_src.py # CI guard: .src.js ≡ .min.js (JEL-24)
+│   ├── debug-variant.test.cjs   # Guard: --debug WGT seeds both overlays (JEL-143)
 │   └── selftest.cjs             # Bootloader scenario tests
 └── src/
     ├── babel.min.js             # Lazy fallback transpiler (legacy Chromium)

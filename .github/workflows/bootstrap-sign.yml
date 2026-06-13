@@ -1,8 +1,10 @@
 # Sign + release the HSB bootstrap WGT (JEL-10).
 #
-# Produces a SIGNED JellyfinShellBootstrap_v<ver>.wgt (author-signature.xml +
-# signature1.xml) that a retail Tizen TV will install — the artifact JEL-7's
-# physical-device validation and JEL-8's signed-release guard both depend on.
+# Produces TWO signed WGTs (author-signature.xml + signature1.xml) that a
+# retail Tizen TV will install — the artifacts JEL-7's physical-device
+# validation and JEL-8's signed-release guard both depend on (JEL-143):
+#   - JellyPlug.wgt        retail, both diagnostic overlays opt-in (off).
+#   - JellyPlug-Debug.wgt  debug, both overlays seeded on for every boot.
 #
 # Pipeline (the three scripts landed in 4370dec, this just wires them):
 #   0. Install the Tizen Studio Web CLI on the runner so `tizen`
@@ -14,8 +16,10 @@
 #      image reference never existed, so every run failed at container init.)
 #   1. tooling/ci/configure-tizen-signing.sh   builds the Tizen security
 #      profile "jellyfin" from the 4 CI secrets (set per JEL-9, Option 1).
-#   2. build_bootstrap.py --sign-profile jellyfin   signs the .wgt.
-#   3. tooling/ci/verify-wgt-signed.sh   fails the run if the output is
+#   2. build_bootstrap.py --sign-profile jellyfin   signs JellyPlug.wgt, then
+#      build_bootstrap.py --debug --sign-profile jellyfin signs
+#      JellyPlug-Debug.wgt (both in the same keyring session).
+#   3. tooling/ci/verify-wgt-signed.sh   fails the run if EITHER output is
 #      unsigned, so we can never publish an uninstallable package.
 #
 # Triggers:
@@ -120,7 +124,13 @@ jobs:
           dbus-run-session -- bash -euo pipefail -c '
             echo "" | gnome-keyring-daemon --unlock --components=secrets,pkcs11 >/dev/null 2>&1 || true
             tooling/ci/configure-tizen-signing.sh
+            # JEL-143: sign BOTH variants in the same keyring session.
+            #   retail -> dist/JellyPlug.wgt   debug -> dist/JellyPlug-Debug.wgt
             python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py \
+              --sign-profile jellyfin \
+              --out dist/
+            python3 packages/shell-tizen-bootstrap/scripts/build_bootstrap.py \
+              --debug \
               --sign-profile jellyfin \
               --out dist/
           '
@@ -137,10 +147,17 @@ jobs:
           echo "=== cli.log tail ==="
           find "$HOME" -name cli.log -exec tail -n 80 {} + 2>/dev/null || true
 
-      - name: Verify .wgt is signed (JEL-8 guard)
+      - name: Verify both .wgt variants are present + signed (JEL-8/JEL-143 guard)
         # A Tizen TV refuses to install an unsigned package. Fail before
-        # publishing if the artifact lacks author + distributor signatures.
-        run: tooling/ci/verify-wgt-signed.sh dist/*.wgt
+        # publishing if either artifact is missing or lacks author + distributor
+        # signatures. JEL-143: the release MUST carry exactly the retail +
+        # debug pair, so assert both filenames exist before the signed check.
+        run: |
+          set -euo pipefail
+          for f in JellyPlug.wgt JellyPlug-Debug.wgt; do
+            [[ -f "dist/$f" ]] || { echo "::error::dist/$f missing — both variants must build" >&2; exit 1; }
+          done
+          tooling/ci/verify-wgt-signed.sh dist/JellyPlug.wgt dist/JellyPlug-Debug.wgt
 
       - name: Upload signed .wgt artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -156,7 +173,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/bootstrap-v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          name: "Bootstrap ${{ github.ref_name }}"
-          files: dist/*.wgt
+          name: "JellyPlug ${{ github.ref_name }}"
+          files: |
+            dist/JellyPlug.wgt
+            dist/JellyPlug-Debug.wgt
+          body: |
+            JellyPlug Hosted Shell Bootstrap.
+
+            - **JellyPlug.wgt** — retail build. Install this on the TV. Diagnostic overlays stay off.
+            - **JellyPlug-Debug.wgt** — same shell with both on-screen diagnostic overlays (HSB bootstrap status + shell `__shell_diag`) forced on for every boot. For troubleshooting only.
+
+            Install one WGT via Samsung Device Manager; the shell itself updates server-side after that.
           generate_release_notes: true
           fail_on_unmatched_files: true
