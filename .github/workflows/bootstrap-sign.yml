@@ -167,13 +167,21 @@ jobs:
             dist/*.wgt
             packages/shell-tizen-bootstrap/manifest.bootstrap.json
 
+      - name: Resolve release display name
+        # The tag stays bootstrap-v<ver> (that's what triggers THIS workflow;
+        # jellyplug-v*/tizen-v* belong to release-tizen.yml), but the GitHub
+        # Release is titled JellyPlug-v<ver> per user request (JEL-143).
+        id: relname
+        if: startsWith(github.ref, 'refs/tags/bootstrap-v')
+        run: echo "name=JellyPlug-v${GITHUB_REF_NAME#bootstrap-v}" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
         # Only when launched from a bootstrap-v* tag; workflow_dispatch runs
         # stop at the uploaded artifact above.
         if: startsWith(github.ref, 'refs/tags/bootstrap-v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          name: "JellyPlug ${{ github.ref_name }}"
+          name: "${{ steps.relname.outputs.name }}"
           files: |
             dist/JellyPlug.wgt
             dist/JellyPlug-Debug.wgt
