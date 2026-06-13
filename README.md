@@ -128,19 +128,12 @@ pnpm run test
 pnpm run build
 ```
 
-You do **not** need a TV to exercise the WGT — the bootstrap is plain web and
-the whole HSB flow runs in a desktop browser:
+You do **not** need a TV to exercise the bootstrap logic — it is plain web:
 
 ```sh
 # Bootloader logic, headless, instant
 node packages/shell-tizen-bootstrap/scripts/selftest.cjs
-
-# Full HSB flow + visuals in a desktop browser
-python3 tooling/wgt-emulate/serve.py        # then open http://localhost:8088/
 ```
-
-The full emulator/on-device testing guide is in
-[`tooling/wgt-emulate/README.md`](./tooling/wgt-emulate/README.md).
 
 ### Repo layout
 
@@ -150,9 +143,6 @@ packages/
   shell-tizen-bootstrap/     Hosted Shell Bootstrap WGT (installed once)
   server-shell-drop/         server-side /shell/ layout + manifest emitter
 tooling/
-  wgt-emulate/               run + test the WGT in a desktop browser
-  tv-inspect/                remote CDP capture/verify on a real TV
-  tv-validate/               on-device behaviour verification harnesses
   ci/                        CI helpers (wgt signing checks, cert setup)
 ```
 

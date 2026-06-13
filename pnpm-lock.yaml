@@ -21,10 +21,6 @@ importers:
 
   packages/shell-tizen-bootstrap: {}
 
-  tooling/tv-inspect: {}
-
-  tooling/wgt-emulate: {}
-
 packages:
 
   '@esbuild/aix-ppc64@0.21.5':

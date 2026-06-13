@@ -26,9 +26,10 @@
 //       keys 403-406 are an intentional no-op — see color-keys.test.cjs / JEL-36).
 //
 // This test locks the registration list and the keycode table to that live
-// ground truth so neither can silently drift. It also drives the wgt-emulate
-// Tizen stub and, when jsdom is available, round-trips all 12 keys as real
-// browser keydown events to confirm TV<->browser parity.
+// ground truth so neither can silently drift. It also drives the Tizen API
+// stub fixture (scripts/fixtures/tizen-stub.js) and, when jsdom is available,
+// round-trips all 12 keys as real browser keydown events to confirm
+// TV<->browser parity.
 //
 // NOTE (JEL-35 finding): TIZEN_KEYMAP previously had 412/417 and 10232/10233
 // SWAPPED (Rewind<->TrackPrevious, FastForward<->TrackNext). That table is not
@@ -53,7 +54,7 @@ const TV_SHELL_MIN = path.join(
   "src",
   "shell.min.js",
 );
-const STUB_JS = path.join(REPO, "tooling", "wgt-emulate", "tizen-stub.js");
+const STUB_JS = path.join(__dirname, "fixtures", "tizen-stub.js");
 
 // The contract: the exact 12 media keys JEL-35 names, with the keycodes the
 // Samsung Tizen remote emits and jellyfin-web's KeyNames resolves them to.
@@ -134,7 +135,7 @@ check(
   "missing=[" + missingFromMin + "]",
 );
 
-// --- 3. Browser-harness parity: wgt-emulate stub mirrors the same 12 + codes -
+// --- 3. Stub-fixture parity: tizen-stub mirrors the same 12 keys + codes -----
 // The stub uses `{ name: "X", code: N }` object form, so parse that shape.
 function parseStubKeys(src) {
   const start = src.indexOf("getSupportedKeys");
@@ -183,14 +184,10 @@ for (const name of EXPECTED_NAMES) {
 // --- 5. Optional: round-trip all 12 as real browser keydown events ----------
 // Confirms the identical keys/keycodes deliver to a window keydown handler the
 // way jellyfin-web binds them — the browser side of TV<->browser parity. jsdom
-// is opt-in (resolved from tooling/wgt-emulate if installed there); skip clean.
+// is opt-in (set JSDOM_PATH or install jsdom locally); skipped cleanly if absent.
 (function browserSimulation() {
   let JSDOM;
-  const candidates = [
-    process.env.JSDOM_PATH,
-    "jsdom",
-    path.join(REPO, "tooling", "wgt-emulate", "node_modules", "jsdom"),
-  ].filter(Boolean);
+  const candidates = [process.env.JSDOM_PATH, "jsdom"].filter(Boolean);
   for (const c of candidates) {
     try {
       JSDOM = require(c).JSDOM;
@@ -202,7 +199,7 @@ for (const name of EXPECTED_NAMES) {
   if (!JSDOM) {
     console.log(
       "SKIP browser-keydown simulation: jsdom not found (optional). " +
-        "Enable: (cd tooling/wgt-emulate && npm install jsdom)",
+        "Enable: set JSDOM_PATH or `npm install jsdom`.",
     );
     return;
   }
