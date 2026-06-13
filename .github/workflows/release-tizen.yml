@@ -190,7 +190,7 @@ jobs:
         # Only when launched from a release tag; workflow_dispatch runs stop
         # at the uploaded artifact above.
         if: steps.resolve.outputs.is_release == 'true'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           name: "Tizen Shell v${{ steps.resolve.outputs.version }}"
           files: packages/shell-tizen/dist/JellyPlug_v${{ steps.resolve.outputs.version }}.wgt
