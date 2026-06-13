@@ -74,4 +74,5 @@ ASS track instantiates a `canvas.libassjs-canvas` with
 node subtitle-render-capture.mjs
 ```
 
-See `results-JEL-44.md` for the full comparison verdict and residual on-TV risks.
+The full comparison verdict and residual on-TV risks are recorded on the
+Paperclip issue (JEL-44), not in the repo. See `../EVIDENCE-POLICY.md`.

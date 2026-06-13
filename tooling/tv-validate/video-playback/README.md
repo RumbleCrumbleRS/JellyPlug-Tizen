@@ -59,7 +59,8 @@ Samsung HW support; whether the TV's Chromium-63 webview + AVPlay actually
 decodes and renders a given file can only be confirmed on the physical set
 (REST / `__shellDiag` — no framebuffer capture is possible, see the JEL-7
 memory). So this harness proves the profile sent and the decision made are
-correct; it does not prove pixels on the panel. See `results-JEL-41.md`.
+correct; it does not prove pixels on the panel. The run verdict is recorded on
+the Paperclip issue (JEL-41), not in the repo — see `../EVIDENCE-POLICY.md`.
 
 ## Run
 

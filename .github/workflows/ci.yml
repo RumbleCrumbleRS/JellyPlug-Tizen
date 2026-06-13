@@ -47,7 +47,7 @@ jobs:
       - run: pnpm run test
 
   verify-no-personal-endpoints:
-    name: verify no personal / dynamic-DNS endpoints
+    name: verify no personal endpoints / debug evidence
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -56,6 +56,13 @@ jobs:
         # server hostname. This guard fails CI if any tracked file re-introduces
         # a dynamic-DNS home-server hostname. See tooling/tv-validate/EVIDENCE-POLICY.md.
         run: tooling/ci/check-no-personal-endpoints.sh
+      - name: No debug / QA capture evidence in tooling/tv-validate (JEL-141 guard)
+        # The repo should only hold relevant code. Harness OUTPUT (results-*.md
+        # writeups, logs, payload dumps, screenshots, checksums) is debug
+        # information and goes to the Paperclip issue, not git. This guard
+        # allowlists harness source + docs under tooling/tv-validate and fails
+        # if any capture evidence is re-committed. See EVIDENCE-POLICY.md.
+        run: tooling/ci/check-no-debug-evidence.sh
 
   verify-artifacts:
     name: verify committed .wgt are signed

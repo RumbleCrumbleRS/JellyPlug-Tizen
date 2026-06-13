@@ -49,4 +49,6 @@ sysroot via a user-prefix `apt-get` (no system install). Everything lands under
 - `bootstrap-chromium.sh` — sandbox headless-Chromium bring-up + CDP launch.
 - `cdp.mjs` — tiny dependency-free CDP client over the Node built-in WebSocket.
 - `dpad-test.mjs` — the login + 5-page walk + rescue/not-stuck assertions.
-- `results-JEL-33.md` — captured run output (evidence).
+
+Captured run output (evidence) is not kept in the repo — it goes to the
+Paperclip issue (JEL-33). See `../EVIDENCE-POLICY.md`.

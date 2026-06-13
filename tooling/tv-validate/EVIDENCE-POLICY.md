@@ -1,13 +1,14 @@
 # On-device QA evidence policy
 
 `tooling/tv-validate/` holds the on-device validation **harnesses** (the
-`verify-*.mjs` / `*.py` drivers and their `README`s). Those are source and
-belong in git.
+`verify-*.mjs` / `*.py` / `*.cjs` drivers and their `README`s). Those are
+source and belong in git.
 
-The **raw capture evidence** those harnesses produce — ntfy/relay logs,
-localStorage trail dumps, beacon payloads, screenshots, device probe output —
-is a different thing. It is generated from one operator's physical TV talking
-to one operator's personal Jellyfin server, so it tends to embed:
+Everything those harnesses **produce** is a different thing — `results-JEL-*.md`
+writeups, ntfy/relay logs, localStorage trail dumps, beacon payloads,
+screenshots, device-probe output, bundle checksums. It is debug information,
+not code, and it is generated from one operator's physical TV talking to one
+operator's personal Jellyfin server, so it tends to embed:
 
 - the server hostname (historically a free dynamic-DNS name that resolves to a
   home IP),
@@ -16,28 +17,35 @@ to one operator's personal Jellyfin server, so it tends to embed:
 
 In JEL-139 that evidence leaked a personal dynamic-DNS hostname into 13 tracked
 files and the entire git history while the repo was public. It was scrubbed,
-the history was rewritten, and the repo was made private.
+the history was rewritten, and the repo was made private. JEL-141 then removed
+the remaining capture evidence outright: the repo should hold only relevant
+code.
 
 ## Rules
 
-1. **Harnesses go in git. Raw capture evidence does not.** Attach raw captures
-   to the Paperclip issue instead (issue attachments / work products), where
-   they stay with the ticket and out of a clonable public artifact.
+1. **Harnesses go in git. Their output does not.** Only harness source
+   (`*.mjs` / `*.cjs` / `*.py` / `*.sh`), `README.md`, this policy, and
+   `.gitignore` may be tracked under `tooling/tv-validate/`. No results
+   writeups, logs, payload dumps, screenshots, or checksums.
 
-2. **If a small excerpt must live in the repo** (e.g. a worked example in a
-   `results-JEL-*.md`), redact first:
-   - server hostnames → a reserved `*.example` placeholder
-     (`REDACTED-SERVER.example`),
-   - never commit a real dynamic-DNS hostname (`*.ddns.net`, `*.duckdns.org`,
-     `*.hopto.org`, …). The reserved `.example` TLD never resolves, so it is
-     safe.
+2. **Run output and verdicts go to the Paperclip issue**, not the repo —
+   as a comment, attachment, or work product on the relevant `JEL-*` ticket,
+   where it stays with the work and out of a clonable artifact. Do not
+   re-introduce per-run `results-JEL-*.md` files.
 
-3. **CI enforces rule 2.** `tooling/ci/check-no-personal-endpoints.sh` runs in
-   the `verify-no-personal-endpoints` CI job and fails the build if any tracked
-   file references a personal / dynamic-DNS server endpoint. Run it locally
-   before committing capture excerpts:
+3. **CI enforces both rules:**
+   - `tooling/ci/check-no-debug-evidence.sh` (`JEL-141` guard) allowlists the
+     file types above under `tooling/tv-validate/` and fails the build if any
+     capture evidence is committed.
+   - `tooling/ci/check-no-personal-endpoints.sh` (`JEL-139` guard) fails the
+     build if any tracked file references a personal / dynamic-DNS server
+     endpoint.
+
+   Both run in the `verify-no-personal-endpoints` CI job. Run them locally
+   before committing:
 
    ```
+   tooling/ci/check-no-debug-evidence.sh
    tooling/ci/check-no-personal-endpoints.sh
    ```
 
