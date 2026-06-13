@@ -1,7 +1,8 @@
 // JEL-138 verification — default the login "Remember Me" checkbox to CHECKED.
 //
-// Field report + browser-verified root cause (tooling/tv-validate/
-// credential-persistence/results-JEL-138.md): jellyfin-web's `enableAutoLogin`
+// Field report + browser-verified root cause (see issue JEL-138 thread; the
+// reusable browser probe is tooling/tv-validate/credential-persistence/
+// jel138-nudge-verify.mjs): jellyfin-web's `enableAutoLogin`
 // localStorage flag is sticky. One login with the box unchecked flips it to
 // "false", and every later login form then renders the box unchecked. OSK
 // Enter submits from the password field WITHOUT passing the (D-pad-only-
