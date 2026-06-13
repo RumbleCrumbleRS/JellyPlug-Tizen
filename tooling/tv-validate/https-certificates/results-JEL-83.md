@@ -41,15 +41,15 @@ showError("Could not reach server: " + (err && err.message ? err.message : "unkn
 
 Run the **real** function from all four shipped JS artifacts (`shell.js`, `shell.min.js`, `boot-shell.src.js`, `boot-shell.min.js`) **and** the `shell-core` TS source over an input matrix:
 
-| input                          | output                         | rule                                         |
-| ------------------------------ | ------------------------------ | -------------------------------------------- |
+| input                             | output                            | rule                                         |
+| --------------------------------- | --------------------------------- | -------------------------------------------- |
 | `REDACTED-SERVER.example`         | `http://REDACTED-SERVER.example`  | bare host → **default http://**              |
-| `192.168.1.50:8096`            | `http://192.168.1.50:8096`     | bare host:port → http://                     |
+| `192.168.1.50:8096`               | `http://192.168.1.50:8096`        | bare host:port → http://                     |
 | `https://REDACTED-SERVER.example` | `https://REDACTED-SERVER.example` | explicit https **preserved** (no downgrade)  |
-| `http://192.168.1.50:8096`     | `http://192.168.1.50:8096`     | explicit http preserved                      |
-| `https://jelly.example///`     | `https://jelly.example`        | trailing slashes stripped                    |
-| `  jellyfin.local:8096  `      | `http://jellyfin.local:8096`   | whitespace trimmed                           |
-| `HTTPS://Host`                 | `HTTPS://Host`                 | scheme test case-insensitive, case preserved |
+| `http://192.168.1.50:8096`        | `http://192.168.1.50:8096`        | explicit http preserved                      |
+| `https://jelly.example///`        | `https://jelly.example`           | trailing slashes stripped                    |
+| `  jellyfin.local:8096  `         | `http://jellyfin.local:8096`      | whitespace trimmed                           |
+| `HTTPS://Host`                    | `HTTPS://Host`                    | scheme test case-insensitive, case preserved |
 
 All five sources produce identical output for every non-empty input. **One intentional divergence:** the JS artifacts return `""` for empty/blank input (the connect form then prompts "Please enter a server URL."), while the `shell-core` TS lib **throws** `"empty server URL"` so a programmatic caller can't silently probe an empty URL. Both are correct for their context and are asserted explicitly.
 

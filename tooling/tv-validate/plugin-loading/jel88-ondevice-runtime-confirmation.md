@@ -1,6 +1,6 @@
 # JEL-88 — On-device plugin runtime registration + UI confirmation (physical M63)
 
-Follow-up to **JEL-37** (pipeline parity PASS, 6 plugins, both paths). This is the *runtime* confirmation
+Follow-up to **JEL-37** (pipeline parity PASS, 6 plugins, both paths). This is the _runtime_ confirmation
 on the physical locked **Samsung QN82Q60RAFXZA** (2019 Q60R, Tizen 5.0 / Chromium 56 "M63") that the
 transpiled/inlined plugin bodies actually **execute and register their UI at runtime** — i.e. the
 JEL-17 failure class (transpile worked but a plugin threw at runtime) does **not** recur.
@@ -28,12 +28,12 @@ JEL-17 failure class (transpile worked but a plugin threw at runtime) does **not
 Fresh live capture, **both a cold boot and a warm boot**, sentinel→hello→t30…t200 observed
 (proves these are this-run posts, not stale):
 
-| Signal | Value | Meaning |
-| --- | --- | --- |
-| `tx` (`__shellFastPathTxInlines`) | **6** | All 6 server plugins transpiled/inlined & executed on Chromium 56 — matches JEL-37 `scriptsFound:6` |
-| `je` (`typeof JellyfinEnhanced`) | **object** | JellyfinEnhanced registered its runtime global |
-| `iterErr` | **0** | No "iterate non-iterable" throw (the JEL-17 / JEL-20 / JEL-21 failure class) |
-| `errMsg` (from `__shellDiag.errors`) | **empty** | No plugin runtime error captured across the full t0→t200 window |
+| Signal                               | Value      | Meaning                                                                                             |
+| ------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------- |
+| `tx` (`__shellFastPathTxInlines`)    | **6**      | All 6 server plugins transpiled/inlined & executed on Chromium 56 — matches JEL-37 `scriptsFound:6` |
+| `je` (`typeof JellyfinEnhanced`)     | **object** | JellyfinEnhanced registered its runtime global                                                      |
+| `iterErr`                            | **0**      | No "iterate non-iterable" throw (the JEL-17 / JEL-20 / JEL-21 failure class)                        |
+| `errMsg` (from `__shellDiag.errors`) | **empty**  | No plugin runtime error captured across the full t0→t200 window                                     |
 
 The 6 plugins (per JEL-37): NotifySync/client.js, EditorsChoice/script, JavaScriptInjector/public.js,
 HomeScreen/home-screen-sections.js, JellyfinEnhanced/script, PluginPages/inject.js — 4 Babel→chrome63,

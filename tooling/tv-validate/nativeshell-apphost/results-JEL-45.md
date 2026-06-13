@@ -23,14 +23,14 @@ a `localStorage` value — **none branch on `tizen`**. So the four return
 **identical values on the TV and in a desktop browser** running the same shell.
 The only AppHost member that legitimately differs by platform is `screen()`:
 
-| Property            | TV (Tizen)                                  | Browser (no `tizen`)        | Differs? |
-| ------------------- | ------------------------------------------- | --------------------------- | -------- |
-| `appName()`         | `AppInfo.appName` (constant)                | same                        | no       |
-| `deviceId()`        | `localStorage["_deviceId2"]`                | same mechanism              | no\*     |
-| `deviceName()`      | `AppInfo.deviceName` (constant)             | same                        | no       |
-| `getDefaultLayout()`| `"tv"`                                       | `"tv"`                      | no       |
-| `appVersion`        | absent                                       | absent                      | no       |
-| `screen()`          | real panel res via `tizen.systeminfo DISPLAY`| `1920x1080` fallback        | **yes**  |
+| Property             | TV (Tizen)                                    | Browser (no `tizen`) | Differs? |
+| -------------------- | --------------------------------------------- | -------------------- | -------- |
+| `appName()`          | `AppInfo.appName` (constant)                  | same                 | no       |
+| `deviceId()`         | `localStorage["_deviceId2"]`                  | same mechanism       | no\*     |
+| `deviceName()`       | `AppInfo.deviceName` (constant)               | same                 | no       |
+| `getDefaultLayout()` | `"tv"`                                        | `"tv"`               | no       |
+| `appVersion`         | absent                                        | absent               | no       |
+| `screen()`           | real panel res via `tizen.systeminfo DISPLAY` | `1920x1080` fallback | **yes**  |
 
 \* `deviceId` is per-install (the value is generated once and stored), so two
 different devices get different ids — but a single device returns the same id on
@@ -46,13 +46,13 @@ minified blob mirrors its source. (Today both carry the same values.)
 
 ## Property-by-property
 
-| # | Property            | Spec (JEL-45)                                   | Shipped code                                                        | Status        |
-| - | ------------------- | ----------------------------------------------- | ------------------------------------------------------------------- | ------------- |
-| 1 | `appName()`         | `"Jellyfin for Tizen"`                          | `"Jellyfin Shell for Tizen"`                                        | **DIVERGES**  |
-| 2 | `deviceId()`        | stable id persisted in `localStorage`           | stable `btoa(userAgent\|Date.now()\|Math.random())` in `_deviceId2` | matches intent\*\* |
-| 3 | `deviceName()`      | TV model from `tizen.systeminfo`, else `"Tizen TV"` | hardcoded `"Samsung Smart TV"`; never reads a model                 | **DIVERGES**  |
-| 4 | `getDefaultLayout()`| `"tv"`                                          | `"tv"`                                                              | matches       |
-| 5 | `appVersion`        | absent                                          | absent (explicit comment in `shell.js`)                            | matches       |
+| #   | Property             | Spec (JEL-45)                                       | Shipped code                                                        | Status             |
+| --- | -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ------------------ |
+| 1   | `appName()`          | `"Jellyfin for Tizen"`                              | `"Jellyfin Shell for Tizen"`                                        | **DIVERGES**       |
+| 2   | `deviceId()`         | stable id persisted in `localStorage`               | stable `btoa(userAgent\|Date.now()\|Math.random())` in `_deviceId2` | matches intent\*\* |
+| 3   | `deviceName()`       | TV model from `tizen.systeminfo`, else `"Tizen TV"` | hardcoded `"Samsung Smart TV"`; never reads a model                 | **DIVERGES**       |
+| 4   | `getDefaultLayout()` | `"tv"`                                              | `"tv"`                                                              | matches            |
+| 5   | `appVersion`         | absent                                              | absent (explicit comment in `shell.js`)                             | matches            |
 
 \*\* The shipped `deviceId` is stable and persisted (the spec's intent), but it
 is a base64 token, **not** RFC-4122 UUID format. If the spec strictly requires
