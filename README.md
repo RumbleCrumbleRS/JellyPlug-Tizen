@@ -1,5 +1,12 @@
 # Jellyfin for Tizen (JellyPlug)
 
+> **Releases are cut from the private `JellyPlug-Tizen-internal` repo, not here.**
+> This public repo is **source-only** — it lost its `TIZEN_*` signing secrets in
+> the JEL-145 rebuild, so its release CI would emit **unsigned** `.wgt`s the TV
+> refuses, and now fails fast by design. See [`RELEASE.md`](./RELEASE.md) and the
+> [Tizen Signing & Release Policy](/JEL/issues/JEL-162#document-signing-policy)
+> (JEL-162 Decision 2 = `bless-internal`).
+
 A thin browser-shell app for running Jellyfin on Samsung Smart TVs. The shell
 loads the **live** Jellyfin web client from `${server}/web/`, so every plugin
 installed on your server works 1:1 on the TV — same code, same plugins.

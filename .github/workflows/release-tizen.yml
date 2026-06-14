@@ -53,6 +53,30 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      # Policy gate (JEL-173 / JEL-162 Decision 2 "bless-internal"):
+      # JellyPlug-Tizen-internal (private) is the canonical signing/release
+      # path; the public jellyplug/JellyPlug-Tizen repo is source-only and lost
+      # its 4 TIZEN_* secrets in the JEL-145 rebuild. Without those secrets this
+      # job would build an UNSIGNED .wgt the locked TV refuses. Fail fast here —
+      # with a pointer to the internal repo — so a release run can never
+      # silently regress onto the broken public path. (Secret presence is the
+      # discriminator: this same step passes on the internal repo, where the
+      # secret is intact, and stops on the public repo, where it is gone.)
+      # See RELEASE.md.
+      - name: Enforce internal-repo-only release path (JEL-173)
+        env:
+          HAS_AUTHOR_CERT: ${{ secrets.TIZEN_AUTHOR_P12_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "${HAS_AUTHOR_CERT}" != "true" ]]; then
+            echo "::error::No Tizen signing secrets in ${GITHUB_REPOSITORY} — this is the SOURCE-ONLY repo." >&2
+            echo "::error::Cut releases from the canonical PRIVATE repo: RumbleCrumbleRS/JellyPlug-Tizen-internal" >&2
+            echo "::error::(JEL-162 Decision 2 'bless-internal'). Signing here would emit an UNSIGNED .wgt the TV refuses." >&2
+            echo "::error::See RELEASE.md for the full signing policy." >&2
+            exit 1
+          fi
+          echo "Tizen signing secrets present in ${GITHUB_REPOSITORY} — proceeding with the signed release build."
+
       - name: Resolve version from tag
         id: resolve
         # On a tag push the tag version must match tizen/config.xml, so a
