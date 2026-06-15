@@ -287,6 +287,9 @@ function strLiteral(src, name) {
 const SRC_LIT = strLiteral(tvSrc, "MODERN_SYNTAX_RE_SRC");
 const OPTS_LIT = strLiteral(tvSrc, "BABEL_OPTS_KEY");
 const FPR_LIT = strLiteral(tvSrc, "BABEL_FPR");
+// JEL-178: TX_VER is salted with a manual cache-epoch so a bump flushes all
+// legacy transpile-cache entries. Fold it into the recomputation too.
+const EPOCH_LIT = strLiteral(tvSrc, "TX_CACHE_EPOCH");
 
 const txCtx = {};
 vm.createContext(txCtx);
@@ -298,6 +301,8 @@ vm.runInContext(
     OPTS_LIT +
     ")+'|'+(" +
     FPR_LIT +
+    ")+'|'+(" +
+    EPOCH_LIT +
     "));",
   txCtx,
 );

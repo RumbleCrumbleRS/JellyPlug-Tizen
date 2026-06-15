@@ -20,8 +20,19 @@
           (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0));
     return h.toString(36);
   }
+  // JEL-178: cache-epoch salt. Bumping this string changes TX_VER, which
+  // changes TX_PFX, which orphans EVERY prior transpile-cache entry on the
+  // next boot (they fall under a dead prefix and get LRU-pruned). Required
+  // because the version-keying fix (keep config-version query) only governs
+  // FUTURE keys — it cannot retroactively invalidate the legacy entries the
+  // old strip-everything shell wrote under the bare ".../JavaScriptInjector/
+  // public.js" path. Those bare entries (snapshotting a snippet that was
+  // since DISABLED) were still being replayed on boot on the live M63, so a
+  // disabled JS-Injector snippet kept rendering on TV. On-device confirmed:
+  // flushing the cache drops the stale rows (srow 1->0, stable across reboot).
+  var TX_CACHE_EPOCH = "jel178-1";
   var TX_VER = txFnv1a(
-      MODERN_SYNTAX_RE_SRC + "|" + BABEL_OPTS_KEY + "|" + BABEL_FPR,
+      MODERN_SYNTAX_RE_SRC + "|" + BABEL_OPTS_KEY + "|" + BABEL_FPR + "|" + TX_CACHE_EPOCH,
     ),
     TX_PFX = "shell.tx" + TX_VER + ":";
   try {
