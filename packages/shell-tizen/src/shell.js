@@ -119,7 +119,13 @@
   // with boot-shell.src.js's TX_CACHE_EPOCH.
   var TX_CACHE_EPOCH = "jel178-1";
   var TX_VER = txFnv1a(
-    MODERN_SYNTAX_RE_SRC + "|" + BABEL_OPTS_KEY + "|" + BABEL_FPR + "|" + TX_CACHE_EPOCH,
+    MODERN_SYNTAX_RE_SRC +
+      "|" +
+      BABEL_OPTS_KEY +
+      "|" +
+      BABEL_FPR +
+      "|" +
+      TX_CACHE_EPOCH,
   );
   var TX_PFX = "shell.tx" + TX_VER + ":";
   try {
