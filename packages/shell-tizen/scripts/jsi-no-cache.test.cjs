@@ -90,6 +90,34 @@ for (const [label, file] of [
   );
 }
 
+// 6. JEL-182: TX_CACHE_EPOCH must be byte-identical across both shells. It is
+// salted into TX_VER -> TX_PFX; if the two shells diverge they compute
+// different cache prefixes and stop sharing transpile-cache entries on a shared
+// origin/localStorage (and one shell can miss a legacy-flush bump). A
+// single-sided bump must fail CI. (PR #8 bumped only boot-shell to jel178-2.)
+function epochOf(file) {
+  const src = fs.readFileSync(file, "utf8");
+  const m = src.match(/TX_CACHE_EPOCH\s*=\s*"([^"]*)"/);
+  return m ? m[1] : null;
+}
+const shellEpoch = epochOf(SHELL);
+const bootEpoch = epochOf(BOOT);
+check(
+  "TX_CACHE_EPOCH literal present in shell.js",
+  shellEpoch !== null,
+  "could not find TX_CACHE_EPOCH in shell.js",
+);
+check(
+  "TX_CACHE_EPOCH literal present in boot-shell.src.js",
+  bootEpoch !== null,
+  "could not find TX_CACHE_EPOCH in boot-shell.src.js",
+);
+check(
+  "TX_CACHE_EPOCH is in lockstep across both shells",
+  shellEpoch !== null && shellEpoch === bootEpoch,
+  "shell.js=" + shellEpoch + " vs boot-shell.src.js=" + bootEpoch,
+);
+
 if (failures) {
   console.error("\nJEL-178 jsi-no-cache verification FAILED: " + failures);
   process.exit(1);

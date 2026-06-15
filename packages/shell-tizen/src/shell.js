@@ -117,7 +117,7 @@
   // version-keying fix cannot retroactively invalidate; on-device confirmed to
   // drop a disabled snippet's stale rows on the M63. Keep this string in sync
   // with boot-shell.src.js's TX_CACHE_EPOCH.
-  var TX_CACHE_EPOCH = "jel178-1";
+  var TX_CACHE_EPOCH = "jel178-2";
   var TX_VER = txFnv1a(
     MODERN_SYNTAX_RE_SRC +
       "|" +
