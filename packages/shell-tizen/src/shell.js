@@ -1039,14 +1039,12 @@
       "    try{window.__TXVER=__TXVER;}catch(_){}",
       '    var __TXPFX="shell.tx"+__TXVER+":";',
       '    var __TXLRUKEY="shell.txLru"+__TXVER;',
-      // JEL-554 (v35): normalize cache key by stripping query string.
-      // v33/v34 QA confirmed JellyfinEnhanced appends ?v=<Date.now()> to
-      // every plugin script URL, so the full-URL cache key changed on
-      // every cold boot (54 misses / 1 hit despite 171 cached entries).
-      // Script body is determined by URL path; query is cache-buster
-      // metadata. Stripping the entire query stabilizes the key. TX_VER
-      // bump (32→35) invalidates stale entries.
-      '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");return i<0?u:u.substring(0,i);}',
+      // JEL-178: drop ONLY the per-load epoch-ms cache-buster (JE's
+      // ?v=Date.now()); keep config-version tokens (JS-Injector .NET ticks,
+      // HomeScreen plugin version) so a config change cache-misses instead
+      // of replaying a stale body. Behaviourally identical to the widget-
+      // side txKey above (JEL-26 lockstep).
+      '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
       // JEL-554 (v34): record the first 10 missed src URLs alongside the
@@ -2673,16 +2671,47 @@
   // ensureBabelReady, and the post-pass counter increment+miss reset
   // keeps the gate self-healing without manual intervention.
   var BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak";
-  // JEL-554 (v35): normalize cache key by stripping query string. v33/v34 QA
-  // confirmed JellyfinEnhanced appends ?v=<Date.now()> to every plugin
-  // script URL, so the full-URL cache key changed every cold boot (54
-  // misses / 1 hit despite 171 cached entries). Script body is determined
-  // by URL path; query is cache-buster metadata. Stripping the entire query
-  // stabilizes the key. TX_VER bump (32→35) invalidates stale entries.
+  // JEL-554 (v35): normalize cache key by stripping the per-load cache-buster.
+  // v33/v34 QA confirmed JellyfinEnhanced appends ?v=<Date.now()> to its
+  // dynamically-loaded sub-module URLs, so a full-URL key changed every cold
+  // boot (54 misses / 1 hit despite 171 cached entries). v35 fixed that by
+  // stripping the ENTIRE query — but that over-corrected (JEL-178): plugins
+  // whose script BODY is config-dependent serve it at a stable path with a
+  // content-version query that bumps when the config changes —
+  //   JavaScript Injector: /JavaScriptInjector/public.js?v=<.NET cfg ticks>
+  //   Home Screen Sections: /HomeScreen/...js?v=<plugin version>&c=N
+  // Stripping the whole query keyed every revision to the same slot, so once
+  // public.js was cached the TV kept running the STALE body — e.g. disabled
+  // JS-Injector snippets still executed on TV while the browser (which honours
+  // the ?v= change via HTTP cache) correctly dropped them.
+  // Fix: drop a query token ONLY when it is a per-load epoch-ms cache-buster
+  // (a 12–14 digit value within ~7 days of the device clock — the Date.now()
+  // shape); keep every other token (config-ticks are 18 digits, versions are
+  // non-numeric), so a config bump changes the key → cache miss → re-fetch.
+  // Self-invalidating: the new key never collides with a v35 stripped-path
+  // entry, so old stale slots are simply orphaned (LRU-pruned) with no TX_VER
+  // bump. Must stay behaviourally identical to the seed-side __txKey
+  // (JEL-26 lockstep) — both run on the same localStorage tx-cache.
   function txKey(url) {
     var u = String(url || "");
     var i = u.indexOf("?");
-    return i < 0 ? u : u.substring(0, i);
+    if (i < 0) return u;
+    var path = u.substring(0, i);
+    var pairs = u.substring(i + 1).split("&");
+    var keep = [];
+    var now = Date.now();
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var p = pairs[pi];
+      if (!p) continue;
+      var eq = p.indexOf("=");
+      var val = eq < 0 ? p : p.substring(eq + 1);
+      if (/^[0-9]{12,14}$/.test(val)) {
+        var n = parseInt(val, 10);
+        if (n > 0 && Math.abs(n - now) < 6048e5) continue;
+      }
+      keep.push(p);
+    }
+    return keep.length ? path + "?" + keep.join("&") : path;
   }
   // JEL-554 (v34): record first 10 missed URLs to expose static/dynamic
   // cache-key drift. QA can read window.__shellTxCacheMissUrlsStatic + the

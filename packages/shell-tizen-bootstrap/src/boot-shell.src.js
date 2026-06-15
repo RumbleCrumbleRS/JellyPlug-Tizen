@@ -851,7 +851,12 @@
       "    try{window.__TXVER=__TXVER;}catch(_){}",
       '    var __TXPFX="shell.tx"+__TXVER+":";',
       '    var __TXLRUKEY="shell.txLru"+__TXVER;',
-      '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");return i<0?u:u.substring(0,i);}',
+      // JEL-178: drop ONLY the per-load epoch-ms cache-buster (JE's
+      // ?v=Date.now()); keep config-version tokens (JS-Injector .NET ticks,
+      // HomeScreen plugin version) so toggling a plugin's config cache-misses
+      // instead of replaying a stale transpiled body. Lockstep with the TV
+      // shell's txKey / __txKey (JEL-26).
+      '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
       "    function __txGet(src){try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",

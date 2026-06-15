@@ -477,9 +477,11 @@ async function scenarioRecordThenPrime(name, seedText) {
   });
   h2.win.ApiClient = { getCurrentUserId: () => null };
   await h2.pump(8);
+  // JEL-178: txKey keeps a non-buster query token (?v=9 is not a 12–14 digit
+  // epoch-ms value), so the recorded URL caches under the query-bearing key.
   check(
     name + " B4: next-boot primer cached the recorded URL",
-    typeof h2.store[TXPFX + SERVER + "/MyPlugin/js/extra/splash.js"] ===
+    typeof h2.store[TXPFX + SERVER + "/MyPlugin/js/extra/splash.js?v=9"] ===
       "string",
     JSON.stringify(Object.keys(h2.store)),
   );
