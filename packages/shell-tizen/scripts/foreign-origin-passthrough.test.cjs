@@ -34,7 +34,13 @@ const vm = require("vm");
 
 const REPO = path.join(__dirname, "..", "..", "..");
 const TV_SHELL = path.join(REPO, "packages", "shell-tizen", "src", "shell.js");
-const TV_MIN = path.join(REPO, "packages", "shell-tizen", "src", "shell.min.js");
+const TV_MIN = path.join(
+  REPO,
+  "packages",
+  "shell-tizen",
+  "src",
+  "shell.min.js",
+);
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -77,7 +83,10 @@ let seed;
   const buildSeedScript = vm.runInContext("(" + fnSrc + ")", sb);
   seed = buildSeedScript(SERVER + "/web/", {});
 }
-check("built seed loads the JEL-184 foreign-origin guard", /function isForeignOrigin\(/.test(seed));
+check(
+  "built seed loads the JEL-184 foreign-origin guard",
+  /function isForeignOrigin\(/.test(seed),
+);
 
 // --- Slice the shipped isForeignOrigin predicate out of the built seed ------
 function sliceBraceFn(text, anchor) {
@@ -164,14 +173,18 @@ if (fnText) {
 // fetched again and the media bar regresses.
 check(
   "GATE 1 — shouldIntercept() skips foreign origins",
-  /if\(!src\|\|isBundle\(src\)\|\|isForeignOrigin\(src\)\)return null;/.test(tvSrc),
+  /if\(!src\|\|isBundle\(src\)\|\|isForeignOrigin\(src\)\)return null;/.test(
+    tvSrc,
+  ),
 );
 check(
   "GATE 2 — src IDL setter skips foreign origins",
-  /!isShellInternal\(this\)&&v&&!isBundle\(v\)&&!isForeignOrigin\(v\)/.test(tvSrc),
+  /!isShellInternal\(this\)&&v&&!isBundle\(v\)&&!isForeignOrigin\(v\)/.test(
+    tvSrc,
+  ),
 );
 check(
-  "GATE 3 — setAttribute(\"src\") skips foreign origins",
+  'GATE 3 — setAttribute("src") skips foreign origins',
   /!isShellInternal\(this\)&&value&&!isBundle\(value\)&&!isForeignOrigin\(value\)/.test(
     tvSrc,
   ),
