@@ -865,6 +865,20 @@
       '    if(!legacy){try{new Function("var a={};return a?.b");}catch(_){legacy=true;}}',
       "    if(!legacy)return;",
       '    function isBundle(src){var b=String(src||"").split("?")[0];return /\\.bundle\\.js$/i.test(b)||/\\.chunk\\.js$/i.test(b)||/(^|\\/)serviceworker\\.js$/i.test(b);}',
+      // JEL-184: never intercept cross-origin third-party scripts. The
+      // interceptor exists ONLY to transpile same-origin jellyfin-web plugin
+      // bodies served from ${server} (document.baseURI origin). A foreign
+      // script (e.g. the media bar / EditorsChoice trailer feature loading
+      // https://www.youtube.com/iframe_api) cannot be read with our fetch()
+      // — youtube.com sends no CORS header for the widget origin — so
+      // intercepting it ALWAYS fails the fetch, fires an `error` event, and
+      // the YouTube IFrame API never initializes: window.YT stays undefined,
+      // onYouTubeIframeAPIReady never resolves, no YT.Player, no muted
+      // playVideo(). On TV the media bar trailers then never autoplay, while
+      // a real browser (no interceptor) loads the API natively and they do.
+      // Fix: let foreign scripts load natively as real <script src>, exactly
+      // like a browser. Mirrors the JEL-131 primer's same-origin guard.
+      '    function isForeignOrigin(src){try{var o=new URL(document.baseURI).origin;if(!o||o==="null")return false;var a=new URL(String(src),document.baseURI).origin;return a!==o;}catch(_){return false;}}',
       "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
@@ -943,7 +957,7 @@
       '      if(node.getAttribute("data-shell-diag")==="1")return null;',
       '      if(node.getAttribute("data-shell-polyfill")==="1")return null;',
       '      var src=node.getAttribute("src");',
-      "      if(!src||isBundle(src))return null;",
+      "      if(!src||isBundle(src)||isForeignOrigin(src))return null;",
       "      try{window.__shellInterceptCount=(window.__shellInterceptCount||0)+1;window.__icAppend=(window.__icAppend||0)+1;}catch(_){}",
       "      return src;",
       "    }",
@@ -1005,7 +1019,7 @@
       "      if(SP&&srcDesc&&srcDesc.configurable&&srcDesc.set){",
       '        Object.defineProperty(SP,"src",{configurable:true,enumerable:srcDesc.enumerable,get:function(){return this.__shellOrigSrc||srcDesc.get.call(this);},set:function(v){',
       "          try{",
-      "            if(!isShellInternal(this)&&v&&!isBundle(v)){",
+      "            if(!isShellInternal(this)&&v&&!isBundle(v)&&!isForeignOrigin(v)){",
       "              try{window.__shellInterceptCount=(window.__shellInterceptCount||0)+1;window.__icSetter=(window.__icSetter||0)+1;}catch(_){}",
       "              this.__shellOrigSrc=String(v);",
       '              try{this.setAttribute("data-shell-rewriting","1");}catch(_){}',
@@ -1021,7 +1035,7 @@
       "      var origSetAttr=Element.prototype.setAttribute;",
       "      Element.prototype.setAttribute=function(name,value){",
       "        try{",
-      '          if(this.nodeName==="SCRIPT"&&String(name).toLowerCase()==="src"&&!isShellInternal(this)&&value&&!isBundle(value)){',
+      '          if(this.nodeName==="SCRIPT"&&String(name).toLowerCase()==="src"&&!isShellInternal(this)&&value&&!isBundle(value)&&!isForeignOrigin(value)){',
       "            try{window.__shellInterceptCount=(window.__shellInterceptCount||0)+1;window.__icSetAttr=(window.__icSetAttr||0)+1;}catch(_){}",
       "            this.__shellOrigSrc=String(value);",
       '            origSetAttr.call(this,"data-shell-rewriting","1");',
