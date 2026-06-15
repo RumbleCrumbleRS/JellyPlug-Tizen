@@ -41,6 +41,24 @@ const TV_MIN = path.join(
   "src",
   "shell.min.js",
 );
+// The bootstrap / baked shell — this is what ACTUALLY runs on the TV today
+// (the hosted shell at ${server}/shell/ is 404, so the .wgt's baked boot-shell
+// drives the device). It carries an identical dynamic-script interceptor, so
+// the same guard must be present here or the media bar regresses on hardware.
+const BOOT_SHELL = path.join(
+  REPO,
+  "packages",
+  "shell-tizen-bootstrap",
+  "src",
+  "boot-shell.src.js",
+);
+const BOOT_MIN = path.join(
+  REPO,
+  "packages",
+  "shell-tizen-bootstrap",
+  "src",
+  "boot-shell.min.js",
+);
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -170,31 +188,44 @@ if (fnText) {
 // --- Structural: all THREE interception gates must be wired to the guard ----
 // 1) appendChild/insertBefore (shouldIntercept), 2) the src IDL setter,
 // 3) setAttribute("src"). If any one drops the guard, foreign scripts get
-// fetched again and the media bar regresses.
-check(
-  "GATE 1 — shouldIntercept() skips foreign origins",
-  /if\(!src\|\|isBundle\(src\)\|\|isForeignOrigin\(src\)\)return null;/.test(
-    tvSrc,
-  ),
-);
-check(
-  "GATE 2 — src IDL setter skips foreign origins",
-  /!isShellInternal\(this\)&&v&&!isBundle\(v\)&&!isForeignOrigin\(v\)/.test(
-    tvSrc,
-  ),
-);
-check(
-  'GATE 3 — setAttribute("src") skips foreign origins',
-  /!isShellInternal\(this\)&&value&&!isBundle\(value\)&&!isForeignOrigin\(value\)/.test(
-    tvSrc,
-  ),
-);
+// fetched again and the media bar regresses. This must hold in BOTH shells —
+// the hosted shell.js AND the baked boot-shell.src.js that runs on the TV.
+function checkGates(label, src) {
+  check(
+    label + " GATE 1 — shouldIntercept() skips foreign origins",
+    /if\(!src\|\|isBundle\(src\)\|\|isForeignOrigin\(src\)\)return null;/.test(
+      src,
+    ),
+  );
+  check(
+    label + " GATE 2 — src IDL setter skips foreign origins",
+    /!isShellInternal\(this\)&&v&&!isBundle\(v\)&&!isForeignOrigin\(v\)/.test(
+      src,
+    ),
+  );
+  check(
+    label + ' GATE 3 — setAttribute("src") skips foreign origins',
+    /!isShellInternal\(this\)&&value&&!isBundle\(value\)&&!isForeignOrigin\(value\)/.test(
+      src,
+    ),
+  );
+  check(
+    label + " defines isForeignOrigin",
+    /function isForeignOrigin\(src\)\{/.test(src),
+  );
+}
 
-// --- Lockstep: the guard must survive into the shipped minified shell -------
-const minSrc = fs.readFileSync(TV_MIN, "utf8");
+checkGates("shell.js", tvSrc);
+checkGates("boot-shell.src.js", fs.readFileSync(BOOT_SHELL, "utf8"));
+
+// --- Lockstep: the guard must survive into BOTH shipped minified shells ------
 check(
   "shell.min.js carries the foreign-origin guard (JEL-120 lockstep)",
-  minSrc.indexOf("isForeignOrigin") !== -1,
+  fs.readFileSync(TV_MIN, "utf8").indexOf("isForeignOrigin") !== -1,
+);
+check(
+  "boot-shell.min.js carries the foreign-origin guard (lockstep)",
+  fs.readFileSync(BOOT_MIN, "utf8").indexOf("isForeignOrigin") !== -1,
 );
 
 if (failures) {
