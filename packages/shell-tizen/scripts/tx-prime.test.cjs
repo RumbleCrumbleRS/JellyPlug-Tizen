@@ -477,12 +477,17 @@ async function scenarioRecordThenPrime(name, seedText) {
   });
   h2.win.ApiClient = { getCurrentUserId: () => null };
   await h2.pump(8);
-  // JEL-178: txKey keeps a non-buster query token (?v=9 is not a 12–14 digit
-  // epoch-ms value), so the recorded URL caches under the query-bearing key.
+  // JEL-178: a query-bearing (cache-busted) URL is config-mutable, so the
+  // primer must NOT pre-cache it by URL — those scripts are fetched fresh +
+  // content-addressed at boot. The primer skips them; no shell.tx* entry is
+  // written for the recorded query-bearing URL.
   check(
-    name + " B4: next-boot primer cached the recorded URL",
-    typeof h2.store[TXPFX + SERVER + "/MyPlugin/js/extra/splash.js?v=9"] ===
-      "string",
+    name + " B4: primer skips the query-bearing (cache-busted) recorded URL",
+    typeof h2.store[TXPFX + SERVER + "/MyPlugin/js/extra/splash.js?v=9"] !==
+      "string" &&
+      !Object.keys(h2.store).some(function (k) {
+        return k.indexOf(TXPFX) === 0;
+      }),
     JSON.stringify(Object.keys(h2.store)),
   );
 }

@@ -344,7 +344,10 @@ function behavioural(src, label) {
     store.setCap(500000);
     let threw = false;
     try {
-      api.__txSet(ORIGIN + "/web/fresh.chunk.js?v=9", ENTRY);
+      // JEL-178: query-bearing (cache-busted) URLs are intentionally NOT cached
+      // by __txSet (they're config-mutable and content-addressed elsewhere), so
+      // exercise the quota/prune mechanic with a query-less (URL-cacheable) URL.
+      api.__txSet(ORIGIN + "/web/fresh.chunk.js", ENTRY);
     } catch (e) {
       threw = true;
     }
