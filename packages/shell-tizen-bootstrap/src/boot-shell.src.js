@@ -123,7 +123,10 @@
   }
   var WEB_INDEX_CACHE_KEY = "jellyfin.shell.webIndexHtml",
     WEB_CONFIG_CACHE_KEY = "jellyfin.shell.webConfig",
-    WEB_CACHE_VER = "1.0.87",
+    // JEL-178: bumped 1.0.87 -> 1.0.88 to orphan any web-index HTML cached
+    // before the JS-Injector write-guard landed (those entries may have a
+    // stale snippet baked in).
+    WEB_CACHE_VER = "1.0.88",
     WEB_CACHE_MAX = 262144,
     WEB_CACHE_GATE_KEY = "jellyfin.shell.indexCache";
   function webCacheEnabled() {
@@ -152,6 +155,15 @@
   function writeWebIndexCache(serverOrigin, body) {
     if (
       typeof body == "string" &&
+      // JEL-178: never persist a web-index HTML that has a JS-Injector bundle
+      // baked into it. The fast-path/async transpile inlines public.js/
+      // private.js into the document; caching that HTML would replay a snapshot
+      // of whatever snippets were enabled at cache time, so a later config
+      // toggle (enable/disable a snippet) would not take effect on TV. Skipping
+      // the cache here keeps the index re-fetched (and JS-Injector re-fetched +
+      // re-transpiled) every boot, matching the browser.
+      body.indexOf("JavaScriptInjector/public") < 0 &&
+      body.indexOf("JavaScriptInjector/private") < 0 &&
       !(body.length < 1024) &&
       !(body.length > WEB_CACHE_MAX) &&
       !(body.indexOf("<html") < 0 && body.indexOf("<HTML") < 0)
@@ -876,9 +888,9 @@
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
-      "    function __txGet(src){try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
+      "    function __txGet(src){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -900,7 +912,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return ret;",
       "      }",
-      '      window.fetch(src,{credentials:"omit"})',
+      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
@@ -968,7 +980,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return;",
       "      }",
-      '      window.fetch(src,{credentials:"omit"})',
+      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
@@ -2133,6 +2145,8 @@
     return i < 0 ? u : u.substring(0, i);
   }
   function txGetStatic(url) {
+    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url)))
+      return null;
     try {
       var v = localStorage.getItem(TX_PFX + txKey(url));
       if (v == null) {
@@ -2146,6 +2160,7 @@
     }
   }
   function txSetStatic(url, body) {
+    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url))) return;
     if (!(typeof body != "string" || body.length > 262144))
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
@@ -2397,7 +2412,15 @@
         return (
           pfPlugin
             ? ((responsePromise = pfPlugin), counts.pluginPrefetchAdopted++)
-            : (responsePromise = fetch(url, { credentials: "omit" })),
+            : (responsePromise = fetch(
+                url,
+                // JEL-178: bypass the WebView HTTP cache for config-mutable
+                // JS-Injector bundles so a snippet enable/disable is reflected
+                // on the next boot instead of replaying a cached body.
+                /JavaScriptInjector\/(public|private)\.js/.test(String(url))
+                  ? { credentials: "omit", cache: "no-store" }
+                  : { credentials: "omit" },
+              )),
           responsePromise
             .then(function (r) {
               if (!r.ok) throw new Error("HTTP " + r.status);
@@ -3036,6 +3059,14 @@
             txAbsUrl = new URL(rawSrc, baseUrl).href;
           } catch (_) {
             txBail = "txUrlParse";
+            break;
+          }
+          if (/JavaScriptInjector\/(public|private)\.js/.test(txAbsUrl)) {
+            // JEL-178: config-mutable JS-Injector bundles must never be served
+            // from the transpile cache (their ?v= is a per-render tick, not a
+            // content hash, so a cached body goes stale on every config toggle).
+            // Bail the synchronous fast-path so the async path fetches fresh.
+            txBail = "txVolatile";
             break;
           }
           var txBody = null;

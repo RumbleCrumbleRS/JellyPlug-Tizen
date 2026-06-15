@@ -267,6 +267,15 @@
 
   function writeWebIndexCache(serverOrigin, body) {
     if (typeof body !== "string") return;
+    // JEL-178: never persist a web-index HTML that has a JS-Injector bundle
+    // inlined into it — caching it would replay a snapshot of whichever
+    // snippets were enabled at cache time, so a later enable/disable would not
+    // take effect on TV. Skipping keeps the index (and JS-Injector) re-fetched.
+    if (
+      body.indexOf("JavaScriptInjector/public") >= 0 ||
+      body.indexOf("JavaScriptInjector/private") >= 0
+    )
+      return;
     // index.html on real Jellyfin servers is ~30–60 KB; <1 KB or no
     // `<html`/`<body` means a truncated/error response (e.g. partial
     // transfer on a flaky TV network). Skip caching to avoid poisoning
@@ -1067,9 +1076,9 @@
       // rather than a cold-cache problem. Bounded at 10 to keep
       // localStorage/window state small. Mirrors instrumentation added
       // to the static-side cachedTranspile (see TX_PFX).
-      "    function __txGet(src){try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
+      "    function __txGet(src){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
       // jellyfin-web jQuery bundle (`<script src>`) finishes evaluating on
@@ -1098,7 +1107,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return ret;",
       "      }",
-      '      window.fetch(src,{credentials:"omit"})',
+      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       // JEL-554 (v32): only call babel.transform when the body actually
@@ -1185,7 +1194,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return;",
       "      }",
-      '      window.fetch(src,{credentials:"omit"})',
+      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       // JEL-554 (v32): fast path for plugin bodies that parse on Chromium 56.
@@ -2731,6 +2740,8 @@
   // dynamic-side window.__shellTxCacheMissUrls and diff against
   // `Object.keys(localStorage).filter(k=>k.indexOf('shell.tx35:')===0)`.
   function txGetStatic(url) {
+    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url)))
+      return null;
     try {
       var v = localStorage.getItem(TX_PFX + txKey(url));
       if (v == null) {
@@ -2747,6 +2758,7 @@
     }
   }
   function txSetStatic(url, body) {
+    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url))) return;
     if (typeof body !== "string" || body.length > 262144) return;
     try {
       localStorage.setItem(TX_PFX + txKey(url), body);
@@ -3069,7 +3081,15 @@
           responsePromise = pfPlugin;
           counts.pluginPrefetchAdopted++;
         } else {
-          responsePromise = fetch(url, { credentials: "omit" });
+          responsePromise = fetch(
+            url,
+            // JEL-178: bypass the WebView HTTP cache for config-mutable
+            // JS-Injector bundles so a snippet enable/disable is reflected on
+            // the next boot instead of replaying a cached body.
+            /JavaScriptInjector\/(public|private)\.js/.test(String(url))
+              ? { credentials: "omit", cache: "no-store" }
+              : { credentials: "omit" },
+          );
         }
         return responsePromise
           .then(function (r) {
