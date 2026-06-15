@@ -1,14 +1,21 @@
-// JEL-178 regression: the JS-Injector public.js/private.js bundles are
-// config-mutable (enabling/disabling a snippet regenerates the body but the
-// served ?v= is a per-render .NET tick, not a content hash). They must NEVER be
-// served from any shell cache or the WebView HTTP cache, or a disabled snippet
-// keeps rendering on TV (and a re-enabled one fails to appear) — the exact
-// JEL-178 symptom reproduced on a physical M63.
+// JEL-178 regression: a plugin script whose body is config-mutable (the JS
+// Injector is the reported example, but this is GENERAL — any plugin that
+// serves a cache-busted `?v=<tick/version>` script) must reflect the current
+// server content on TV, exactly like the browser. An earlier fix special-cased
+// the JS-Injector path by name; this pins the PLUGIN-AGNOSTIC design:
 //
-// This pins the fix across BOTH shells (shell.js widget-side + boot-shell.src.js
-// hosted/baked): every transpile-cache read/write path skips JS-Injector URLs,
-// the fetch uses cache:"no-store" for them, and the web-index HTML cache refuses
-// to persist a document with a JS-Injector bundle inlined.
+//   1. Query-bearing (cache-busted) script URLs are NOT served from the URL
+//      transpile cache (their path doesn't change when content does).
+//   2. They are fetched with a per-fetch unique cache-buster (the M63 WebView
+//      ignores fetch cache:"no-store"), so the network read is always current.
+//   3. The transpile result is cached by a HASH OF THE SOURCE (`txc:`+fnv1a),
+//      so unchanged content reuses the cached transpile (no Babel re-run) while
+//      any content change yields a new key (re-transpile) — for every plugin,
+//      no plugin named.
+//   4. The web-index HTML cache refuses to persist a document that has a
+//      transpiled plugin script inlined (would replay a stale snapshot).
+//
+// CRITICAL: the cache/transpile LOGIC must not name a specific plugin.
 //
 // Run: node scripts/jsi-no-cache.test.cjs
 
@@ -34,60 +41,52 @@ function check(name, cond, detail) {
   }
 }
 
-// Both shells skip JS-Injector with a `(public|private)` URL-pattern guard.
-// Seed strings escape the slashes (`\\/`), real functions don't (`\/`), so
-// match on the escaping-agnostic `(public|private)` alternation that nothing
-// else in the file uses.
-const GUARD = /\(public\|private\)/g;
+// Strip comments so we can assert no plugin name leaks into LOGIC (comments may
+// still reference the JS Injector as an example).
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((l) => l.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
 
 for (const [label, file] of [
   ["shell.js", SHELL],
   ["boot-shell.src.js", BOOT],
 ]) {
   const src = fs.readFileSync(file, "utf8");
+  const code = stripComments(src);
 
-  // Cache read/write skips: __txGet, __txSet, txGetStatic, txSetStatic each
-  // early-out for a JS-Injector URL; the fetch adds one more; so does the
-  // web-index guard / fast-path. Require a healthy floor across the shell.
-  const guards = (src.match(GUARD) || []).length;
+  // 1. No plugin named in the cache/transpile LOGIC (general fix, not a patch).
   check(
-    label + ": carries the JS-Injector skip guards (cache + fetch paths)",
-    guards >= 5,
-    "found " + guards,
+    label + ": no plugin name in cache/transpile logic (general fix)",
+    code.indexOf("JavaScriptInjector") < 0,
+    "found 'JavaScriptInjector' outside comments",
   );
 
+  // 2. Volatility keyed off the URL query, not a plugin name.
   check(
-    label + ": __txGet skips JS-Injector before the cache read",
-    /function __txGet\(src\)\{if\(\/JavaScriptInjector.*?return null;/.test(
-      src,
-    ),
+    label + ': keys volatility off the URL query (indexOf("?"))',
+    /indexOf\("\?"\)\s*>=\s*0/.test(code),
   );
+
+  // 3. Transpile result is content-addressed (hash of the fetched source).
   check(
-    label + ": __txSet skips JS-Injector (no cache write)",
-    /function __txSet\(src,body\)\{if\(\/JavaScriptInjector.*?return;/.test(
-      src,
-    ),
+    label + ": transpile cache is content-addressed (txc: + txFnv1a(code))",
+    /txc:/.test(code) && /txFnv1a\(code\)/.test(code),
   );
+
+  // 4. Volatile fetch carries a per-fetch unique cache-buster.
   check(
-    label + ": txGetStatic skips JS-Injector",
-    /function txGetStatic\(url\) \{[\s\S]{0,80}?\(public\|private\)[\s\S]{0,40}?return null;/.test(
-      src,
-    ),
+    label + ": volatile fetch appends a unique cache-buster (__sb / __sbN)",
+    /__sb=/.test(code) && /__sbN/.test(code),
   );
+
+  // 5. web-index HTML cache refuses HTML with a transpiled plugin inlined.
   check(
-    label + ": txSetStatic skips JS-Injector",
-    /function txSetStatic\(url, body\) \{[\s\S]{0,80}?\(public\|private\)[\s\S]{0,30}?return;/.test(
-      src,
-    ),
-  );
-  check(
-    label + ': fetches JS-Injector with cache:"no-store"',
-    /cache:\s*"no-store"/.test(src),
-  );
-  check(
-    label + ": web-index cache refuses HTML with a JS-Injector bundle inlined",
-    src.indexOf("JavaScriptInjector/public") >= 0 &&
-      src.indexOf("JavaScriptInjector/private") >= 0,
+    label + ": web-index cache skips HTML with a transpiled inline",
+    /indexOf\("data-shell-transpiled-from"\)/.test(code),
   );
 }
 
@@ -95,4 +94,4 @@ if (failures) {
   console.error("\nJEL-178 jsi-no-cache verification FAILED: " + failures);
   process.exit(1);
 }
-console.log("\nAll JEL-178 jsi-no-cache checks passed.");
+console.log("\nAll JEL-178 jsi-no-cache (general) checks passed.");

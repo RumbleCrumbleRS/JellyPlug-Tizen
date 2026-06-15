@@ -267,15 +267,11 @@
 
   function writeWebIndexCache(serverOrigin, body) {
     if (typeof body !== "string") return;
-    // JEL-178: never persist a web-index HTML that has a JS-Injector bundle
-    // inlined into it — caching it would replay a snapshot of whichever
-    // snippets were enabled at cache time, so a later enable/disable would not
-    // take effect on TV. Skipping keeps the index (and JS-Injector) re-fetched.
-    if (
-      body.indexOf("JavaScriptInjector/public") >= 0 ||
-      body.indexOf("JavaScriptInjector/private") >= 0
-    )
-      return;
+    // JEL-178: never persist a web-index HTML that has a transpiled plugin
+    // script inlined into it. Such an inline is a point-in-time snapshot of
+    // that plugin's body; replaying cached HTML later would ignore a config
+    // change. Plugin-agnostic (keys off the shell's own inline marker).
+    if (body.indexOf("data-shell-transpiled-from") >= 0) return;
     // index.html on real Jellyfin servers is ~30–60 KB; <1 KB or no
     // `<html`/`<body` means a truncated/error response (e.g. partial
     // transfer on a flaky TV network). Skip caching to avoid poisoning
@@ -1076,9 +1072,9 @@
       // rather than a cold-cache problem. Bounded at 10 to keep
       // localStorage/window state small. Mirrors instrumentation added
       // to the static-side cachedTranspile (see TX_PFX).
-      "    function __txGet(src){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
+      '    function __txGet(src){if(String(src).indexOf("?")>=0)return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(String(src).indexOf("?")>=0)return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
       // jellyfin-web jQuery bundle (`<script src>`) finishes evaluating on
@@ -1107,7 +1103,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return ret;",
       "      }",
-      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
+      '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       // JEL-554 (v32): only call babel.transform when the body actually
@@ -1194,7 +1190,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return;",
       "      }",
-      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
+      '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       // JEL-554 (v32): fast path for plugin bodies that parse on Chromium 56.
@@ -1315,7 +1311,7 @@
       '      var origin="";try{origin=new URL(document.baseURI).origin;}catch(_){}',
       "      var seen={},fq=[],bodies=[],pend=0,busy=false,stopped=false;",
       '      function authed(){try{return !!(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId());}catch(_){return false;}}',
-      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;if(String(abs).indexOf('?')>=0)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
       "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
       '      function stopAuth(){stopped=true;P.st="auth";}',
       "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
@@ -2740,8 +2736,6 @@
   // dynamic-side window.__shellTxCacheMissUrls and diff against
   // `Object.keys(localStorage).filter(k=>k.indexOf('shell.tx35:')===0)`.
   function txGetStatic(url) {
-    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url)))
-      return null;
     try {
       var v = localStorage.getItem(TX_PFX + txKey(url));
       if (v == null) {
@@ -2758,7 +2752,6 @@
     }
   }
   function txSetStatic(url, body) {
-    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url))) return;
     if (typeof body !== "string" || body.length > 262144) return;
     try {
       localStorage.setItem(TX_PFX + txKey(url), body);
@@ -3053,7 +3046,7 @@
         }
         // JEL-554 (v32): cache short-circuit. Skip fetch + babel entirely
         // if we transpiled this URL on a previous boot.
-        var cached = txGetStatic(url);
+        var cached = url.indexOf("?") >= 0 ? null : txGetStatic(url);
         if (cached != null) {
           s.removeAttribute("src");
           s.removeAttribute("defer");
@@ -3082,11 +3075,20 @@
           counts.pluginPrefetchAdopted++;
         } else {
           responsePromise = fetch(
-            url,
-            // JEL-178: bypass the WebView HTTP cache for config-mutable
-            // JS-Injector bundles so a snippet enable/disable is reflected on
-            // the next boot instead of replaying a cached body.
-            /JavaScriptInjector\/(public|private)\.js/.test(String(url))
+            // JEL-178: a query string marks a cache-busted (config-mutable)
+            // plugin script. M63's WebView does not honor fetch cache:"no-store"
+            // reliably, so append a per-fetch unique token to force a real
+            // network read (the server ignores unknown query params). The
+            // content-addressed key below dedups the transpile, so this costs
+            // only a download, not a re-transpile. Plugin-agnostic.
+            url.indexOf("?") >= 0
+              ? url +
+                  "&__sb=" +
+                  Date.now() +
+                  "." +
+                  (window.__sbN = (window.__sbN || 0) + 1)
+              : url,
+            url.indexOf("?") >= 0
               ? { credentials: "omit", cache: "no-store" }
               : { credentials: "omit" },
           );
@@ -3097,6 +3099,24 @@
             return r.text();
           })
           .then(function (code) {
+            // JEL-178: content-addressed transpile cache key. A query-bearing
+            // (cache-busted) URL is keyed by a hash of its current source, so
+            // ANY plugin's config change yields a new key (re-transpile) while
+            // unchanged content reuses the cached transpile. No plugin named.
+            var ck = url.indexOf("?") >= 0 ? "txc:" + txFnv1a(code) : url;
+            var pre = txGetStatic(ck);
+            if (pre != null) {
+              s.removeAttribute("src");
+              s.removeAttribute("defer");
+              s.removeAttribute("async");
+              s.removeAttribute("type");
+              s.textContent = pre;
+              s.setAttribute("data-shell-transpiled-from", url);
+              s.setAttribute("data-shell-tx-cached", "1");
+              counts.transpiled++;
+              counts.cachedHits++;
+              return;
+            }
             // JEL-554 (v32): fast path for plugins that don't use
             // any ES2020+ syntax — inline raw, skip babel CPU cost.
             if (!needsTranspile(code)) {
@@ -3110,7 +3130,7 @@
               s.setAttribute("data-shell-transpiled-from", url);
               s.setAttribute("data-shell-fast-path", "1");
               if (gatedRaw) s.setAttribute("data-shell-jquery-gated", "1");
-              txSetStatic(url, bodyRaw);
+              txSetStatic(ck, bodyRaw);
               counts.transpiled++;
               counts.fastPath++;
               shellLog("fast-path+inlined", url, gatedRaw ? "(jq-gated)" : "");
@@ -3160,7 +3180,7 @@
               s.textContent = body;
               s.setAttribute("data-shell-transpiled-from", url);
               if (gated) s.setAttribute("data-shell-jquery-gated", "1");
-              txSetStatic(url, body);
+              txSetStatic(ck, body);
               shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
             });
           })

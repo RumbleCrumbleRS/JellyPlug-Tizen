@@ -22,15 +22,11 @@
   }
   // JEL-178: cache-epoch salt. Bumping this string changes TX_VER, which
   // changes TX_PFX, which orphans EVERY prior transpile-cache entry on the
-  // next boot (they fall under a dead prefix and get LRU-pruned). Required
-  // because the version-keying fix (keep config-version query) only governs
-  // FUTURE keys — it cannot retroactively invalidate the legacy entries the
-  // old strip-everything shell wrote under the bare ".../JavaScriptInjector/
-  // public.js" path. Those bare entries (snapshotting a snippet that was
-  // since DISABLED) were still being replayed on boot on the live M63, so a
-  // disabled JS-Injector snippet kept rendering on TV. On-device confirmed:
-  // flushing the cache drops the stale rows (srow 1->0, stable across reboot).
-  var TX_CACHE_EPOCH = "jel178-1";
+  // next boot (they fall under a dead prefix and get LRU-pruned). Bumped to
+  // "jel178-2" alongside the move to content-addressed keying for cache-busted
+  // plugin scripts, so any entry an older shell wrote under a URL/path key is
+  // abandoned rather than replayed.
+  var TX_CACHE_EPOCH = "jel178-2";
   var TX_VER = txFnv1a(
       MODERN_SYNTAX_RE_SRC +
         "|" +
@@ -155,15 +151,12 @@
   function writeWebIndexCache(serverOrigin, body) {
     if (
       typeof body == "string" &&
-      // JEL-178: never persist a web-index HTML that has a JS-Injector bundle
-      // baked into it. The fast-path/async transpile inlines public.js/
-      // private.js into the document; caching that HTML would replay a snapshot
-      // of whatever snippets were enabled at cache time, so a later config
-      // toggle (enable/disable a snippet) would not take effect on TV. Skipping
-      // the cache here keeps the index re-fetched (and JS-Injector re-fetched +
-      // re-transpiled) every boot, matching the browser.
-      body.indexOf("JavaScriptInjector/public") < 0 &&
-      body.indexOf("JavaScriptInjector/private") < 0 &&
+      // JEL-178: never persist a web-index HTML that has a transpiled plugin
+      // script inlined into it. Any such inline is a point-in-time snapshot of
+      // that plugin's body; replaying cached HTML on a later boot would ignore
+      // a config change. Plugin-agnostic (keys off the shell's own inline
+      // marker, not any plugin name).
+      body.indexOf("data-shell-transpiled-from") < 0 &&
       !(body.length < 1024) &&
       !(body.length > WEB_CACHE_MAX) &&
       !(body.indexOf("<html") < 0 && body.indexOf("<HTML") < 0)
@@ -888,9 +881,9 @@
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
-      "    function __txGet(src){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}",
+      '    function __txGet(src){if(String(src).indexOf("?")>=0)return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(/JavaScriptInjector\\/(public|private)\\.js/.test(String(src)))return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(String(src).indexOf("?")>=0)return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -912,7 +905,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return ret;",
       "      }",
-      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
+      '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
@@ -980,7 +973,7 @@
       '        setTimeout(function(){dispatchEvt(node,"load");},0);',
       "        return;",
       "      }",
-      '      window.fetch(src,/JavaScriptInjector\\/(public|private)\\.js/.test(String(src))?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
+      '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
@@ -1103,7 +1096,7 @@
       '      var origin="";try{origin=new URL(document.baseURI).origin;}catch(_){}',
       "      var seen={},fq=[],bodies=[],pend=0,busy=false,stopped=false;",
       '      function authed(){try{return !!(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId());}catch(_){return false;}}',
-      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;if(String(abs).indexOf('?')>=0)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
       "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
       '      function stopAuth(){stopped=true;P.st="auth";}',
       "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
@@ -2145,8 +2138,6 @@
     return i < 0 ? u : u.substring(0, i);
   }
   function txGetStatic(url) {
-    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url)))
-      return null;
     try {
       var v = localStorage.getItem(TX_PFX + txKey(url));
       if (v == null) {
@@ -2160,7 +2151,6 @@
     }
   }
   function txSetStatic(url, body) {
-    if (/JavaScriptInjector\/(public|private)\.js/.test(String(url))) return;
     if (!(typeof body != "string" || body.length > 262144))
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
@@ -2392,7 +2382,7 @@
         } catch (_) {
           return null;
         }
-        var cached = txGetStatic(url);
+        var cached = url.indexOf("?") >= 0 ? null : txGetStatic(url);
         if (cached != null)
           return (
             s.removeAttribute("src"),
@@ -2413,11 +2403,21 @@
           pfPlugin
             ? ((responsePromise = pfPlugin), counts.pluginPrefetchAdopted++)
             : (responsePromise = fetch(
-                url,
-                // JEL-178: bypass the WebView HTTP cache for config-mutable
-                // JS-Injector bundles so a snippet enable/disable is reflected
-                // on the next boot instead of replaying a cached body.
-                /JavaScriptInjector\/(public|private)\.js/.test(String(url))
+                // JEL-178: a query string on a plugin script is a cache-buster
+                // (?v=<tick/version>), i.e. the body is config-mutable. The M63
+                // WebView does NOT honor fetch cache:"no-store" reliably, so
+                // append a per-fetch unique token to force a real network read
+                // (the server ignores unknown query params). Content-addressed
+                // keying below then dedups the transpile, so this only costs a
+                // download, not a re-transpile. Plugin-agnostic.
+                url.indexOf("?") >= 0
+                  ? url +
+                      "&__sb=" +
+                      Date.now() +
+                      "." +
+                      (window.__sbN = (window.__sbN || 0) + 1)
+                  : url,
+                url.indexOf("?") >= 0
                   ? { credentials: "omit", cache: "no-store" }
                   : { credentials: "omit" },
               )),
@@ -2427,6 +2427,25 @@
               return r.text();
             })
             .then(function (code) {
+              // JEL-178: content-addressed transpile cache key. A query-bearing
+              // (cache-busted) URL is keyed by a hash of its current source, so
+              // ANY plugin's config change yields a new key (re-transpile) while
+              // unchanged content reuses the cached transpile. No plugin is
+              // special-cased.
+              var ck = url.indexOf("?") >= 0 ? "txc:" + txFnv1a(code) : url;
+              var pre = txGetStatic(ck);
+              if (pre != null) {
+                (s.removeAttribute("src"),
+                  s.removeAttribute("defer"),
+                  s.removeAttribute("async"),
+                  s.removeAttribute("type"),
+                  (s.textContent = pre),
+                  s.setAttribute("data-shell-transpiled-from", url),
+                  s.setAttribute("data-shell-tx-cached", "1"),
+                  counts.transpiled++,
+                  counts.cachedHits++);
+                return;
+              }
               if (!needsTranspile(code)) {
                 (s.removeAttribute("src"),
                   s.removeAttribute("defer"),
@@ -2438,7 +2457,7 @@
                   s.setAttribute("data-shell-transpiled-from", url),
                   s.setAttribute("data-shell-fast-path", "1"),
                   gatedRaw && s.setAttribute("data-shell-jquery-gated", "1"),
-                  txSetStatic(url, bodyRaw),
+                  txSetStatic(ck, bodyRaw),
                   counts.transpiled++,
                   counts.fastPath++,
                   shellLog(
@@ -2479,7 +2498,7 @@
                   ((s.textContent = body),
                     s.setAttribute("data-shell-transpiled-from", url),
                     gated && s.setAttribute("data-shell-jquery-gated", "1"),
-                    txSetStatic(url, body),
+                    txSetStatic(ck, body),
                     shellLog(
                       "transpiled+inlined",
                       url,
@@ -3061,11 +3080,12 @@
             txBail = "txUrlParse";
             break;
           }
-          if (/JavaScriptInjector\/(public|private)\.js/.test(txAbsUrl)) {
-            // JEL-178: config-mutable JS-Injector bundles must never be served
-            // from the transpile cache (their ?v= is a per-render tick, not a
-            // content hash, so a cached body goes stale on every config toggle).
-            // Bail the synchronous fast-path so the async path fetches fresh.
+          if (txAbsUrl.indexOf("?") >= 0) {
+            // JEL-178: a query string marks a cache-busted (config-mutable)
+            // plugin script. The synchronous fast-path can only replay a cached
+            // body (no fetch), which would go stale on a config change, so bail
+            // to the async path which re-fetches + content-validates. Plugin-
+            // agnostic — no specific plugin is named.
             txBail = "txVolatile";
             break;
           }
