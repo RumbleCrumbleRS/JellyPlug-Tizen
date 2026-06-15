@@ -111,8 +111,21 @@
     }
     return h.toString(36);
   }
+  // JEL-178: cache-epoch salt (lockstep with boot-shell.src.js). Bumping this
+  // changes TX_VER -> TX_PFX, orphaning EVERY prior transpile-cache entry on
+  // next boot. Required to flush legacy bare-path JS-Injector entries that the
+  // version-keying fix cannot retroactively invalidate; on-device confirmed to
+  // drop a disabled snippet's stale rows on the M63. Keep this string in sync
+  // with boot-shell.src.js's TX_CACHE_EPOCH.
+  var TX_CACHE_EPOCH = "jel178-1";
   var TX_VER = txFnv1a(
-    MODERN_SYNTAX_RE_SRC + "|" + BABEL_OPTS_KEY + "|" + BABEL_FPR,
+    MODERN_SYNTAX_RE_SRC +
+      "|" +
+      BABEL_OPTS_KEY +
+      "|" +
+      BABEL_FPR +
+      "|" +
+      TX_CACHE_EPOCH,
   );
   var TX_PFX = "shell.tx" + TX_VER + ":";
   try {
