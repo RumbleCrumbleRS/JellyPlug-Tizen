@@ -1306,6 +1306,41 @@
       "        set:function(v){_S=wrap(v);}});",
       "    }catch(_){try{if(window.Splide)window.Splide=_S;}catch(__){}}",
       "  })();}catch(_){}",
+      // JEL-187 (corrected via JEL-188 on-device verify): the user's real home
+      // carousel is the Media Bar plugin (IAmParadox27 slideshowpure.js), NOT
+      // Splide — so the pauseOnFocus shim above is inert here. slideshowpure's
+      // goToSlide() stops the auto-advance timer on every transition and, for a
+      // slide that has a trailer, only restarts it on the YouTube ENDED event.
+      // The YT player is created with no onError handler, and on the file:// TV
+      // the trailer fails (YT error 153 — the unresolved JEL-184 blocker) so
+      // ENDED never fires -> the timer never restarts -> the carousel sticks on
+      // the first trailer slide (on-device: stuck on slide index 1). This
+      // watchdog un-sticks it: if the active slide index has not advanced for a
+      // grace period while the timer is stopped, the show is not user-paused and
+      // no trailer video is actually playing, advance one slide. The
+      // isVideoPlaying guard means it never fires while a trailer legitimately
+      // plays, so it stays harmless if/when JEL-184 lands. Generic: keys only
+      // off window.slideshowPure. Kill switch:
+      // localStorage["jellyfin.shell.mediaBarWatchdogDisabled"]="1".
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.mediaBarWatchdogDisabled")==="1")return;',
+      "    if(window.__shellMediaBarWatchdog)return;window.__shellMediaBarWatchdog=1;",
+      "    var lastIdx=-1,lastChange=Date.now(),GRACE=10000;",
+      "    setInterval(function(){try{",
+      "      var sp=window.slideshowPure;if(!sp||!sp.STATE||!sp.STATE.slideshow)return;",
+      "      var ss=sp.STATE.slideshow;",
+      "      if(!ss.totalItems||ss.totalItems<2)return;",
+      '      if(String(location.hash||"").indexOf("home")<0)return;',
+      "      var idx=ss.currentSlideIndex;",
+      "      if(idx!==lastIdx){lastIdx=idx;lastChange=Date.now();return;}",
+      "      if(ss.isPaused||ss.isVideoPlaying)return;",
+      "      if(ss.slideInterval&&ss.slideInterval.timerId)return;",
+      "      if(Date.now()-lastChange<GRACE)return;",
+      "      window.__shellMediaBarKicks=(window.__shellMediaBarKicks||0)+1;",
+      "      lastChange=Date.now();",
+      '      try{if(typeof sp.nextSlide==="function")sp.nextSlide();else if(ss.slideInterval&&ss.slideInterval.start)ss.slideInterval.start();}catch(_){}',
+      "    }catch(_){}},3000);",
+      "  })();}catch(_){}",
       '  try{if(localStorage.getItem("jellyfin.qa.overlay")==="1"){',
       "    function __qaIsSettingsView(){",
       '      var h=String(location.hash||"").toLowerCase();',
