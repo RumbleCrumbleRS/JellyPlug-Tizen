@@ -1265,6 +1265,47 @@
       "      };",
       "    }catch(_){}",
       "  })();}catch(_){}",
+      // JEL-187: media bar carousel stops auto-rotating on TV after the first
+      // slide. The home "media bar" / EditorsChoice spotlight carousel uses
+      // Splide (@4.1.4) and never sets pauseOnFocus/pauseOnHover, so both take
+      // Splide's defaults of TRUE. On a TV the D-pad focus lands inside the
+      // carousel and never leaves (no blur), so Splide's focusin handler pauses
+      // autoplay permanently — it advances once (slide 1 -> 2) then is stuck.
+      // A desktop browser is pointer-driven (no sticky focus) so it keeps
+      // rotating, which is why this only reproduces on the TV. Restore
+      // auto-rotation by wrapping the global Splide constructor BEFORE the
+      // plugin's `new Splide(...)` runs and forcing pauseOnFocus:false +
+      // pauseOnHover:false; with those false Splide never even binds the
+      // focus/hover listeners (the `if(options.pauseOnFocus)` guard), so focus
+      // can never pause it. Generic: keys only off the `window.Splide` global,
+      // no plugin-name coupling. Applies on every Tizen build (the sticky-focus
+      // model is TV-wide, not Chromium-version specific). keyboard:true D-pad
+      // nav is untouched — only the autoplay timer's pause-on-focus is removed.
+      // Kill switch: localStorage["jellyfin.shell.splideFocusPauseDisabled"]="1".
+      "  try{(function(){",
+      '    try{if(localStorage.getItem("jellyfin.shell.splideFocusPauseDisabled")==="1")return;}catch(_){}',
+      "    if(window.__shellSplideFocusShim)return;window.__shellSplideFocusShim=1;",
+      "    var _S;",
+      "    function wrap(S){",
+      "      if(!S||S.__shellNoFocusPause)return S;",
+      "      function W(sel,opts){",
+      "        opts=opts||{};",
+      "        try{opts.pauseOnFocus=false;opts.pauseOnHover=false;}catch(_){}",
+      "        try{window.__shellSplideWrapped=(window.__shellSplideWrapped||0)+1;}catch(_){}",
+      "        return new S(sel,opts);",
+      "      }",
+      "      try{W.prototype=S.prototype;}catch(_){}",
+      "      try{for(var k in S){if(Object.prototype.hasOwnProperty.call(S,k))W[k]=S[k];}}catch(_){}",
+      "      W.__shellNoFocusPause=1;",
+      "      return W;",
+      "    }",
+      "    if(window.Splide){_S=wrap(window.Splide);}",
+      "    try{",
+      '      Object.defineProperty(window,"Splide",{configurable:true,',
+      "        get:function(){return _S;},",
+      "        set:function(v){_S=wrap(v);}});",
+      "    }catch(_){try{if(window.Splide)window.Splide=_S;}catch(__){}}",
+      "  })();}catch(_){}",
       '  try{if(localStorage.getItem("jellyfin.qa.overlay")==="1"){',
       "    function __qaIsSettingsView(){",
       '      var h=String(location.hash||"").toLowerCase();',
