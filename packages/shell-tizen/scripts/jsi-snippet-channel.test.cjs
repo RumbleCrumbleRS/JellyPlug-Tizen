@@ -128,14 +128,19 @@ function loadChannel(file) {
   const harness =
     extractFunction(src, "jsiChannelDisabled", file) +
     "\n" +
+    // JEL-204: jsiChannelPath() resolves the (overridable) delivery route.
+    extractFunction(src, "jsiChannelPath", file) +
+    "\n" +
     extractFunction(src, "injectJsInjectorChannel", file) +
     "\n" +
     // The path/key constants live in a `var` block; redeclare them here from the
     // shipped literals so the extracted functions resolve them in the sandbox.
     'var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled";\n' +
+    'var JSI_CHANNEL_PATH_KEY = "jellyfin.shell.jsiChannelPath";\n' +
     'var JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";\n' +
     "globalThis.__inject = injectJsInjectorChannel;\n" +
-    "globalThis.__disabled = jsiChannelDisabled;\n";
+    "globalThis.__disabled = jsiChannelDisabled;\n" +
+    "globalThis.__path = jsiChannelPath;\n";
   const store = {};
   const sandbox = {
     localStorage: {
@@ -152,6 +157,7 @@ function loadChannel(file) {
   return {
     inject: sandbox.__inject,
     disabled: sandbox.__disabled,
+    path: sandbox.__path,
     store,
   };
 }
@@ -225,6 +231,37 @@ for (const [label, file] of [
     threw = true;
   }
   check(label + ": no body → no throw", threw === false);
+
+  // Case 5 (JEL-204): path defaults to public.js, and a localStorage override
+  // redirects the channel so the delivery route is not a hardcoded constant.
+  check(
+    label + ": jsiChannelPath() defaults to /JavaScriptInjector/public.js",
+    m.path() === "/JavaScriptInjector/public.js",
+  );
+  m.store["jellyfin.shell.jsiChannelPath"] = "/MyDelivery/snippets.js";
+  check(
+    label + ": jsiChannelPath() honours the override key",
+    m.path() === "/MyDelivery/snippets.js",
+  );
+  doc = makeDoc([]);
+  m.inject(doc, SERVER);
+  const overridden = doc.__scripts.filter(
+    (s) => (s.src || "").indexOf("/MyDelivery/snippets.js") >= 0,
+  );
+  check(
+    label + ": override injects ${server}<override path>, not public.js",
+    overridden.length === 1 &&
+      overridden[0].src === SERVER + "/MyDelivery/snippets.js" &&
+      doc.__scripts.filter((s) => (s.src || "").indexOf("public.js") >= 0)
+        .length === 0,
+  );
+  // Empty/whitespace override falls back to the default (no blank route).
+  m.store["jellyfin.shell.jsiChannelPath"] = "";
+  check(
+    label + ": empty override falls back to the default path",
+    m.path() === "/JavaScriptInjector/public.js",
+  );
+  delete m.store["jellyfin.shell.jsiChannelPath"];
 }
 
 // Source-level wiring assertions across both shells.

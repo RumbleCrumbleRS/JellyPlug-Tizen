@@ -2148,7 +2148,12 @@
   // document already references public.js (server/plugin injection) so it
   // never runs twice; this lets the channel coexist with the FT blob during
   // cutover. Killswitch: localStorage['jellyfin.shell.jsiChannelDisabled']='1'.
+  // JEL-204: delivery route overridable via localStorage
+  // ['jellyfin.shell.jsiChannelPath'] so the snippet-channel path is not a
+  // hardcoded plugin constant. Default stays public.js; jsiChannelPath() is the
+  // single resolver shared by the injector, idempotency guard and fast-path bail.
   var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled",
+    JSI_CHANNEL_PATH_KEY = "jellyfin.shell.jsiChannelPath",
     JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";
   function jsiChannelDisabled() {
     try {
@@ -2157,12 +2162,20 @@
       return !1;
     }
   }
+  function jsiChannelPath() {
+    try {
+      var p = localStorage.getItem(JSI_CHANNEL_PATH_KEY);
+      if (p) return p;
+    } catch (_) {}
+    return JSI_PUBLIC_PATH;
+  }
   function injectJsInjectorChannel(doc, serverUrl) {
     try {
       if (jsiChannelDisabled() || !doc || !doc.body) return;
-      if (doc.querySelector('script[src*="' + JSI_PUBLIC_PATH + '"]')) return;
+      var channelPath = jsiChannelPath();
+      if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
       var s = doc.createElement("script");
-      ((s.src = serverUrl + JSI_PUBLIC_PATH),
+      ((s.src = serverUrl + channelPath),
         s.setAttribute("data-shell-jsi-channel", "1"),
         doc.body.appendChild(s));
     } catch (_) {}
@@ -2963,7 +2976,7 @@
     // which only the DOMParser path can do. Bail when the channel is on and the
     // document carries no public.js tag so injectJsInjectorChannel runs it
     // through the firewall. Killswitch (jsiChannelDisabled) keeps the fast path.
-    if (!jsiChannelDisabled() && html.indexOf(JSI_PUBLIC_PATH) < 0)
+    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0)
       return bail("jsiChannel");
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
