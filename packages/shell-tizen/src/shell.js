@@ -2701,7 +2701,15 @@
   // Phase 1 moves the snippets into public.js the snippets' own single-run
   // guards (theme repo) keep them idempotent across both channels.
   // Killswitch: localStorage['jellyfin.shell.jsiChannelDisabled']='1'.
+  // JEL-204 (parent JEL-203 audit): the delivery route is overridable via
+  // localStorage['jellyfin.shell.jsiChannelPath'] so the snippet-channel path
+  // is not a hardcoded plugin constant baked into the shell. Default stays the
+  // JS Injector plugin's public.js; an override future-proofs against a
+  // delivery-plugin change without a shell release. jsiChannelPath() is the
+  // single resolver used by the injector, the idempotency guard and the fast-
+  // path bail so all three agree on the active route.
   var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled";
+  var JSI_CHANNEL_PATH_KEY = "jellyfin.shell.jsiChannelPath";
   var JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";
   function jsiChannelDisabled() {
     try {
@@ -2710,16 +2718,24 @@
       return false;
     }
   }
+  function jsiChannelPath() {
+    try {
+      var p = localStorage.getItem(JSI_CHANNEL_PATH_KEY);
+      if (p) return p;
+    } catch (_) {}
+    return JSI_PUBLIC_PATH;
+  }
   function injectJsInjectorChannel(doc, serverUrl) {
     try {
       if (jsiChannelDisabled()) return;
       if (!doc || !doc.body) return;
+      var channelPath = jsiChannelPath();
       // Idempotent: don't add a second public.js if the document already
       // carries one (server- or plugin-injected). The existing copy is
       // fetched, transpiled and run by transpileLegacyScripts.
-      if (doc.querySelector('script[src*="' + JSI_PUBLIC_PATH + '"]')) return;
+      if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
       var s = doc.createElement("script");
-      s.src = serverUrl + JSI_PUBLIC_PATH;
+      s.src = serverUrl + channelPath;
       s.setAttribute("data-shell-jsi-channel", "1");
       // End of <body> so the snippets load after jellyfin-web's bundles —
       // the same position the JS Injector plugin uses on a browser. The
@@ -3725,7 +3741,7 @@
     // and the document doesn't already carry a public.js tag, take the slow
     // path so injectJsInjectorChannel + transpileLegacyScripts run it through
     // the firewall. Killswitch (jsiChannelDisabled) restores the fast path.
-    if (!jsiChannelDisabled() && html.indexOf(JSI_PUBLIC_PATH) < 0)
+    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0)
       return bail("jsiChannel");
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
