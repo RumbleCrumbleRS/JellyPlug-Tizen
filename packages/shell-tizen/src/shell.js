@@ -2675,6 +2675,60 @@
     doc.head.appendChild(progressTag);
   }
 
+  // JEL-197: shell-side JS-Injector snippet channel (parent JEL-196).
+  // The Tizen shell bakes its own connect-form body and, once connected,
+  // document.writes the server's /web/index.html. The JellyPlug snippets
+  // (netflix rows, top-10 badges, hover-trailer, focus-preview, age-badge,
+  // my-list) historically reached the TV ONLY via the JellyPlug Shell
+  // Loader .NET plugin, which File-Transformation-appends them to the
+  // shared runtime.bundle.js. JEL-196 retires that plugin: the snippets
+  // move into the JS Injector plugin's public.js (Phase 1) and the shell
+  // fetches public.js itself so the TV runs the SAME source a browser does.
+  //
+  // The channel inserts ONE <script src="${server}/JavaScriptInjector/
+  // public.js"> into the fetched index.html before the transpile pass, so
+  // it flows through the exact same fetch + Babel + jQuery-gate + error-
+  // tolerant pipeline ("tizen-compat firewall") as any other plugin
+  // <script src> (transpileLegacyScripts), with content-addressed tx-
+  // caching (JEL-178) honouring public.js's ?v= config-version query.
+  //
+  // Idempotency (JEL-197): if the document already references a public.js
+  // tag (e.g. the JS Injector plugin's own browser-side injection into
+  // index.html), the channel leaves it alone — transpileLegacyScripts runs
+  // that copy — so public.js never executes twice. This also lets the
+  // channel coexist with the still-installed Shell Loader FT blob during
+  // the JEL-196 cutover: the two carry independent content today, and once
+  // Phase 1 moves the snippets into public.js the snippets' own single-run
+  // guards (theme repo) keep them idempotent across both channels.
+  // Killswitch: localStorage['jellyfin.shell.jsiChannelDisabled']='1'.
+  var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled";
+  var JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";
+  function jsiChannelDisabled() {
+    try {
+      return localStorage.getItem(JSI_CHANNEL_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function injectJsInjectorChannel(doc, serverUrl) {
+    try {
+      if (jsiChannelDisabled()) return;
+      if (!doc || !doc.body) return;
+      // Idempotent: don't add a second public.js if the document already
+      // carries one (server- or plugin-injected). The existing copy is
+      // fetched, transpiled and run by transpileLegacyScripts.
+      if (doc.querySelector('script[src*="' + JSI_PUBLIC_PATH + '"]')) return;
+      var s = doc.createElement("script");
+      s.src = serverUrl + JSI_PUBLIC_PATH;
+      s.setAttribute("data-shell-jsi-channel", "1");
+      // End of <body> so the snippets load after jellyfin-web's bundles —
+      // the same position the JS Injector plugin uses on a browser. The
+      // snippets self-defer (window.onload / MutationObserver) for ApiClient
+      // and rendered DOM, so document-order execution is safe.
+      doc.body.appendChild(s);
+    } catch (_) {}
+  }
+
   // JEL-554 (v32): tx cache constants shared with the in-document seed
   // script. transpileLegacyScripts (widget-origin, runs before document.write)
   // and srcPipeline/rewrite (runs inside the rewritten document) both write
@@ -3666,6 +3720,13 @@
       babelNeeded = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}
     if (babelNeeded) return bail("babelNeeded");
+    // JEL-197: the JS-Injector snippet channel must inject + transpile
+    // public.js, which only the DOMParser path can do. If the channel is on
+    // and the document doesn't already carry a public.js tag, take the slow
+    // path so injectJsInjectorChannel + transpileLegacyScripts run it through
+    // the firewall. Killswitch (jsiChannelDisabled) restores the fast path.
+    if (!jsiChannelDisabled() && html.indexOf(JSI_PUBLIC_PATH) < 0)
+      return bail("jsiChannel");
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
     // Bundle precheck: only legal fast-path verdicts are
@@ -4186,6 +4247,10 @@
         // JEL-126: boot progress dots that survive the ~20 s main-thread
         // blackout while jellyfin-web parses+executes (legacy-only).
         injectBootProgress(doc);
+        // JEL-197: ensure the JS-Injector snippet channel (public.js) is
+        // present so transpileLegacyScripts below fetches + runs it through
+        // the tizen-compat firewall (idempotent vs a server-injected copy).
+        injectJsInjectorChannel(doc, serverUrl);
         // JEL-554 (v29): run bundle patch + legacy transpile in parallel.
         // They touch disjoint <script> sets (bundle patcher gates on
         // main.*.bundle.js, transpileLegacyScripts skips bundles via

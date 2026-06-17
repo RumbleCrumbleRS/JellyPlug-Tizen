@@ -2139,6 +2139,34 @@
         doc.head.appendChild(progressTag));
     }
   }
+  // JEL-197 (parent JEL-196): shell-side JS-Injector snippet channel. Insert
+  // ONE <script src="${server}/JavaScriptInjector/public.js"> into the
+  // fetched index.html before the transpile pass so it flows through the same
+  // fetch + Babel + jQuery-gate + error-tolerant pipeline (tizen-compat
+  // firewall) as any plugin <script src>, replacing the JellyPlug Shell
+  // Loader .NET plugin's runtime.bundle.js FT-append. Idempotent: skip if the
+  // document already references public.js (server/plugin injection) so it
+  // never runs twice; this lets the channel coexist with the FT blob during
+  // cutover. Killswitch: localStorage['jellyfin.shell.jsiChannelDisabled']='1'.
+  var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled",
+    JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";
+  function jsiChannelDisabled() {
+    try {
+      return localStorage.getItem(JSI_CHANNEL_DISABLED_KEY) === "1";
+    } catch (_) {
+      return !1;
+    }
+  }
+  function injectJsInjectorChannel(doc, serverUrl) {
+    try {
+      if (jsiChannelDisabled() || !doc || !doc.body) return;
+      if (doc.querySelector('script[src*="' + JSI_PUBLIC_PATH + '"]')) return;
+      var s = doc.createElement("script");
+      ((s.src = serverUrl + JSI_PUBLIC_PATH),
+        s.setAttribute("data-shell-jsi-channel", "1"),
+        doc.body.appendChild(s));
+    } catch (_) {}
+  }
   var BABEL_NEEDED_KEY = "jellyfin.shell.legacy.babelNeeded",
     BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak";
   function markBabelNeeded() {
@@ -2931,6 +2959,12 @@
     try {
       babelNeeded = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}
+    // JEL-197: the JS-Injector snippet channel injects + transpiles public.js,
+    // which only the DOMParser path can do. Bail when the channel is on and the
+    // document carries no public.js tag so injectJsInjectorChannel runs it
+    // through the firewall. Killswitch (jsiChannelDisabled) keeps the fast path.
+    if (!jsiChannelDisabled() && html.indexOf(JSI_PUBLIC_PATH) < 0)
+      return bail("jsiChannel");
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
     var bundleMatch = BUNDLE_FAST_RE.exec(html),
@@ -3451,6 +3485,7 @@
           injectChromium56Polyfills(doc),
           injectQaBeacon(doc),
           injectBootProgress(doc),
+          injectJsInjectorChannel(doc, serverUrl),
           Promise.all([
             patchPlaybackBundles(doc, baseUrl, prefetchedBundle),
             transpileLegacyScripts(doc, baseUrl),
