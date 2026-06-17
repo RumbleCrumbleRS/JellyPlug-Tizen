@@ -56,13 +56,21 @@ for (const [label, file] of [
   ["boot-shell.src.js", BOOT],
 ]) {
   const src = fs.readFileSync(file, "utf8");
-  const code = stripComments(src);
+  // JEL-197 sanctions exactly ONE plugin-named token in logic: the JS-Injector
+  // snippet-channel path constant (the deliberate cutover wiring that replaces
+  // the Shell Loader .NET plugin — parent JEL-196). Strip that single constant
+  // before the agnosticism check so the cache/transpile LOGIC is still proven
+  // plugin-agnostic, while the channel constant is explicitly allowed here.
+  const code = stripComments(src).replace(
+    /JSI_PUBLIC_PATH\s*=\s*["']\/JavaScriptInjector\/public\.js["']/g,
+    "JSI_PUBLIC_PATH = <jel197-channel-path>",
+  );
 
   // 1. No plugin named in the cache/transpile LOGIC (general fix, not a patch).
   check(
     label + ": no plugin name in cache/transpile logic (general fix)",
     code.indexOf("JavaScriptInjector") < 0,
-    "found 'JavaScriptInjector' outside comments",
+    "found 'JavaScriptInjector' outside comments + the sanctioned JEL-197 path",
   );
 
   // 2. Volatility keyed off the URL query, not a plugin name.
