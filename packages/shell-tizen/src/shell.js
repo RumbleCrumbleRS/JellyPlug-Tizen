@@ -117,7 +117,11 @@
   // version-keying fix cannot retroactively invalidate; on-device confirmed to
   // drop a disabled snippet's stale rows on the M63. Keep this string in sync
   // with boot-shell.src.js's TX_CACHE_EPOCH.
-  var TX_CACHE_EPOCH = "jel178-2";
+  // JEL-216: bumped to jel216-1 (lockstep with boot-shell.src.js) alongside
+  // making the JS-Injector channel script query-bearing, orphaning any stale
+  // bare-public.js-URL transpile entry an older shell wrote and never
+  // re-validated on a snippet edit.
+  var TX_CACHE_EPOCH = "jel216-1";
   var TX_VER = txFnv1a(
     MODERN_SYNTAX_RE_SRC +
       "|" +
@@ -2735,13 +2739,32 @@
       // fetched, transpiled and run by transpileLegacyScripts.
       if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
       var s = doc.createElement("script");
-      s.src = serverUrl + channelPath;
+      // JEL-216: the channel aggregates arbitrary user JS-Injector snippets, so
+      // its body is config-mutable AND may carry modern syntax the M63 firewall
+      // must down-compile. Append a stable marker query so the URL is
+      // query-bearing: transpileLegacyScripts then routes it through the JEL-178
+      // path (per-fetch cache-buster + content-addressed `txc:` key) instead of
+      // the bare-URL cache that was never re-validated on a snippet edit, so the
+      // TV always runs the CURRENT snippets. channelPath stays a substring of
+      // src, so the idempotency guard above still fires. Plugin-agnostic.
+      s.src =
+        serverUrl +
+        channelPath +
+        (channelPath.indexOf("?") < 0 ? "?_jsi=1" : "&_jsi=1");
       s.setAttribute("data-shell-jsi-channel", "1");
       // End of <body> so the snippets load after jellyfin-web's bundles —
       // the same position the JS Injector plugin uses on a browser. The
       // snippets self-defer (window.onload / MutationObserver) for ApiClient
       // and rendered DOM, so document-order execution is safe.
       doc.body.appendChild(s);
+      // JEL-216: an active channel on a legacy engine guarantees a transpile is
+      // needed; kick the babel load now (idempotent cached promise) so it isn't
+      // started lazily inside the pre-write critical path where a cold parse can
+      // lose the give-up race and let raw `?.`/`??` reach the engine.
+      if (isLegacyChromium() && typeof window.__ensureBabel === "function")
+        try {
+          window.__ensureBabel();
+        } catch (_) {}
     } catch (_) {}
   }
 
@@ -2856,6 +2879,20 @@
   // the derived TX_VER hash.
   function needsTranspile(code) {
     return typeof code === "string" && MODERN_SYNTAX_RE.test(code);
+  }
+  // JEL-216: turn a modern-syntax external script we could not transpile into
+  // an inert node so its raw `?.`/`??` can't SyntaxError the M63 engine (which
+  // would take down the whole concatenated script). src/defer/async/type are
+  // removed and the body emptied; the URL is preserved in a marker attribute.
+  function neutralizeUntranspiled(s, url) {
+    try {
+      s.removeAttribute("src");
+      s.removeAttribute("defer");
+      s.removeAttribute("async");
+      s.removeAttribute("type");
+      s.textContent = "";
+      s.setAttribute("data-shell-tx-dropped", url || "1");
+    } catch (_) {}
   }
 
   function transpileLegacyScripts(doc, baseUrl) {
@@ -3225,9 +3262,16 @@
             return ensureBabelReady().then(function (ready) {
               if (!ready) {
                 counts.transpileFailed++;
+                // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+                // leaving the raw external <script src> would let un-transpiled
+                // `?.`/`??` reach the M63 engine — a SyntaxError that kills the
+                // ENTIRE script (e.g. the whole concatenated JS-Injector
+                // public.js). Drop the src so it can't execute raw;
+                // markBabelNeeded primes babel for the next boot.
+                neutralizeUntranspiled(s, url);
                 try {
                   console.warn(
-                    "shell: babel not available, skip transpile",
+                    "shell: babel not available, dropped untranspiled",
                     url,
                   );
                 } catch (_) {}
@@ -3237,6 +3281,8 @@
               var out = babelTranspile(code);
               if (out == null) {
                 counts.transpileFailed++;
+                // JEL-216: same fail-safe for a transform that threw.
+                neutralizeUntranspiled(s, url);
                 return;
               }
               counts.transpiled++;

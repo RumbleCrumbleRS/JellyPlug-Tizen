@@ -163,7 +163,13 @@ function loadChannel(file) {
 }
 
 const SERVER = "http://tv.example.test:8096";
-const EXPECTED = SERVER + "/JavaScriptInjector/public.js";
+// JEL-216: the channel src carries a stable `?_jsi=1` marker query so the URL
+// is query-bearing — transpileLegacyScripts then routes it through the JEL-178
+// content-addressed / cache-busted freshness path instead of the bare-URL cache
+// (which was never re-validated on a snippet edit). channelPath stays a
+// substring of src so the idempotency guard still matches.
+const JSI_Q = "?_jsi=1";
+const EXPECTED = SERVER + "/JavaScriptInjector/public.js" + JSI_Q;
 
 for (const [label, file] of [
   ["shell.js", SHELL],
@@ -179,8 +185,13 @@ for (const [label, file] of [
   );
   check(label + ": injects exactly one public.js tag", added.length === 1);
   check(
-    label + ": injected src is ${server}/JavaScriptInjector/public.js",
+    label + ": injected src is ${server}/JavaScriptInjector/public.js?_jsi=1",
     added.length === 1 && added[0].src === EXPECTED,
+    added.length ? "got " + added[0].src : "none injected",
+  );
+  check(
+    label + ": JEL-216 — channel src is query-bearing (routes through freshness path)",
+    added.length === 1 && added[0].src.indexOf("?") >= 0,
     added.length ? "got " + added[0].src : "none injected",
   );
   check(
@@ -251,7 +262,7 @@ for (const [label, file] of [
   check(
     label + ": override injects ${server}<override path>, not public.js",
     overridden.length === 1 &&
-      overridden[0].src === SERVER + "/MyDelivery/snippets.js" &&
+      overridden[0].src === SERVER + "/MyDelivery/snippets.js" + JSI_Q &&
       doc.__scripts.filter((s) => (s.src || "").indexOf("public.js") >= 0)
         .length === 0,
   );
