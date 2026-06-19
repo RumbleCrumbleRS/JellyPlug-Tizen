@@ -1,8 +1,8 @@
 {
-  "version": "2.0.16",
+  "version": "2.0.17",
   "kind": "bootstrap-wgt",
   "filename": "JellyPlug.wgt",
-  "sha256": "db3eaf60a3797b8667a7235b4528b42912faf6b8daab4324e7052357793656a4",
-  "sizeBytes": 589956,
+  "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5",
+  "sizeBytes": 590049,
   "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required. Retail build; the JellyPlug-Debug.wgt asset on the same release forces both diagnostic overlays on."
 }
