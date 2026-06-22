@@ -51,7 +51,7 @@ jobs:
       # ci.yml). Fails the run if the installer bytes ever change upstream.
       TIZEN_INSTALLER_SHA256: "89c84fbc474dcfb02af193bcc763e2e7bf3259bf34cbf6b7f44ec2da024db7df"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Policy gate (JEL-173 / JEL-162 Decision 2 "bless-internal"):
       # JellyPlug-Tizen-internal (private) is the canonical signing/release
