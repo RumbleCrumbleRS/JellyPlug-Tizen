@@ -858,6 +858,29 @@
       // Kill switch: localStorage["jellyfin.shell.rememberMeDefaultDisabled"]="1".
       // Diag: window.__shellRememberMeChecks (count of corrective flips).
       '  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}try{setInterval(nudge,300);}catch(_){}try{document.addEventListener("DOMContentLoaded",nudge,false);}catch(_){}nudge();})();}catch(_){}',
+      // JEL-238 (defense-in-depth for JEL-237): media-bar YouTube-iframe crash
+      // guard, baked natively into the shell so it ships in the signed .wgt and
+      // survives any JS-Injector config wipe/re-import. The home media-bar
+      // slideshow spawns multiple concurrent YouTube /embed/ trailer iframes as
+      // it rotates; on Tizen 6.5 (Chromium 85, e.g. QN85QN90BAFXZA) each decodes
+      // video and 2-3 concurrent hardware decoders exhaust native media/GPU
+      // memory, crashing the whole app (running->false) ~20-40s after Home
+      // loads. JS heap stays ~18MB the whole time, so it is a NATIVE crash,
+      // invisible to ordinary JS logging. New to 6.5: on Tizen 5.0 (M63) these
+      // iframes returned YouTube error 153 (file:// no Referer) and never
+      // actually decoded, so the old TV never crashed. Fix: on Tizen only, cap
+      // concurrent youtube/embed iframes to AT MOST ONE (drop the older ones as
+      // the slideshow rotates) so a single trailer still plays but the decoders
+      // never get exhausted. No-op on every non-Tizen client. Content-pattern
+      // based (iframe src substrings), NOT plugin-name coupled, so it stays
+      // plugin-agnostic (plugin-agnostic-shell.test.cjs). On-device verified via
+      // the JS-Injector deploy of the identical source in JEL-237 (QN85QN90B @
+      // Tizen 6.5: without guard crash ~t+40s, with guard stable 120s+). The
+      // config knob is named for what it caps (youtube iframes), not for the
+      // plugin that happens to spawn them, so no plugin name ships in the .wgt.
+      // Kill switch: localStorage["jellyfin.shell.ytIframeCapDisabled"]="1".
+      // Diag: window.__shellYtCaps (count of excess iframes removed).
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function yt(){var a=document.getElementsByTagName("iframe"),o=[];for(var i=0;i<a.length;i++){var s=a[i].src||"";if(s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1)o.push(a[i]);}return o;}function cap(){var y=yt();for(var i=0;i<y.length-1;i++){try{y[i].parentNode.removeChild(y[i]);window.__shellYtCaps++;}catch(_){}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true});}catch(_){}try{setInterval(cap,500);}catch(_){}})();}catch(_){}',
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
