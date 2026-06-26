@@ -325,5 +325,27 @@ async function runScenario(opts) {
         console.log('OK 11: babel kick gating — kill switch, unused streak, learned-needed');
     }
 
+    // Scenario 12 (JEL-332): the diagnostic overlay's HSB_VERSION must stay in
+    // lockstep with config.xml (the single source of truth build_bootstrap.py
+    // copies into manifest.bootstrap.json). This guard makes drift a CI failure
+    // so the overlay can never again mis-identify the installed bootstrap build.
+    {
+        const CONFIG_XML = path.join(__dirname, '..', 'src', 'config.xml');
+        const configText = fs.readFileSync(CONFIG_XML, 'utf8');
+        const cfgMatch = configText.match(/<widget[^>]*\bversion="([^"]+)"/);
+        if (!cfgMatch) fail('scenario 12: widget version not found in config.xml');
+        const configVersion = cfgMatch[1];
+
+        const verMatch = SOURCE.match(/var HSB_VERSION\s*=\s*'([^']+)'/);
+        if (!verMatch) fail('scenario 12: HSB_VERSION not found in index.html bootloader');
+        const hsbVersion = verMatch[1];
+
+        if (hsbVersion !== configVersion)
+            fail('scenario 12: HSB_VERSION (' + hsbVersion + ') must equal config.xml widget '
+                + 'version (' + configVersion + '). Bump both in lockstep — the overlay reports '
+                + 'the installed bootstrap build and must not drift.');
+        console.log('OK 12: HSB_VERSION ' + hsbVersion + ' matches config.xml widget version');
+    }
+
     console.log('ALL SCENARIOS PASS');
 })().catch(function(e){ console.error('SELFTEST ERROR', e); process.exit(1); });
