@@ -64,11 +64,21 @@
             var HSB_VER_KEY = 'jellyfin.shell.hsbCachedVer';
             var HSB_HASH_KEY = 'jellyfin.shell.hsbCachedHash';
             var HSB_DEBUG_KEY = 'jellyfin.shell.hsbDebug';
-            var HSB_VERSION = '2.0.1-ac3';
+            // JEL-332: the true installed bootstrap version. MUST equal the
+            // config.xml widget version (the single source of truth that
+            // build_bootstrap.py copies verbatim into manifest.bootstrap.json).
+            // selftest.cjs asserts this equality so it can never silently drift
+            // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
+            // on the diagnostic label without polluting the version itself.
+            var HSB_VERSION = '2.0.18';
+            var HSB_CODENAME = 'ac3';
+            // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
+            var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
             var BOOT_BUDGET_MS = 4000;
 
             // --- AC3 diagnostic overlay -------------------------------------
-            var hsbState = { version: HSB_VERSION, ts: new Date().toISOString(),
+            var hsbState = { version: HSB_VERSION, codename: HSB_CODENAME,
+                             label: HSB_LABEL, ts: new Date().toISOString(),
                              phase: 'boot', server: null, manifestUrl: null,
                              manifestSha: null, shellUrl: null, fallback: null,
                              errors: [] };
@@ -89,7 +99,7 @@
                 while (el.firstChild) el.removeChild(el.firstChild);
                 var tag = document.createElement('span');
                 tag.className = 'hsb-tag';
-                tag.textContent = 'HSB ' + HSB_VERSION + ' / ' + (hsbState.phase || '?');
+                tag.textContent = 'HSB ' + HSB_LABEL + ' / ' + (hsbState.phase || '?');
                 el.appendChild(tag);
                 el.appendChild(document.createTextNode('\n' + hsbLine().join('\n')));
             }
