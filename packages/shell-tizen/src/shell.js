@@ -40,14 +40,20 @@
   // the boot promise — the underlying socket keeps draining (we cannot abort
   // on Chromium 56, which predates AbortController), but the UI recovers.
   var BOOT_FETCH_TIMEOUT_MS = 15000;
-  function withBootTimeout(p, label) {
+  // JEL-85/JEL-314: connect-form probe gets a tighter bound than boot. The
+  // connect form is interactive (user typed a server and pressed Connect), so
+  // a black-hole/firewalled host must surface an error promptly rather than
+  // hang for the platform TCP default. 5 s is comfortably above a healthy
+  // /System/Info/Public RTT yet well below the platform connect timeout.
+  var CONNECT_FETCH_TIMEOUT_MS = 5000;
+  function withBootTimeout(p, label, ms) {
     return new Promise(function (resolve, reject) {
       var settled = false;
       var timer = setTimeout(function () {
         if (settled) return;
         settled = true;
         reject(new Error("Timed out reaching server (" + label + ")"));
-      }, BOOT_FETCH_TIMEOUT_MS);
+      }, ms || BOOT_FETCH_TIMEOUT_MS);
       Promise.resolve(p).then(
         function (v) {
           if (settled) return;
@@ -377,19 +383,32 @@
   function validateServer(serverUrl) {
     // Probe /System/Info/Public — public, unauthenticated, returns JSON
     // with Id + Version on any live Jellyfin server.
-    return fetch(serverUrl + "/System/Info/Public", {
-      method: "GET",
-      credentials: "omit",
-      cache: "no-store",
-    })
-      .then(function (resp) {
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        return resp.json();
+    //
+    // JEL-85/JEL-314: bound the probe (mirrors boot-shell.src.js). A
+    // black-hole/firewalled host (SYN dropped, no RST) typed into the
+    // boot-failure recovery connect form would otherwise hang the form
+    // forever with no error. Promise.race against CONNECT_FETCH_TIMEOUT_MS
+    // recovers the UI promptly (AbortController is unreliable on M63).
+    return withBootTimeout(
+      fetch(serverUrl + "/System/Info/Public", {
+        method: "GET",
+        credentials: "omit",
+        cache: "no-store",
       })
-      .then(function (info) {
-        if (!info || !info.Id) throw new Error("Not a Jellyfin server");
-        return info;
-      });
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          return resp.json();
+        })
+        .then(function (info) {
+          // Require BOTH Id and Version — a pathological {Id:...}-only
+          // endpoint is not a Jellyfin server (JEL-85 bug #2).
+          if (!info || !info.Id || !info.Version)
+            throw new Error("Not a Jellyfin server");
+          return info;
+        }),
+      "connect",
+      CONNECT_FETCH_TIMEOUT_MS,
+    );
   }
 
   // ---- TV remote keys ----------------------------------------------------
