@@ -347,5 +347,35 @@ async function runScenario(opts) {
         console.log('OK 12: HSB_VERSION ' + hsbVersion + ' matches config.xml widget version');
     }
 
+    // Scenario 13 (JEL-379): the shell diag HUD (buildDiagSeedScript in
+    // boot-shell.src.js) renders "shell v<ver>" as its first on-screen line.
+    // Like the sibling HSB overlay (scenario 12), that version must report the
+    // DEPLOYED widget version (config.xml) so an operator who enables the HUD
+    // reads the installed bootstrap build, not a phantom 1.0.x line. This guard
+    // makes drift between the two diag literals and config.xml a CI failure.
+    {
+        const CONFIG_XML = path.join(__dirname, '..', 'src', 'config.xml');
+        const configText = fs.readFileSync(CONFIG_XML, 'utf8');
+        const cfgMatch = configText.match(/<widget[^>]*\bversion="([^"]+)"/);
+        if (!cfgMatch) fail('scenario 13: widget version not found in config.xml');
+        const configVersion = cfgMatch[1];
+
+        const BOOT_SRC = path.join(__dirname, '..', 'src', 'boot-shell.src.js');
+        const bootSrc = fs.readFileSync(BOOT_SRC, 'utf8');
+        const diagCalls = bootSrc.match(/buildDiagSeedScript\("([^"]+)"\)/g) || [];
+        if (diagCalls.length < 2)
+            fail('scenario 13: expected >=2 buildDiagSeedScript("<ver>") call sites in '
+                + 'boot-shell.src.js, found ' + diagCalls.length);
+        diagCalls.forEach(function (call) {
+            const v = call.match(/buildDiagSeedScript\("([^"]+)"\)/)[1];
+            if (v !== configVersion)
+                fail('scenario 13: diag HUD version (' + v + ') in ' + call + ' must equal '
+                    + 'config.xml widget version (' + configVersion + '). Bump in lockstep — the '
+                    + 'HUD reports the installed bootstrap build and must not drift (JEL-379).');
+        });
+        console.log('OK 13: diag HUD version ' + configVersion
+            + ' matches config.xml widget version (' + diagCalls.length + ' call sites)');
+    }
+
     console.log('ALL SCENARIOS PASS');
 })().catch(function(e){ console.error('SELFTEST ERROR', e); process.exit(1); });

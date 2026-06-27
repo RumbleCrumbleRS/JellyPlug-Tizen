@@ -3106,7 +3106,16 @@
       (window.__shellDiagInit.legacy = !0),
       (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
       (window.__shellDiagInit.polyfilled = !0));
-    var diagBody = buildDiagSeedScript("1.0.87"),
+    // JEL-379: the diag HUD's "shell v" line reports the DEPLOYED widget
+    // version (single source of truth = config.xml, currently 2.0.18) so an
+    // operator can identify a TV's installed bootstrap build. This mirrors the
+    // retail shell's __SHELL_VER__ intent (JEL-1215) but, like the sibling HSB
+    // overlay (JEL-332), keeps a plain literal guarded by selftest scenario 13
+    // (asserts this == config.xml widget version) instead of a build-time
+    // substitution — the bootstrap min has no version-injection pass. Bump in
+    // lockstep with config.xml. NOTE: distinct from BUNDLE/STYLESHEET/WEB cache
+    // vers (the internal 1.0.x web-cache line) which are unrelated to this HUD.
+    var diagBody = buildDiagSeedScript("2.0.18"),
       seedBody = buildSeedScript(serverUrl, upstreamCfg),
       polyBody = chromium56PolyfillBody(),
       beaconBody = qaBeaconBody(),
@@ -3563,7 +3572,8 @@
           (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy));
         var diagTag = doc.createElement("script");
         (diagTag.setAttribute("data-shell-diag", "1"),
-          (diagTag.textContent = buildDiagSeedScript("1.0.87")),
+          // JEL-379: deployed widget version (see fast-path note above; == config.xml, guarded by selftest 13).
+          (diagTag.textContent = buildDiagSeedScript("2.0.18")),
           doc.head.insertBefore(diagTag, baseTag));
         var seedTag = doc.createElement("script");
         return (
