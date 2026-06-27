@@ -30,7 +30,11 @@ html, body {
 .boot-shell h1 {
     font-size: 5rem;
     margin: 0 0 1rem;
-    color: #00a4dc;
+    /* JEL-359: JellyPlug ember brand accent (--jp-ember in the web-client
+       theme's 00-tokens.css), not stock Jellyfin blue #00a4dc. The connect
+       screen renders before jellyfin-web loads, so the CSS var isn't in
+       scope here — mirror its literal value. Matches JEL-299/JEL-301. */
+    color: #ff6a1a;
     letter-spacing: 0.1em;
 }
 
