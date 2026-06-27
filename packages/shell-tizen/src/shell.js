@@ -90,20 +90,42 @@
   // (e.g. `span1n`, hex-ish tokens), forcing needless transpile passes and,
   // worse, sometimes flagging already-legacy code. Anchoring on a
   // non-word/non-`$`/non-`.` boundary restricts it to genuine BigInt
-  // literals (`10n`) the way Chromium 63 actually needs.
+  // literals (`10n`) the way Chromium 56 actually needs.
+  // JEL-354: the original denylist only screened ES2020+ tokens, but the
+  // runtime floor is Chromium 56 (Tizen 4.0/5.0 Q60R panels), which also
+  // lacks several ES2018 syntax forms. A plugin using object-spread but no
+  // `?.` was classified ES5-safe and written RAW -> SyntaxError on M56. Add:
+  //   `{...x}` / `{a,...r}`  object rest/spread  (Chrome 60)  -> `\{\s*\.\.\.`
+  //                                                              + `\.\.\.[\w$]+\s*\}`
+  //   `async function*` / `async *m()`  async generators (Chrome 63)
+  //   `for await...of`                   async iteration   (Chrome 63)
+  // ARRAY/CALL spread (`[...a]`, `f(...a)`) and rest PARAMS (`(a,...r)`) are
+  // ES2015 — Chrome 56 parses them natively and Babel passes them through
+  // un-lowered, so they MUST NOT match (the regex doubles as the post-
+  // transpile "fully lowered" oracle; flagging them would falsely claim a
+  // clean body is still modern). The two object patterns key off the `{`/`}`
+  // braces that distinguish object spread from array/call spread.
   var MODERN_SYNTAX_RE_SRC =
-    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{";
+    "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await";
   var MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC);
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
   // releases changes this string and busts the cache.
-  // JEL-26: chrome 56 -> 63 + loose mode mirrors the bootstrap shell so a
-  // server-side shell swap onto the M63 keeps the iterable/iterator fix. The
-  // `assumptions` block is part of the transform options but intentionally
-  // omitted from this key string to stay byte-identical with the bootstrap
-  // shell's BABEL_OPTS_KEY (it derives TX_VER from the same inputs).
+  // JEL-26 used target chrome:63 + loose mode + the `assumptions` block to fix
+  // the Splide iterable/iterator throw on the M63. JEL-354: the target is reset
+  // to chrome:56 — the documented runtime floor (see isLegacyChromium and the
+  // "Chromium 56" notes throughout). preset-env only lowers syntax the TARGET
+  // lacks, so chrome:63 left ES2018 forms Chrome 56 cannot parse (object-spread
+  // `{...a}`, async generators, `for await`) un-lowered -> SyntaxError on the
+  // 2019 Q60R panels. The iterator fix is carried by the `loose:true` +
+  // `assumptions:{iterableIsArray,arrayLikeIsIterable}` block (KEPT) and the
+  // runtime __shellIterFix sweep, NOT by the target bump, so chrome:56 does not
+  // regress JEL-26. The `assumptions` block is part of the transform options
+  // but intentionally omitted from this key string to stay byte-identical with
+  // the bootstrap shell's BABEL_OPTS_KEY (it derives TX_VER from the same
+  // inputs).
   var BABEL_OPTS_KEY =
-    "presets:[[env,{targets:{chrome:63},modules:false,loose:true}]];sourceType:script;compact:true;comments:false";
+    "presets:[[env,{targets:{chrome:56},modules:false,loose:true}]];sourceType:script;compact:true;comments:false";
   // Build-time substituted by build_shell_min.py with
   // `<len>:<first32>:<last32>` of vendored babel.min.js. Unbuilt loads
   // keep the literal placeholder, which is fine: it's stable across
@@ -127,7 +149,12 @@
   // making the JS-Injector channel script query-bearing, orphaning any stale
   // bare-public.js-URL transpile entry an older shell wrote and never
   // re-validated on a snippet edit.
-  var TX_CACHE_EPOCH = "jel216-1";
+  // JEL-354: bumped to jel354-1 (lockstep with boot-shell.src.js) alongside
+  // resetting the transpile target to chrome:56 and widening the pre-check.
+  // (TX_VER already changes via BABEL_OPTS_KEY + MODERN_SYNTAX_RE_SRC, but the
+  // explicit epoch keeps the intent legible: every entry an older chrome:63
+  // shell wrote under-transpiled ES2018 syntax and must be re-derived.)
+  var TX_CACHE_EPOCH = "jel354-1";
   var TX_VER = txFnv1a(
     MODERN_SYNTAX_RE_SRC +
       "|" +
@@ -1094,9 +1121,9 @@
       // plugin parses fine on Chromium 56 as-is.
       // JEL-26: keep this seed-side pre-check in lockstep with the widget-side
       // MODERN_SYNTAX_RE_SRC above, including the BigInt false-positive anchor.
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
-      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
+      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       // JEL-557: cache transpiled plugin bodies in localStorage so warm cold
       // boots skip the fetch+Babel cycle on every dynamic <script src> the
@@ -2299,7 +2326,10 @@
     try {
       return window.Babel.transform(src, {
         presets: [
-          ["env", { targets: { chrome: "63" }, modules: false, loose: true }],
+          // JEL-354: chrome:56 (runtime floor), not 63 — lowers all ES2018
+          // syntax (object-spread, async generators) the Q60R Chromium-56
+          // panels can't parse. loose+assumptions retained for JEL-26 iterator.
+          ["env", { targets: { chrome: "56" }, modules: false, loose: true }],
         ],
         assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },
         sourceType: "script",
@@ -2913,10 +2943,14 @@
   // babel.transform() takes ~50–200 ms per plugin on a 2019 Q60R panel; with
   // 30–50 plugins that's the bulk of the 25 s post-shellBoot gap. Many
   // plugins are plain ES5/ES6 and parse fine on Chromium 56 — we don't need
-  // to transpile them at all. The regex screens for the ES2020+ tokens we
-  // actually see breaking on TV: optional chaining (?.), nullish coalescing
+  // to transpile them at all. The regex screens for the post-Chrome-56 tokens
+  // we actually see breaking on TV: optional chaining (?.), nullish coalescing
   // (??), nullish-assignment (??= / ||= / &&=), private class fields (#x),
-  // numeric separators (1_000), and the BigInt suffix (1n at digit boundary).
+  // numeric separators (1_000), the BigInt suffix (1n at digit boundary), and
+  // (JEL-354) the ES2018 forms Chrome 56 also lacks: object rest/spread
+  // ({...a} / {a,...r}), async generators (async function* / async *m()), and
+  // `for await...of`. Array/call spread and rest params are ES2015 and stay
+  // unmatched so a fully-lowered body no longer trips the regex.
   // JEL-1150: MODERN_SYNTAX_RE hoisted to top-of-IIFE so its source feeds
   // the derived TX_VER hash.
   function needsTranspile(code) {

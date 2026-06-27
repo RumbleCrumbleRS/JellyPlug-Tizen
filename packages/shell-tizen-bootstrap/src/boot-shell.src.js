@@ -6,11 +6,22 @@
   var SERVER_URL_KEY = "jellyfin.shell.serverUrl",
     hasTizen = typeof window.tizen != "undefined",
     hasWebapis = typeof window.webapis != "undefined",
+    // JEL-354: extended past ES2020 tokens to the ES2018 forms Chromium 56
+    // (Tizen 4.0/5.0 floor) also lacks — object rest/spread, async
+    // generators, for-await — so a plugin using object-spread but no optional
+    // chaining is no longer mis-classified ES5-safe and written raw. Kept in
+    // lockstep with the shell.js denylist. Array/call spread + rest params
+    // stay unmatched (ES2015, Chrome-56-native; the regex also gates the
+    // post-transpile fully-lowered check).
     MODERN_SYNTAX_RE_SRC =
-      "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{",
+      "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await",
     MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC),
+    // JEL-354: transpile target reset chrome:63 -> chrome:56 to match the
+    // runtime floor; preset-env at chrome:63 left ES2018 syntax un-lowered.
+    // loose:true (+ the assumptions block on the transform calls) carries the
+    // JEL-26 iterator fix and is unaffected. Lockstep with shell.js.
     BABEL_OPTS_KEY =
-      "presets:[[env,{targets:{chrome:63},modules:false,loose:true}]];sourceType:script;compact:true;comments:false",
+      "presets:[[env,{targets:{chrome:56},modules:false,loose:true}]];sourceType:script;compact:true;comments:false",
     BABEL_FPR =
       "2451554:2166756e6374696f6e2865297b696628766f696420303d3d3d652e70726f6365:6973262628676c6f62616c546869732e426162656c3d6a62292c6a627d28293b";
   function txFnv1a(s) {
@@ -30,7 +41,11 @@
   // script config-mutable (query-bearing → content-addressed freshness). Any
   // entry an older shell wrote under the bare public.js URL key (which was
   // never re-validated on a snippet edit) is abandoned rather than replayed.
-  var TX_CACHE_EPOCH = "jel216-1";
+  // JEL-354: bumped to jel354-1 (lockstep with shell.js) alongside resetting
+  // the transpile target to chrome:56 and widening MODERN_SYNTAX_RE_SRC, so
+  // every cache entry an older chrome:63 shell wrote with under-transpiled
+  // ES2018 syntax is orphaned and re-derived.
+  var TX_CACHE_EPOCH = "jel354-1";
   var TX_VER = txFnv1a(
       MODERN_SYNTAX_RE_SRC +
         "|" +
@@ -906,9 +921,9 @@
       // Fix: let foreign scripts load natively as real <script src>, exactly
       // like a browser. Mirrors the JEL-131 primer's same-origin guard.
       '    function isForeignOrigin(src){try{var o=new URL(document.baseURI).origin;if(!o||o==="null")return false;var a=new URL(String(src),document.baseURI).origin;return a!==o;}catch(_){return false;}}',
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{/;",
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
-      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"63"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
+      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       "    var __TXVER=" + JSON.stringify(TX_VER) + ";",
       "    try{window.__TXVER=__TXVER;}catch(_){}",
@@ -1851,7 +1866,9 @@
     try {
       return window.Babel.transform(src, {
         presets: [
-          ["env", { targets: { chrome: "63" }, modules: !1, loose: !0 }],
+          // JEL-354: chrome:56 (runtime floor) lowers ES2018 syntax the
+          // Chromium-56 panels can't parse; loose+assumptions keep JEL-26.
+          ["env", { targets: { chrome: "56" }, modules: !1, loose: !0 }],
         ],
         assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },
         sourceType: "script",

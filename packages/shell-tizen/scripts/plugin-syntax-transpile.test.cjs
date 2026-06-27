@@ -109,15 +109,26 @@ const MODERN_RE = new RegExp(tvReSrc || "x");
 // EXACT transform options the shell's plugin transpile() uses (shell.js /
 // boot-shell.src.js). The opts-key extracted above is the cache-derivation
 // string for these; keep this literal in lockstep with it.
+// JEL-354: target is chrome:56 (the documented runtime floor), NOT 63 — a 63
+// target leaves ES2018 syntax (object-spread, async generators) un-lowered,
+// which then SyntaxErrors on the Chromium-56 Q60R panels. Assert below that
+// the extracted BABEL_OPTS_KEY actually carries chrome:56 so a future target
+// drift can't pass this test silently.
 const OPTS = {
   presets: [
-    ["env", { targets: { chrome: "63" }, modules: false, loose: true }],
+    ["env", { targets: { chrome: "56" }, modules: false, loose: true }],
   ],
   assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },
   sourceType: "script",
   compact: true,
   comments: false,
 };
+check(
+  "JEL-354: BABEL_OPTS_KEY targets chrome:56 (runtime floor), not 63",
+  typeof tvOptsKey === "string" &&
+    /targets:\{chrome:56\}/.test(tvOptsKey) &&
+    !/chrome:63/.test(tvOptsKey),
+);
 
 // --- The token matrix from JEL-38 -------------------------------------------
 // `lowerable: false` => Babel cannot emit an M56/M63-runnable form (BigInt).
@@ -162,6 +173,50 @@ const CASES = [
     src: 'var r="ok";try{throw 1;}catch{r="caught";}',
     probe: "r",
     expect: "caught",
+    lowerable: true,
+  },
+  // JEL-354: ES2018 syntax Chrome 56 cannot parse. object-spread is extremely
+  // common in server plugins ({...defaults,...opts}); a 63 target left it raw.
+  {
+    name: "object spread {...a,b}",
+    src: "var d={a:1};var o={...d,b:2};var r=o.a+o.b;",
+    probe: "r",
+    expect: 3,
+    lowerable: true,
+  },
+  {
+    name: "object rest {x,...rest}",
+    src: "var o={x:1,y:2,z:3};var {x,...rest}=o;var r=rest.y+rest.z;",
+    probe: "r",
+    expect: 5,
+    lowerable: true,
+  },
+  {
+    name: "object spread (leading only) {...a}",
+    src: "var a={p:7};var o={...a};var r=o.p;",
+    probe: "r",
+    expect: 7,
+    lowerable: true,
+  },
+  {
+    name: "async generator async function*",
+    src: "async function* gen(){yield 1;}var r=typeof gen;",
+    probe: "r",
+    expect: "function",
+    lowerable: true,
+  },
+  {
+    name: "async generator method async *m()",
+    src: "var o={async *gen(){yield 1;}};var r=typeof o.gen;",
+    probe: "r",
+    expect: "function",
+    lowerable: true,
+  },
+  {
+    name: "for await...of",
+    src: "async function h(s){var t=0;for await(const v of s){t+=v;}return t;}var r=typeof h;",
+    probe: "r",
+    expect: "function",
     lowerable: true,
   },
   {
@@ -258,6 +313,29 @@ for (const b of BUNDLES) {
       );
     }
   }
+}
+
+// --- JEL-354: ES2015 spread/rest forms must NOT be flagged -------------------
+// Array spread, call spread, and rest params are ES2015 — Chromium 56 parses
+// them natively, and Babel at the chrome:56 target passes them through
+// UNCHANGED. The pre-check regex also doubles as the "fully lowered" oracle
+// (the LOWERED-clean assertions above), so if it matched these forms a
+// correctly-lowered body that still contains `[...a]` would falsely read as
+// un-lowered. Pin that the object-spread additions did not over-reach into
+// array/call spread.
+const NON_MODERN = [
+  { name: "array spread [...a]", src: "var a=[1,2];var b=[...a,3];" },
+  { name: "call spread f(...a)", src: "function f(a,b){}f(...[1,2]);" },
+  {
+    name: "rest param (a,...rest)",
+    src: "function g(a,...rest){return rest.length;}",
+  },
+];
+for (const c of NON_MODERN) {
+  check(
+    "JEL-354: ES2015 " + c.name + " is NOT flagged (Chrome-56-native)",
+    !MODERN_RE.test(c.src),
+  );
 }
 
 if (failures) {
