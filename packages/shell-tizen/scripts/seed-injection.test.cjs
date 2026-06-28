@@ -290,14 +290,40 @@ const FPR_LIT = strLiteral(tvSrc, "BABEL_FPR");
 // JEL-178: TX_VER is salted with a manual cache-epoch so a bump flushes all
 // legacy transpile-cache entries. Fold it into the recomputation too.
 const EPOCH_LIT = strLiteral(tvSrc, "TX_CACHE_EPOCH");
+// JEL-417: TX_VER also folds in MODERN_PRECHECK_RE_SRC (= the oracle src + the
+// interior-object-spread alternative). It is NOT a plain string literal — it is
+// derived from MODERN_SYNTAX_RE_SRC — so reproduce the real two-line derivation
+// to get its exact value rather than hardcoding the suffix here.
+const precheckDeclMatch = tvSrc.match(
+  /var MODERN_PRECHECK_RE_SRC\s*=[\s\S]*?;/,
+);
+if (!precheckDeclMatch)
+  throw new Error("could not read MODERN_PRECHECK_RE_SRC declaration");
+const precheckCtx = {};
+vm.createContext(precheckCtx);
+vm.runInContext(
+  "var MODERN_SYNTAX_RE_SRC=" +
+    SRC_LIT +
+    ";" +
+    precheckDeclMatch[0] +
+    "\nthis.__PRE = MODERN_PRECHECK_RE_SRC;",
+  precheckCtx,
+);
+const PRECHECK_SRC = precheckCtx.__PRE;
+check(
+  "MODERN_PRECHECK_RE_SRC extends the oracle src with interior-spread alt",
+  typeof PRECHECK_SRC === "string" &&
+    PRECHECK_SRC.startsWith(JSON.parse(SRC_LIT)) &&
+    PRECHECK_SRC.endsWith("|,\\s*\\.\\.\\.[\\w$]"),
+);
 
-const txCtx = {};
+const txCtx = { __PRE: PRECHECK_SRC };
 vm.createContext(txCtx);
 vm.runInContext(
   extractTopFn(tvSrc, "txFnv1a") +
     ";\nthis.__TX = txFnv1a((" +
     SRC_LIT +
-    ")+'|'+(" +
+    ")+'|'+__PRE+'|'+(" +
     OPTS_LIT +
     ")+'|'+(" +
     FPR_LIT +

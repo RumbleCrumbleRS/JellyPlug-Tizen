@@ -11,11 +11,22 @@
     // generators, for-await — so a plugin using object-spread but no optional
     // chaining is no longer mis-classified ES5-safe and written raw. Kept in
     // lockstep with the shell.js denylist. Array/call spread + rest params
-    // stay unmatched (ES2015, Chrome-56-native; the regex also gates the
-    // post-transpile fully-lowered check).
+    // stay unmatched (ES2015, Chrome-56-native; this regex also gates the
+    // post-transpile fully-lowered ORACLE check — it must stay precise).
     MODERN_SYNTAX_RE_SRC =
       "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await",
     MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC),
+    // JEL-417: the brace-anchored spread alternatives only catch a spread
+    // adjacent to a brace (`{...x`, `...x}`); an INTERIOR spread `{a, ...b, c}`
+    // is comma-flanked and matches neither, so the body is mis-classified
+    // ES5-safe and written raw -> SyntaxError on M56. Brace-local regex can't
+    // disambiguate object vs array/call spread interior, and MODERN_SYNTAX_RE
+    // must stay precise for the oracle role, so SPLIT: gate the PRE-check on
+    // this broader regex that also flags comma-prefixed spread. Over-triggering
+    // on ES2015 array/call spread only costs one correct babel pass — safer
+    // than raw ES2018. Lockstep with shell.js MODERN_PRECHECK_RE_SRC.
+    MODERN_PRECHECK_RE_SRC = MODERN_SYNTAX_RE_SRC + "|,\\s*\\.\\.\\.[\\w$]",
+    MODERN_PRECHECK_RE = new RegExp(MODERN_PRECHECK_RE_SRC),
     // JEL-354: transpile target reset chrome:63 -> chrome:56 to match the
     // runtime floor; preset-env at chrome:63 left ES2018 syntax un-lowered.
     // loose:true (+ the assumptions block on the transform calls) carries the
@@ -45,9 +56,15 @@
   // the transpile target to chrome:56 and widening MODERN_SYNTAX_RE_SRC, so
   // every cache entry an older chrome:63 shell wrote with under-transpiled
   // ES2018 syntax is orphaned and re-derived.
-  var TX_CACHE_EPOCH = "jel354-1";
+  // JEL-417: bumped to jel417-1 (lockstep with shell.js) alongside broadening
+  // the PRE-check to interior object spread. Any entry a prior shell cached RAW
+  // for an interior-`, ...x`-only body is orphaned so it re-derives as
+  // transpiled. MODERN_PRECHECK_RE_SRC is folded into the hash too.
+  var TX_CACHE_EPOCH = "jel417-1";
   var TX_VER = txFnv1a(
       MODERN_SYNTAX_RE_SRC +
+        "|" +
+        MODERN_PRECHECK_RE_SRC +
         "|" +
         BABEL_OPTS_KEY +
         "|" +
@@ -921,7 +938,10 @@
       // Fix: let foreign scripts load natively as real <script src>, exactly
       // like a browser. Mirrors the JEL-131 primer's same-origin guard.
       '    function isForeignOrigin(src){try{var o=new URL(document.baseURI).origin;if(!o||o==="null")return false;var a=new URL(String(src),document.baseURI).origin;return a!==o;}catch(_){return false;}}',
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      // JEL-417: seed PRE-check carries the broader MODERN_PRECHECK_RE_SRC
+      // (trailing `,\s*\.\.\.[\w$]` flags interior object spread `{a, ...b, c}`).
+      // Lockstep with the widget-side MODERN_PRECHECK_RE_SRC.
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await|,\\s*\\.\\.\\.[\\w$]/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
@@ -2278,8 +2298,10 @@
         localStorage.setItem(TX_PFX + txKey(url), body);
       } catch (_) {}
   }
+  // JEL-417: PRE-check gates on the broader MODERN_PRECHECK_RE (also catches
+  // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
   function needsTranspile(code) {
-    return typeof code == "string" && MODERN_SYNTAX_RE.test(code);
+    return typeof code == "string" && MODERN_PRECHECK_RE.test(code);
   }
   // JEL-216: turn a modern-syntax external script we could not transpile into
   // an inert node. Removing src/defer/async/type with an empty body means the
