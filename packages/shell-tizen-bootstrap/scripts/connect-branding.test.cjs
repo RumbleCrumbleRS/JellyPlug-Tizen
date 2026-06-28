@@ -13,6 +13,9 @@
 //   2. the inline `.boot-shell h1` rule sets color #ff6a1a (JellyPlug ember,
 //      the --jp-ember literal JEL-299/JEL-301 standardized on), NOT stock
 //      Jellyfin blue #00a4dc.
+//   3. (JEL-415) the inline `#server-form button` rule sets an ember #ff6a1a
+//      background (parity with the retail shell — previously the bootstrap
+//      button had NO background and rendered browser-default gray).
 //
 // Run: node scripts/connect-branding.test.cjs
 //   or: pnpm --filter @jellyfin-tv/shell-tizen-bootstrap test
@@ -48,6 +51,15 @@ check(/color\s*:\s*#ff6a1a/i.test(body),
   "inline .boot-shell h1 color is the JellyPlug ember #ff6a1a");
 check(!/#00a4dc/i.test(body),
   "inline .boot-shell h1 color is NOT stock Jellyfin blue #00a4dc");
+
+// 3. (JEL-415) Connect button fill — inline (no connect.css bundled here).
+const btnRule = html.match(/#server-form\s+button\s*\{([^}]*)\}/);
+const btn = btnRule ? btnRule[1] : "";
+check(!!btnRule, "index.html inline style has a `#server-form button` rule");
+check(/background\s*:\s*#ff6a1a/i.test(btn),
+  "inline #server-form button background is the JellyPlug ember #ff6a1a");
+check(!/#00a4dc/i.test(btn),
+  "inline #server-form button has NO stock Jellyfin blue #00a4dc");
 
 if (failures) {
   console.error(`\nconnect-branding.test.cjs: ${failures} assertion(s) FAILED`);
