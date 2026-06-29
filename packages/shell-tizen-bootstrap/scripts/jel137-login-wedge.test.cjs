@@ -291,17 +291,26 @@ for (const [label, file] of [
 
 function getRegexes(file) {
   const text = fs.readFileSync(file, "utf8");
-  // top-level MODERN_SYNTAX_RE_SRC string literal
+  // top-level MODERN_SYNTAX_RE_SRC string literal (the precise post-transpile
+  // ORACLE).
   const m = /MODERN_SYNTAX_RE_SRC\s*=\s*\n?\s*"((?:[^"\\]|\\.)*)"/.exec(text);
   assert(m, "MODERN_SYNTAX_RE_SRC not found in " + file);
   const top = new RegExp(new Function('return "' + m[1] + '";')());
-  // seed copy
+  // JEL-417: top-level MODERN_PRECHECK_RE_SRC = oracle + interior-spread alt.
+  const pm =
+    /MODERN_PRECHECK_RE_SRC\s*=\s*MODERN_SYNTAX_RE_SRC\s*\+\s*"((?:[^"\\]|\\.)*)"/.exec(
+      text,
+    );
+  assert(pm, "MODERN_PRECHECK_RE_SRC not found in " + file);
+  const suffix = new Function('return "' + pm[1] + '";')();
+  const precheck = new RegExp(top.source + suffix);
+  // seed copy (this is the PRE-check, so it carries the broader precheck src)
   const s = /var __modernRe=\/((?:[^/\\]|\\.)*)\//.exec(
     extractSeedBlock(file, "var __modernRe=", "var __modernRe="),
   );
   assert(s, "__modernRe literal not found in " + file);
   const seed = new RegExp(s[1]);
-  return { top, seed };
+  return { top, precheck, seed };
 }
 
 const NOT_MODERN = [
@@ -339,9 +348,23 @@ for (const [label, file] of [
       assert.ok(seed.test(sample), "seed regex missed: " + sample);
     }
   });
-  check(label + ": top and seed detector regexes are identical", () => {
+  // JEL-417: the seed __modernRe is a PRE-check (gates needsTx -> transpile),
+  // so it carries the broader MODERN_PRECHECK_RE_SRC, NOT the precise top-level
+  // oracle. The seed source must equal the top-level precheck (oracle + the
+  // interior-object-spread alternative), and must catch interior spread that
+  // the precise oracle deliberately misses.
+  check(
+    label + ": seed detector equals the top-level PRE-check (not oracle)",
+    () => {
+      const { precheck, seed } = getRegexes(file);
+      assert.strictEqual(seed.source, precheck.source);
+    },
+  );
+  check(label + ": seed PRE-check catches interior object spread", () => {
     const { top, seed } = getRegexes(file);
-    assert.strictEqual(top.source, seed.source);
+    const interior = "var o={a:1, ...b, c:2};";
+    assert.ok(seed.test(interior), "seed missed interior spread");
+    assert.ok(!top.test(interior), "oracle should NOT match interior spread");
   });
 }
 

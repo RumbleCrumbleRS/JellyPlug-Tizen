@@ -106,6 +106,37 @@ check(
 
 const MODERN_RE = new RegExp(tvReSrc || "x");
 
+// JEL-417: the PRE-check regex (MODERN_PRECHECK_RE_SRC) is a SUPERSET of the
+// oracle (MODERN_SYNTAX_RE_SRC) — it appends `,\s*\.\.\.[\w$]` so interior
+// object spread `{a, ...b, c}` (comma-flanked, matching neither brace-anchored
+// alternative) is still flagged for transpile. The oracle stays precise so a
+// fully-lowered body containing legal ES2015 `[a, ...b]` doesn't read as
+// still-modern. Extract the suffix from source so drift between the two roles
+// (or between shells) fails here rather than silently shipping the gap.
+function precheckSuffix(src) {
+  // var MODERN_PRECHECK_RE_SRC = MODERN_SYNTAX_RE_SRC + "<suffix>" (shell.js)
+  //   or  MODERN_PRECHECK_RE_SRC = MODERN_SYNTAX_RE_SRC + "<suffix>", (boot)
+  const i = src.indexOf("MODERN_PRECHECK_RE_SRC");
+  if (i === -1) return null;
+  const tail = src.slice(i);
+  const m = tail.match(
+    /MODERN_PRECHECK_RE_SRC\s*=\s*MODERN_SYNTAX_RE_SRC\s*\+\s*"((?:[^"\\]|\\.)*)"/,
+  );
+  return m ? JSON.parse('"' + m[1] + '"') : null;
+}
+const tvSuffix = precheckSuffix(tvSrc);
+const hostedSuffix = precheckSuffix(hostedSrc);
+check("TV shell defines MODERN_PRECHECK_RE_SRC off the oracle", !!tvSuffix);
+check(
+  "hosted shell defines MODERN_PRECHECK_RE_SRC off the oracle",
+  !!hostedSuffix,
+);
+check(
+  "PARITY: both shells use the SAME pre-check suffix",
+  tvSuffix != null && tvSuffix === hostedSuffix,
+);
+const PRECHECK_RE = new RegExp((tvReSrc || "x") + (tvSuffix || ""));
+
 // EXACT transform options the shell's plugin transpile() uses (shell.js /
 // boot-shell.src.js). The opts-key extracted above is the cache-derivation
 // string for these; keep this literal in lockstep with it.
@@ -228,6 +259,29 @@ const CASES = [
   },
 ];
 
+// JEL-417: INTERIOR object spread — the spread is comma-flanked on BOTH sides
+// (`{a:1, ...b, c:2}`) so it matches NEITHER brace-anchored oracle alternative
+// (`\{\s*\.\.\.` start, `\.\.\.[\w$]+\s*\}` end). Before the pre-check split it
+// was mis-detected ES5-safe and written RAW -> SyntaxError on Chromium 56. Each
+// case must: (a) be MISSED by the precise oracle MODERN_RE — proving the gap is
+// real and the split is necessary; (b) be CAUGHT by the broader PRECHECK_RE;
+// (c) transpile to a lowered-clean body (no oracle token, no residual `...`)
+// with the same runtime value.
+const INTERIOR_SPREAD = [
+  {
+    name: "interior spread {a, ...b, c}",
+    src: "var b={y:2};var o={x:1,...b,z:3};var r=o.x+o.y+o.z;",
+    probe: "r",
+    expect: 6,
+  },
+  {
+    name: "interior member spread {p:1, ...a.b, q:2}",
+    src: "var a={b:{m:5}};var o={p:1,...a.b,q:2};var r=o.p+o.m+o.q;",
+    probe: "r",
+    expect: 8,
+  },
+];
+
 // --- Load both shipped babel bundles ----------------------------------------
 function loadBabel(file) {
   const code = fs.readFileSync(file, "utf8");
@@ -313,6 +367,44 @@ for (const b of BUNDLES) {
       );
     }
   }
+
+  // JEL-417 regression: interior object spread must transpile, not run raw.
+  for (const c of INTERIOR_SPREAD) {
+    // (a) The precise oracle MISSES it — this is the bug the split fixes.
+    check(
+      b.label + " | JEL-417 oracle MISSES interior spread " + c.name,
+      !MODERN_RE.test(c.src),
+    );
+    // (b) The broader PRE-check CATCHES it -> babel runs.
+    check(
+      b.label + " | JEL-417 PRE-check DETECTS interior spread " + c.name,
+      PRECHECK_RE.test(c.src),
+    );
+    // (c) Lowered clean (oracle-clean + no residual `...`) with same value.
+    let out = null;
+    try {
+      out = Babel.transform(c.src, OPTS).code;
+    } catch (e) {
+      check(b.label + " | JEL-417 TRANSFORM ok " + c.name, false);
+      console.error("   transform error: " + e.message);
+      continue;
+    }
+    check(
+      b.label + " | JEL-417 LOWERED clean (no spread token left) " + c.name,
+      out != null && !MODERN_RE.test(out) && !/\.\.\./.test(out),
+    );
+    let got, runErr;
+    try {
+      got = runEquiv(out, c.probe);
+    } catch (e) {
+      runErr = e.message;
+    }
+    check(
+      b.label + " | JEL-417 SEMANTICS " + c.name + " => " + c.expect,
+      runErr == null && got === c.expect,
+    );
+    if (runErr) console.error("   run error: " + runErr);
+  }
 }
 
 // --- JEL-354: ES2015 spread/rest forms must NOT be flagged -------------------
@@ -333,10 +425,28 @@ const NON_MODERN = [
 ];
 for (const c of NON_MODERN) {
   check(
-    "JEL-354: ES2015 " + c.name + " is NOT flagged (Chrome-56-native)",
+    "JEL-354: ES2015 " +
+      c.name +
+      " is NOT flagged by the ORACLE (Chrome-56-native)",
     !MODERN_RE.test(c.src),
   );
 }
+
+// JEL-417: the PRE-check INTENTIONALLY over-triggers on comma-prefixed ES2015
+// spread/rest (it can't tell `, ...b` in an object from one in an array/call
+// without a parser). That's the accepted cost of the split: an extra — and
+// correct — babel pass on a body that didn't strictly need one, which is
+// strictly safer than running raw ES2018. Pin the asymmetry so the two roles
+// can't be accidentally re-merged: the rest-param form flagged by the PRE-check
+// MUST stay clean under the ORACLE (else a lowered body would read as modern).
+check(
+  "JEL-417: PRE-check over-triggers comma-prefixed rest `, ...rest` (accepted)",
+  PRECHECK_RE.test("function g(a,...rest){return rest.length;}"),
+);
+check(
+  "JEL-417: ORACLE stays precise on comma-prefixed rest (no false un-lowered)",
+  !MODERN_RE.test("function g(a,...rest){return rest.length;}"),
+);
 
 if (failures) {
   console.error("\n" + failures + " CHECK(S) FAILED");

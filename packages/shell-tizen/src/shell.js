@@ -101,13 +101,31 @@
   //   `for await...of`                   async iteration   (Chrome 63)
   // ARRAY/CALL spread (`[...a]`, `f(...a)`) and rest PARAMS (`(a,...r)`) are
   // ES2015 — Chrome 56 parses them natively and Babel passes them through
-  // un-lowered, so they MUST NOT match (the regex doubles as the post-
-  // transpile "fully lowered" oracle; flagging them would falsely claim a
+  // un-lowered, so they MUST NOT match THIS regex (it doubles as the post-
+  // transpile "fully lowered" ORACLE; flagging them would falsely claim a
   // clean body is still modern). The two object patterns key off the `{`/`}`
   // braces that distinguish object spread from array/call spread.
   var MODERN_SYNTAX_RE_SRC =
     "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await";
   var MODERN_SYNTAX_RE = new RegExp(MODERN_SYNTAX_RE_SRC);
+  // JEL-417: the brace-anchored object-spread alternatives above only catch a
+  // spread ADJACENT to a brace — `{...x` (object START) or `...x}` (object
+  // END). An INTERIOR spread surrounded by other properties on both sides —
+  // `{a:1, ...b, c:2}`, `{p:1, ...a.b, q:2}` — is preceded by `,` and followed
+  // by `,`, so it matches NEITHER and the body is mis-classified ES5-safe and
+  // written RAW -> SyntaxError on M56 (the exact JEL-354 failure mode, narrower
+  // input). Brace-local regex cannot disambiguate object vs array/call spread
+  // for an interior `, ...x`, and the oracle above MUST stay precise (matching
+  // legal ES2015 `[a, ...b]`/`f(a, ...b)` there would falsely report a lowered
+  // body as still-modern). So SPLIT the roles: keep MODERN_SYNTAX_RE as the
+  // post-transpile oracle, and gate the PRE-check on this broader regex that
+  // also flags comma-prefixed spread. Every object-spread element is either the
+  // first property (caught by `\{\s*\.\.\.`) or a non-first one (caught here by
+  // `,\s*\.\.\.[\w$]`), so the union is complete. Over-triggering on ES2015
+  // array/call spread in the PRE-check only costs one unnecessary — and
+  // correct — babel pass; strictly safer than running raw ES2018 on M56.
+  var MODERN_PRECHECK_RE_SRC = MODERN_SYNTAX_RE_SRC + "|,\\s*\\.\\.\\.[\\w$]";
+  var MODERN_PRECHECK_RE = new RegExp(MODERN_PRECHECK_RE_SRC);
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
   // releases changes this string and busts the cache.
@@ -154,9 +172,17 @@
   // (TX_VER already changes via BABEL_OPTS_KEY + MODERN_SYNTAX_RE_SRC, but the
   // explicit epoch keeps the intent legible: every entry an older chrome:63
   // shell wrote under-transpiled ES2018 syntax and must be re-derived.)
-  var TX_CACHE_EPOCH = "jel354-1";
+  // JEL-417: bumped to jel417-1 (lockstep with boot-shell.src.js) alongside
+  // broadening the PRE-check to interior object spread. Any entry a prior shell
+  // wrote for a body whose only modern token was interior `, ...x` spread was
+  // cached RAW (fast-path miss); orphaning the prefix forces re-derivation so
+  // the now-detected body is transpiled. MODERN_PRECHECK_RE_SRC is also folded
+  // into the hash so the pre-check change busts the cache on its own.
+  var TX_CACHE_EPOCH = "jel417-1";
   var TX_VER = txFnv1a(
     MODERN_SYNTAX_RE_SRC +
+      "|" +
+      MODERN_PRECHECK_RE_SRC +
       "|" +
       BABEL_OPTS_KEY +
       "|" +
@@ -1121,7 +1147,11 @@
       // plugin parses fine on Chromium 56 as-is.
       // JEL-26: keep this seed-side pre-check in lockstep with the widget-side
       // MODERN_SYNTAX_RE_SRC above, including the BigInt false-positive anchor.
-      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      // JEL-417: this seed regex is a PRE-check (gates needsTx -> maybeTranspile),
+      // so it carries the broader MODERN_PRECHECK_RE_SRC — the trailing
+      // `,\s*\.\.\.[\w$]` alternative that also flags interior object spread
+      // `{a, ...b, c}`. Lockstep with the widget-side MODERN_PRECHECK_RE_SRC.
+      "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await|,\\s*\\.\\.\\.[\\w$]/;",
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
@@ -2953,8 +2983,10 @@
   // unmatched so a fully-lowered body no longer trips the regex.
   // JEL-1150: MODERN_SYNTAX_RE hoisted to top-of-IIFE so its source feeds
   // the derived TX_VER hash.
+  // JEL-417: the PRE-check gates on MODERN_PRECHECK_RE (broader — also catches
+  // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
   function needsTranspile(code) {
-    return typeof code === "string" && MODERN_SYNTAX_RE.test(code);
+    return typeof code === "string" && MODERN_PRECHECK_RE.test(code);
   }
   // JEL-216: turn a modern-syntax external script we could not transpile into
   // an inert node so its raw `?.`/`??` can't SyntaxError the M63 engine (which
