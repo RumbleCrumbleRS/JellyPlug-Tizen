@@ -62,15 +62,23 @@ html, body {
 }
 
 #server-input:focus {
-    border-color: #00a4dc;
+    /* JEL-415: ember accent, not stock Jellyfin blue #00a4dc — mirror the
+       .boot-shell h1 literal (JEL-359 / --jp-ember). */
+    border-color: #ff6a1a;
 }
 
 #server-form button {
     font-size: 2rem;
     padding: 1rem 2rem;
     margin-left: 1rem;
-    background: #00a4dc;
-    color: #ffffff;
+    /* JEL-415: the Connect call-to-action is the default-focused element on a
+       TV (input autofocus -> first D-pad lands the button), so it's the most
+       visible brand tell on the first/recovery screen. Use the JellyPlug ember
+       fill (#ff6a1a, the h1 literal) instead of stock Jellyfin blue #00a4dc.
+       Text is near-black #101010 (the page bg) rather than white: #fff on
+       #ff6a1a is only ~2.86:1 (fails WCAG AA), #101010 on #ff6a1a is ~6.6:1. */
+    background: #ff6a1a;
+    color: #101010;
     border: 2px solid transparent;
     border-radius: 6px;
     cursor: pointer;

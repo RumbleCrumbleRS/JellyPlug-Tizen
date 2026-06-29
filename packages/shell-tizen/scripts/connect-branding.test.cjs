@@ -13,6 +13,10 @@
 //   2. src/connect/connect.css `.boot-shell h1` uses the JellyPlug ember accent
 //      #ff6a1a (the --jp-ember literal JEL-299/JEL-301 standardized on), NOT the
 //      stock Jellyfin blue #00a4dc.
+//   3. (JEL-415) the `#server-form button` fill and the `#server-input:focus`
+//      accent are the same ember #ff6a1a, NOT stock blue #00a4dc. The Connect
+//      button is the default-focused element on a TV, so it's the most visible
+//      brand tell on the first/recovery screen.
 //
 // The companion sub-text <p>...your Jellyfin server address...</p> legitimately
 // names the Jellyfin SERVER and is intentionally NOT asserted here.
@@ -55,6 +59,27 @@ check(/color\s*:\s*#ff6a1a/i.test(body),
   ".boot-shell h1 color is the JellyPlug ember #ff6a1a");
 check(!/#00a4dc/i.test(body),
   ".boot-shell h1 color is NOT stock Jellyfin blue #00a4dc");
+
+// 3. (JEL-415) Connect button fill + input-focus accent.
+// Strip CSS comments before color checks — a rationale comment may name the
+// old #00a4dc it replaced.
+function ruleBody(re) {
+  const m = css.match(re);
+  return m ? m[1].replace(/\/\*[\s\S]*?\*\//g, "") : null;
+}
+const btn = ruleBody(/#server-form\s+button\s*\{([^}]*)\}/);
+check(!!btn, "connect.css has a `#server-form button` rule");
+check(btn != null && /background\s*:\s*#ff6a1a/i.test(btn),
+  "#server-form button background is the JellyPlug ember #ff6a1a");
+check(btn != null && !/#00a4dc/i.test(btn),
+  "#server-form button has NO stock Jellyfin blue #00a4dc");
+
+const focus = ruleBody(/#server-input:focus\s*\{([^}]*)\}/);
+check(!!focus, "connect.css has a `#server-input:focus` rule");
+check(focus != null && /border-color\s*:\s*#ff6a1a/i.test(focus),
+  "#server-input:focus border-color is the JellyPlug ember #ff6a1a");
+check(focus != null && !/#00a4dc/i.test(focus),
+  "#server-input:focus has NO stock Jellyfin blue #00a4dc");
 
 if (failures) {
   console.error(`\nconnect-branding.test.cjs: ${failures} assertion(s) FAILED`);
