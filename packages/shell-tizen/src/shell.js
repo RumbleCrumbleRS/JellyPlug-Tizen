@@ -940,19 +940,26 @@
       // loads. JS heap stays ~18MB the whole time, so it is a NATIVE crash,
       // invisible to ordinary JS logging. New to 6.5: on Tizen 5.0 (M63) these
       // iframes returned YouTube error 153 (file:// no Referer) and never
-      // actually decoded, so the old TV never crashed. Fix: on Tizen only, cap
-      // concurrent youtube/embed iframes to AT MOST ONE (drop the older ones as
-      // the slideshow rotates) so a single trailer still plays but the decoders
-      // never get exhausted. No-op on every non-Tizen client. Content-pattern
-      // based (iframe src substrings), NOT plugin-name coupled, so it stays
-      // plugin-agnostic (plugin-agnostic-shell.test.cjs). On-device verified via
-      // the JS-Injector deploy of the identical source in JEL-237 (QN85QN90B @
-      // Tizen 6.5: without guard crash ~t+40s, with guard stable 120s+). The
-      // config knob is named for what it caps (youtube iframes), not for the
-      // plugin that happens to spawn them, so no plugin name ships in the .wgt.
+      // actually decoded, so the old TV never crashed. JEL-484 update: capping to
+      // ONE was not enough. On-device beacon (QN85QN90B @ Tizen 6.5) caught the
+      // process dying at the EXACT millisecond the media-bar's single /embed/
+      // iframe was inserted (process death timestamp == first-iframe timestamp,
+      // JS heap flat ~14MB, no JS error) — intermittently, even one YouTube embed
+      // player initializing its native media pipeline crashes the WebView. And
+      // the trailer never actually plays on the TV anyway (file:// origin / err
+      // 153), so it is pure crash-risk with zero user benefit. Fix: on Tizen
+      // only, cap youtube/embed iframes to ZERO — prevent the src from ever
+      // loading (intercept the prototype src setter + setAttribute, blanking
+      // youtube srcs to about:blank) AND sweep any node out via a fast
+      // MutationObserver (fires before the player media pipeline can spin up).
+      // No-op on every non-Tizen client. Content-pattern based (iframe src
+      // substrings), NOT plugin-name coupled, so it stays plugin-agnostic
+      // (plugin-agnostic-shell.test.cjs). The config knob is named for what it
+      // caps (youtube iframes), not for the plugin that spawns them, so no plugin
+      // name ships in the .wgt.
       // Kill switch: localStorage["jellyfin.shell.ytIframeCapDisabled"]="1".
-      // Diag: window.__shellYtCaps (count of excess iframes removed).
-      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function yt(){var a=document.getElementsByTagName("iframe"),o=[];for(var i=0;i<a.length;i++){var s=a[i].src||"";if(s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1)o.push(a[i]);}return o;}function cap(){var y=yt();for(var i=0;i<y.length-1;i++){try{y[i].parentNode.removeChild(y[i]);window.__shellYtCaps++;}catch(_){}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true});}catch(_){}try{setInterval(cap,500);}catch(_){}})();}catch(_){}',
+      // Diag: window.__shellYtCaps (count of youtube iframes removed).
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}})();}catch(_){}',
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets

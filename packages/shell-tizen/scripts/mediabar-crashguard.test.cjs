@@ -10,28 +10,33 @@
 // ordinary JS logging. New to 6.5: on Tizen 5.0 (M63) these iframes returned
 // YouTube error 153 (file:// no Referer) and never actually decoded.
 //
-// The guard, on Tizen only, caps concurrent youtube/embed iframes to AT MOST
-// ONE — dropping the older ones as the slideshow rotates — so a single trailer
-// still plays but the decoders never get exhausted. It is content-pattern
-// based (iframe src substrings), NOT plugin-name coupled, so it stays
-// plugin-agnostic (see plugin-agnostic-shell.test.cjs). The same source was
-// first deployed via the JS-Injector config and verified on-device in JEL-237;
-// this test pins the baked-in shell copy.
+// JEL-484 update: capping to ONE was not enough. An on-device beacon caught the
+// WebView process dying at the EXACT millisecond the media-bar's single /embed/
+// iframe was inserted — intermittently, even one YouTube embed player
+// initializing its native media pipeline crashes Tizen 6.5. The trailer never
+// plays on the TV anyway (file:// origin / err 153). So the guard, on Tizen
+// only, now caps youtube/embed iframes to ZERO: it intercepts the iframe src
+// setter + setAttribute to keep youtube srcs from loading, and sweeps any node
+// out via a MutationObserver/interval. It is content-pattern based (iframe src
+// substrings), NOT plugin-name coupled, so it stays plugin-agnostic (see
+// plugin-agnostic-shell.test.cjs). No-op on every non-Tizen client.
 //
 // WHAT THIS PINS
 //   PART A — CONTRACT (all four shipped artifacts): kill switch, Tizen UA gate,
 //            diag counter, and the three iframe-src content patterns all
 //            present; the guard never names a plugin.
-//   PART B — EXECUTION (both src seeds, lifted into a fake-DOM vm):
-//     B1. Tizen UA + 3 YT iframes present -> guard removes the 2 oldest, keeps
-//         the most-recently-added, and __shellYtCaps == 2.
-//     B2. a single YT iframe is left untouched (a trailer still plays).
+//   PART B — EXECUTION (both src seeds, lifted into a fake-DOM vm — the
+//            prototype-prevention path is try/caught when HTMLIFrameElement is
+//            absent, so the fake DOM exercises the node-sweep path):
+//     B1. Tizen UA + 3 YT iframes present -> guard removes ALL three (cap 0),
+//         __shellYtCaps == 3.
+//     B2. a lone YT iframe is also removed; __shellYtCaps == 1.
 //     B3. non-YouTube iframes are never removed.
 //     B4. non-Tizen UA -> guard is a no-op (every iframe kept), so desktop and
 //         mobile browsers keep all trailers.
 //     B5. kill switch jellyfin.shell.ytIframeCapDisabled=1 -> fully off.
-//     B6. the rotation tick (setInterval body) keeps capping as new iframes
-//         arrive.
+//     B6. the rotation tick (setInterval body) keeps re-capping to zero as new
+//         iframes arrive.
 //
 // Run: node scripts/mediabar-crashguard.test.cjs
 //   or: pnpm --filter @jellyfin-tv/shell-tizen test
@@ -130,7 +135,14 @@ for (const [name, src] of ARTIFACTS) {
 // PART B — EXECUTION
 // ============================================================================
 function makeIframe(src) {
-  const el = { tagName: "IFRAME", src: src, parentNode: null };
+  const el = {
+    tagName: "IFRAME",
+    src: src,
+    parentNode: null,
+    getAttribute(n) {
+      return n === "src" ? this.src : null;
+    },
+  };
   return el;
 }
 
@@ -213,31 +225,29 @@ function execScenarios(label, iife) {
     const c = r.add(YT3);
     r.tick(); // simulate the periodic cap()
     check(
-      label + " B1: capped to a single YouTube iframe",
-      r.iframes.length === 1,
+      label + " B1: all YouTube iframes removed (cap 0)",
+      r.iframes.length === 0,
       "len=" + r.iframes.length,
     );
     check(
-      label + " B1: keeps the most-recently-added iframe",
-      r.iframes[0] === c,
-    );
-    check(
       label + " B1: removed iframes detached (parentNode nulled)",
-      a.parentNode === null && b.parentNode === null,
+      a.parentNode === null && b.parentNode === null && c.parentNode === null,
     );
-    check(label + " B1: __shellYtCaps counts the 2 removals", r.caps() === 2);
+    check(label + " B1: __shellYtCaps counts all 3 removals", r.caps() === 3);
   }
 
-  // B2: a single YT iframe is left playable.
+  // B2: JEL-484 — a lone YT iframe is now ALSO removed. One /embed/ player
+  // initializing intermittently native-crashes Tizen 6.5 at load, and the
+  // trailer never plays on the TV anyway (file:// origin / err 153).
   {
     const r = runGuard(iife);
     const a = r.add(YT);
     r.tick();
     check(
-      label + " B2: single trailer kept",
-      r.iframes.length === 1 && r.iframes[0] === a,
+      label + " B2: lone trailer removed",
+      r.iframes.length === 0 && a.parentNode === null,
     );
-    check(label + " B2: no removals counted", r.caps() === 0);
+    check(label + " B2: __shellYtCaps counts the 1 removal", r.caps() === 1);
   }
 
   // B3: non-YouTube iframes are never touched.
@@ -275,19 +285,21 @@ function execScenarios(label, iife) {
     );
   }
 
-  // B6: the rotation tick keeps capping as new iframes arrive after load.
+  // B6: the rotation tick keeps capping (to zero) as new iframes arrive.
   {
     const r = runGuard(iife);
     r.add(YT);
     r.tick();
-    check(label + " B6: one trailer after first tick", r.iframes.length === 1);
-    const c2 = r.add(YT2); // slideshow rotates in a new trailer
+    check(
+      label + " B6: trailer removed after first tick",
+      r.iframes.length === 0,
+    );
+    r.add(YT2); // slideshow rotates in a new trailer
     r.tick();
     check(
-      label + " B6: re-capped to one after rotation",
-      r.iframes.length === 1,
+      label + " B6: re-capped to zero after rotation",
+      r.iframes.length === 0,
     );
-    check(label + " B6: keeps the newest after rotation", r.iframes[0] === c2);
   }
 }
 
