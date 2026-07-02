@@ -2281,10 +2281,35 @@
       localStorage.setItem(BABEL_NEEDED_KEY, "1");
     } catch (_) {}
   }
+  // JEL-630: mirrored verbatim from retail shell.js txKey (JEL-554 v35 +
+  // JEL-178 PR#5). Strip a query token ONLY when it is a per-load epoch-ms
+  // cache-buster (12–14 digit value within ~7 days of the device clock — the
+  // Date.now() shape); keep every other token so two plugin scripts
+  // distinguished only by a meaningful query (?v=1.2.3, config ticks) get
+  // DISTINCT tx cache keys instead of colliding onto one slot. The previous
+  // whole-query truncation here also diverged from this file's own seeded
+  // __txKey (buildSeedScript), which has carried this logic since JEL-178.
+  // Self-invalidating: new keys never collide with old stripped-path slots.
   function txKey(url) {
-    var u = String(url || ""),
-      i = u.indexOf("?");
-    return i < 0 ? u : u.substring(0, i);
+    var u = String(url || "");
+    var i = u.indexOf("?");
+    if (i < 0) return u;
+    var path = u.substring(0, i);
+    var pairs = u.substring(i + 1).split("&");
+    var keep = [];
+    var now = Date.now();
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var p = pairs[pi];
+      if (!p) continue;
+      var eq = p.indexOf("=");
+      var val = eq < 0 ? p : p.substring(eq + 1);
+      if (/^[0-9]{12,14}$/.test(val)) {
+        var n = parseInt(val, 10);
+        if (n > 0 && Math.abs(n - now) < 6048e5) continue;
+      }
+      keep.push(p);
+    }
+    return keep.length ? path + "?" + keep.join("&") : path;
   }
   function txGetStatic(url) {
     try {

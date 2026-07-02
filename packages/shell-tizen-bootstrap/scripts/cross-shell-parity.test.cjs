@@ -114,6 +114,7 @@ const EXPECTED_MIRRORED = [
   "jsiChannelDisabled",
   "jsiChannelPath",
   "injectJsInjectorChannel",
+  "txKey",
   "txGetStatic",
   "txSetStatic",
   "needsTranspile",
@@ -174,13 +175,6 @@ const INTENTIONAL_DIVERGENCES = [
     why: "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body",
     retail: "41eab6ce5e73ed72",
     boot: "7d80607cd31d4d23",
-  },
-  {
-    name: "txKey",
-    class: "drift",
-    why: "KNOWN DRIFT (JEL-630): retail strips only timestamp-like cache-buster params (JEL-178 PR#5); boot truncates the whole query string — and diverges from its own seeded __txKey which HAS the retail logic. Reconcile, then move to EXPECTED_MIRRORED",
-    retail: "3bb0286276a6597e",
-    boot: "032334d85af6da6a",
   },
   {
     name: "transpileLegacyScripts",
