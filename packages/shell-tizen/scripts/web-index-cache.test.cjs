@@ -1,7 +1,8 @@
 // JEL-57 verification — Web index cache (stale-while-revalidate for
 // /web/index.html), compared TV-shell vs hosted/browser-shell.
 //
-// What the issue asks us to prove (gate flag jellyfin.shell.indexCache='1'):
+// What the issue asks us to prove (gate flag jellyfin.shell.indexCache —
+// default-on since JEL-622; '0' opts out):
 //   1. First boot fetches /web/index.html and caches the body in localStorage
 //      under `jellyfin.shell.webIndexHtml`.
 //   2. Second boot resolves the index from cache immediately and fires a
@@ -203,14 +204,13 @@ function behavioural(src, label) {
   check(label + ": index cache key is " + INDEX_KEY, c.INDEX_KEY === INDEX_KEY);
   check(label + ": cap is 256 KB (" + CACHE_MAX + ")", c.MAX === CACHE_MAX);
 
-  // -- Gate semantics: off unless exactly "1" -------------------------------
-  check(label + ": gate OFF when unset", c.webCacheEnabled() === false);
+  // -- Gate semantics (JEL-622): ON by default, '0' opts out ----------------
+  check(label + ": gate ON when unset (default-on)", c.webCacheEnabled() === true);
   store.raw.set(GATE_KEY, "0");
-  check(label + ": gate OFF when '0'", c.webCacheEnabled() === false);
-  store.raw.set(GATE_KEY, "true");
-  check(label + ": gate OFF when 'true' (only '1' enables)", c.webCacheEnabled() === false);
+  check(label + ": gate OFF when '0' (opt-out)", c.webCacheEnabled() === false);
   store.raw.set(GATE_KEY, "1");
   check(label + ": gate ON when '1'", c.webCacheEnabled() === true);
+  store.raw.delete(GATE_KEY);
 
   // -- Invariant 1: first boot caches the fetched index body ----------------
   // Simulate the boot fork: gate on, no cache yet -> first boot writes.
@@ -339,11 +339,12 @@ const ALL_SHELLS = SRC_SHELLS.concat([
   ["boot-shell.min.js", bootMin],
 ]);
 
-// B0. The gate flag defaults OFF: webCacheEnabled only returns true for "1".
+// B0. The gate flag defaults ON (JEL-622): webCacheEnabled returns true unless
+//     the operator opts out with exactly "0".
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "gate flag '" + GATE_KEY + "' enables only on exact '1' in " + label,
-    /getItem\(\s*WEB_CACHE_GATE_KEY\s*\)\s*===?\s*"1"/.test(src),
+    "gate flag '" + GATE_KEY + "' is default-on / '0' opts out in " + label,
+    /getItem\(\s*WEB_CACHE_GATE_KEY\s*\)\s*!==?\s*"0"/.test(src),
   );
 }
 

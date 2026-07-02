@@ -30,6 +30,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1977 Web index/config body cache
 *JEL-1973 optional babel preload only partially overlap; on non-
 *JEL-1289 JEL-1654 JEL-1776 JEL-1924 JEL-1959 Mirror the / / / / record-
+*JEL-622 — SWR passed its QA parity soak, so every boot now skips the
 *JEL-178 never persist a web-index HTML that has a transpiled plugin
 *JEL-85 JEL-314 /: bound the probe (mirrors boot-shell.src.js). A
 *JEL-85 endpoint is not a Jellyfin server bug #2).
@@ -240,6 +241,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v29): drop `cache:'no-store'`. Forcing no-store re-downloads
 *JEL-63 race both critical-path boot fetches against a bounded timer
 *JEL-1977 stale-while-revalidate body cache for /web/index.html +
+*JEL-622 document.write critical path. On by default — set
 *JEL-1289 v55): also capture the speculative bundle prefetch
 *JEL-1654 park plugin prefetch promises on a stable global so
 *JEL-1977 record body for next-boot stale-while-
