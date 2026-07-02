@@ -54,9 +54,11 @@
 
 import { createRequire } from "node:module";
 import { promises as fs } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 // ---- Lockstep constants (guarded by tx-drop-build.test.cjs) --------------
 // STRICT post-transpile oracle — must equal MODERN_SYNTAX_RE_SRC in
@@ -180,16 +182,41 @@ function scriptUrlsFromWebIndex(html, serverUrl) {
   return urls;
 }
 
+// Load the repo's vendored babel and return its { transform } object.
+// Two shapes are supported so the builder tracks whatever babel.min.js the
+// shells actually ship:
+//   1. A UMD @babel/standalone (pre-JEL-620): CommonJS require() yields the
+//      module directly.
+//   2. The JEL-620 slim chrome56 build: an esbuild IIFE that assigns
+//      (window||self||globalThis).Babel — exactly what the TV runs from a
+//      <script> tag. Execute it in an isolated realm (globalThis === the
+//      sandbox) and read the global back, so the offline transform is the
+//      byte-for-byte transform the device would have produced itself.
+function loadBabel(babelPath) {
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require(babelPath);
+    if (mod && typeof mod.transform === "function") return mod;
+  } catch (_) {
+    // Not a CommonJS module (the slim build is a browser IIFE) — fall through.
+  }
+  const code = readFileSync(babelPath, "utf8");
+  const sandbox = { console };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox, { filename: babelPath });
+  const Babel = sandbox.Babel;
+  return Babel && typeof Babel.transform === "function" ? Babel : null;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const dropDir = path.resolve(args.dropDir);
   const txDir = path.join(dropDir, "tx");
   await fs.mkdir(txDir, { recursive: true });
 
-  // Load the vendored @babel/standalone UMD — same bytes the TV would run,
-  // so drop output is what the device would have produced itself.
-  const require = createRequire(import.meta.url);
-  const Babel = require(path.resolve(args.babel));
+  // Load the vendored babel — same bytes the TV would run, so drop output is
+  // what the device would have produced itself.
+  const Babel = loadBabel(path.resolve(args.babel));
   if (!Babel || typeof Babel.transform !== "function")
     usageDie("could not load a usable @babel/standalone from " + args.babel);
 
