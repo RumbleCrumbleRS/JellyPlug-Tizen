@@ -698,6 +698,33 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JEL-623: boot paint-gate. The cosmetic sweeps this seed installs
+      // (auto-focus 600ms poll, remember-me 300ms poll, YT-iframe cap
+      // sweep + whole-tree MutationObserver, webpack CM/PM walker) used
+      // to arm at document.write handoff and then tick through the whole
+      // 20-40s legacy bundle fetch/parse blackout, competing for the
+      // main thread on Chromium 56 while having nothing to act on (no
+      // jellyfin-web DOM exists yet). This gate is the ONE timer allowed
+      // to run during the blackout: a 500ms setTimeout chain whose
+      // pre-boot tick is a single `typeof window.ApiClient` property
+      // check (no DOM access). Two stages:
+      //   onApi(cb)   — webpack entry completed (window.ApiClient set).
+      //                 Arms the YT-iframe crash-guard sweep: plugins
+      //                 cannot build media-bar DOM before app init, so
+      //                 this loses zero crash coverage (the passive
+      //                 iframe src setter/setAttribute intercepts are
+      //                 armed from t0 regardless).
+      //   onPaint(cb) — first view painted (.card / login form / user
+      //                 picker / quick-connect), or 60 post-api ticks
+      //                 (30s) as a fallback. Arms the cosmetic sweeps
+      //                 and the webpack walker.
+      // Absolute backstop: 240 total ticks (120s, matches the walker's
+      // old noApiClient give-up budget) fires BOTH stages so no feature
+      // can stay dead on a wedged boot. Registration sites fall back to
+      // arming immediately when the gate is absent (defensive, and lets
+      // the per-feature tests lift their IIFEs into bare sandboxes).
+      // Diag: window.__shellPaintGate = {api,fired,why,t,ta}.
+      '  try{(function(){var g={api:0,fired:0,why:"",t:0,ta:0,cbs:[],acbs:[]};window.__shellPaintGate=g;function run(l){var c=l.slice();l.length=0;for(var i=0;i<c.length;i++){try{c[i]();}catch(_){}}}g.onApi=function(cb){if(g.api){try{cb();}catch(_){}}else g.acbs.push(cb);};g.onPaint=function(cb){if(g.fired){try{cb();}catch(_){}}else g.cbs.push(cb);};g.fireApi=function(){if(g.api)return;g.api=1;g.ta=Date.now();run(g.acbs);};g.fire=function(why){g.fireApi();if(g.fired)return;g.fired=1;g.why=why;g.t=Date.now();run(g.cbs);};var ticks=0,dticks=0;function poll(){if(g.fired)return;ticks++;if(ticks>=240){g.fire("giveup");return;}if(!g.api){if(typeof window.ApiClient==="undefined"){setTimeout(poll,500);return;}g.fireApi();}try{if(document.querySelector(".card,.manualLoginForm,.userItemContainer,.btnUseQuickConnect")){g.fire("paint");return;}}catch(_){}dticks++;if(dticks>=60){g.fire("timeout");return;}setTimeout(poll,500);}setTimeout(poll,500);})();}catch(_){}',
       // JEL-132: creds-guard. jellyfin-web 10.11's connection manager
       // (validateAuthentication) nulls UserId/AccessToken on ANY failure of
       // the authenticated GET /System/Info it issues at boot — network blip,
@@ -771,7 +798,13 @@
       '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});vault(mg);return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}vault(v);}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
       "  })();}catch(_){}",
       '  try{localStorage.setItem("layout","tv");}catch(_){}',
-      `  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S='a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;setInterval(function(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;},600);})();}catch(_){}`,
+      // JEL-623: the 600ms proactive poll now arms via
+      // __shellPaintGate.onPaint (first view painted) instead of at seed
+      // time — during the bundle blackout there is nothing to focus and
+      // on warm boots the poll was burning its 24-tick budget against
+      // the splash screen. The keydown rescue listener and the
+      // hashchange/popstate budget bumps stay armed from t0 (passive).
+      `  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S='a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;function __afTick(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;}function __armAF(){try{setInterval(__afTick,600);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armAF);}else{__armAF();}})();}catch(_){}`,
       // JEL-138: default the login "Remember Me" checkbox to CHECKED.
       // jellyfin-web's `enableAutoLogin` flag is sticky — one unchecked login
       // flips it to "false" and every later login form renders the box
@@ -789,7 +822,11 @@
       // sets don't fire change) reveals a deliberate uncheck, then back off.
       // Kill switch: localStorage["jellyfin.shell.rememberMeDefaultDisabled"]="1".
       // Diag: window.__shellRememberMeChecks.
-      `  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}try{setInterval(nudge,300);}catch(_){}try{document.addEventListener("DOMContentLoaded",nudge,false);}catch(_){}nudge();})();}catch(_){}`,
+      // JEL-623: the 300ms nudge poll arms via __shellPaintGate.onPaint
+      // — the paint selector includes .manualLoginForm, so the poll
+      // starts within ~500ms of the login form appearing instead of
+      // ticking through the bundle blackout with no form to nudge.
+      `  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}function __armRM(){nudge();try{setInterval(nudge,300);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armRM);}else{__armRM();}})();}catch(_){}`,
       // JEL-238 (defense-in-depth for JEL-237): media-bar YouTube-iframe crash
       // guard, baked natively into the shell so it ships in the signed .wgt and
       // survives any JS-Injector config wipe/re-import. The home media-bar
@@ -819,7 +856,14 @@
       // name ships in the .wgt.
       // Kill switch: localStorage["jellyfin.shell.ytIframeCapDisabled"]="1".
       // Diag: window.__shellYtCaps (count of youtube iframes removed).
-      `  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}})();}catch(_){}`,
+      // JEL-623: the sweep (MutationObserver + 400ms interval) arms via
+      // __shellPaintGate.onApi (webpack entry completed) instead of at
+      // seed time; plugins cannot build media-bar DOM before app init,
+      // so crash coverage is unchanged while the whole-tree observer no
+      // longer fires on every splash/boot DOM mutation. The passive
+      // iframe src setter/setAttribute intercepts and the one-shot
+      // cap() stay armed from t0 (essential guard).
+      `  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}`,
       "  try{(function(){",
       "    var on=false;",
       '    try{on=(localStorage.getItem("jellyfin.shell.afSelfTest")==="1")||/shellSelfTest=focus/.test(String(location.hash||""))||/shellSelfTest=focus/.test(String(location.search||""));}catch(_){}',
@@ -835,6 +879,10 @@
       "      try{document.body&&document.body.focus&&document.body.focus();}catch(_){}",
       "    }",
       "    function go(){",
+      // JEL-623: the self-test depends on the now-gated 600ms auto-
+      // focus poll; force-fire the paint gate so the harness still
+      // runs on splash / user-picker pages where no card ever paints.
+      '      try{window.__shellPaintGate&&window.__shellPaintGate.fire("selftest");}catch(_){}',
       "      inject();",
       "      window.__shellSelfTestStart=Date.now();",
       '      window.__shellSelfTest={r:"wait",t:0,af:0,sc:-1};',
@@ -1855,7 +1903,14 @@
       "        if((!window.__shellCMPatched||!window.__shellPMPatched||!window.__shellPluginManager)&&window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
       '      }catch(e){window.__shellCMErr="walk:"+String(e.message).slice(0,40);setTimeout(__shellWalkWebpack,500);}',
       "    }",
-      "    setTimeout(__shellWalkWebpack,200);",
+      // JEL-623: kick the walker on first paint instead of at seed time.
+      // Pre-paint it was just a 500ms ApiClient wait loop (the paint
+      // gate now owns that wait with a cheaper property check), and
+      // kicking at entry-completion made the expensive wr.m factory-
+      // registry scan compete with the first home render. The CM/PM/
+      // pluginManager patches it installs are playback-path only, so
+      // first-paint is early enough by seconds.
+      "    (function(){function kick(){setTimeout(__shellWalkWebpack,200);}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(kick);}else{kick();}})();",
       "  }catch(_){}",
       "})();",
     ].join(`
