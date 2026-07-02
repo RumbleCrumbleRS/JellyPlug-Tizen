@@ -5,9 +5,10 @@
 // shell.js" / "mirror" in comments, but until this test NOTHING enforced it —
 // verify_shell_src.py / verify_boot_shell_src.py only check src<->min WITHIN
 // one package, so a fix applied to one shell and missed in the other shipped
-// silently (it happened: JEL-178's txKey buster-stripping and the JEL-137-era
-// alreadyRan() defer-watchdog double-run guard each live in only ONE shell —
-// see INTENTIONAL_DIVERGENCES below).
+// silently (it happened: JEL-178's txKey buster-stripping lives in only ONE
+// shell — see INTENTIONAL_DIVERGENCES below; the JEL-137-era alreadyRan()
+// defer-watchdog double-run guard was another such gap until JEL-631 ported
+// it to retail).
 //
 // Mechanism — text equality is useless here (boot-shell.src.js is a
 // compressed-style variant: comma-chained vars, `x||(x=y)` for `if(!x)x=y`),
@@ -121,6 +122,10 @@ const EXPECTED_MIRRORED = [
   "ensureBabelReady",
   "buildBundleSourcePatcher",
   "escAttr",
+  "armDeferWatchdog",
+  "reinject",
+  "tick",
+  "alreadyRan",
   "bail",
   "markDocumentWrite",
   "restoreCredsVault",
@@ -202,27 +207,6 @@ const INTENTIONAL_DIVERGENCES = [
     why: "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
     retail: "62a5ed8218434b0f",
     boot: "fda5e5504252e1c3",
-  },
-  {
-    name: "armDeferWatchdog",
-    class: "drift",
-    why: "KNOWN DRIFT (JEL-631): boot skips re-injection when alreadyRan() (__shellRegElCalls>0) — the JEL-137-era double-run guard; retail never got it. Port to retail, then move to EXPECTED_MIRRORED",
-    retail: "a051c37dd3e70bd8",
-    boot: "7f7b424c847affe3",
-  },
-  {
-    name: "reinject",
-    class: "drift",
-    why: "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    retail: "33e76bf4c58cff25",
-    boot: "840b717cc5375e5a",
-  },
-  {
-    name: "tick",
-    class: "drift",
-    why: "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    retail: "94bdcdfcea25d776",
-    boot: "00442a87a468161b",
   },
   {
     name: "maybeStringFastPath",

@@ -3756,10 +3756,24 @@
       // note below on why the old readyState trigger was removed.
       CAP = 20000,
       started = Date.now();
+    // JEL-631 (ports JEL-137 guard, lockstep with boot-shell.src.js):
+    // registerElement calls prove the web client bundle already executed, so
+    // re-injection would double-run it even though ApiClient may not be
+    // installed yet on a slow boot.
+    function alreadyRan() {
+      return (window.__shellRegElCalls || 0) > 0;
+    }
     function reinject(reason) {
       try {
         if (typeof window.ApiClient !== "undefined") return;
         if (typeof window.__webpack_require__ !== "undefined") return;
+        if (alreadyRan()) {
+          window.__shellDeferWatchdogSkipped =
+            (window.__shellDeferWatchdogSkipped || 0) + 1;
+          window.__shellDeferWatchdogSkipReason =
+            "regEl>" + (window.__shellRegElCalls || 0);
+          return;
+        }
         // JEL-137: a partially-executed defer sequence is NOT the JEL-99
         // wedge. Every jellyfin-web bundle starts with
         // `(self.webpackChunk=self.webpackChunk||[]).push(...)`, so the
@@ -3820,6 +3834,7 @@
       try {
         if (typeof window.ApiClient !== "undefined") return;
         if (typeof window.__webpack_require__ !== "undefined") return;
+        if (alreadyRan()) return;
         // JEL-101 (ports JEL-99): do NOT treat document.readyState ===
         // "complete" as a hang signal. After document.open/write/close into the
         // already-complete bootstrap document, Chromium 63 reports readyState
@@ -3829,8 +3844,8 @@
         // at 638 ms, re-injected all 28 scripts, and the real defers then ALSO
         // ran, which double-ran the webpack runtime and wedged the SPA forever
         // (JEL-99). The only sound "defers ran" signals are __webpack_require__
-        // / ApiClient (checked above); absent those, wait out the cap before
-        // assuming a genuine hang.
+        // / ApiClient / registerElement (checked above); absent those, wait
+        // out the cap before assuming a genuine hang.
         var elapsed = Date.now() - started;
         if (elapsed >= CAP) {
           reinject("cap@" + elapsed + "ms");
