@@ -37,6 +37,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-12 server's Sessions API to report : the actual web client
 *JEL-144 "No player found for the requested media" on playback .
 *JEL-401 JEL-206 supersedes : we no longer strip non-builtin plugin
+*JEL-623 boot paint-gate. The cosmetic sweeps this seed installs
 *JEL-132 creds-guard. jellyfin-web 10.11's connection manager
 *JEL-132 means store-level loss (the alternate hypothesis
 *JEL-134 JEL-132 v2): creds vault. The on-device trail capture
@@ -44,12 +45,16 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1580 post-login Home leaves activeElement on <body> on
 *JEL-1580 v58 retry): v57 listener bound but rescue counter
 *JEL-1580 v59 retry-2): keypress-only rescue requires the
+*JEL-623 the 600ms proactive poll now arms via
 *JEL-138 default the login "Remember Me" checkbox to CHECKED.
 *JEL-138 Field report + browser-verified root cause (results-.md
 *JEL-138 Board decision interaction c0b35a10 = "default_checked"
+*JEL-623 the 300ms nudge poll arms via __shellPaintGate.onPaint
 *JEL-238 JEL-237 defense-in-depth for : media-bar YouTube-iframe crash
 *JEL-484 actually decoded, so the old TV never crashed. update: cappi
+*JEL-623 the sweep (MutationObserver + 400ms interval) arms via
 *JEL-1580 v60: synthetic AF self-test harness. Gated by either
+*JEL-623 the self-test depends on the now-gated 600ms auto-
 *JEL-1779 Tizen 5.5 first-boot hits NotSupportedError when web
 *JEL-727 v47: Tizen 5.0 (Chrome 56) ships a buggy
 *JEL-567 v43: pin the "SyntaxError: Unexpected end of JSON input"
@@ -111,6 +116,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-137 never force-require modules before the webpack entry
 *JEL-535 v24: webpack 5 wr.c exists but is empty (closure-bound'
 *JEL-727 also pick factories that look like pluginManager so we
+*JEL-623 kick the walker on first paint instead of at seed time.
 *JEL-401 Plugin script transpilation
 *JEL-401 `Chromium/56` instead of `Chrome/56` (Q60R 2019 panels seen
 *JEL-436 will reject, preventing <video> element creation on Tizen 5.
