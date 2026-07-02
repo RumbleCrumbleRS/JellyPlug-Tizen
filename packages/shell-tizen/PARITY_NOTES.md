@@ -21,6 +21,6 @@ differences as expected (not shell defects):
    state; the web client's own credentials live in
    `localStorage['jellyfin_credentials']` exactly as in the browser.
 
-3. **Detail / item-action TV layout** - jellyfin-web renders its TV-optimized layout when `NativeShell.AppHost.getDefaultLayout` returns `'tv'` (see `shell.js:199`). Action buttons (Play, Library, Shuffle, Mark watched, Heart) render inline beneath the title row; the desktop top-right toolbar and 3-dot overflow are not used. This is intrinsic web-client behavior, not a shell defect.
+3. **Detail / item-action TV layout** - jellyfin-web renders its TV-optimized layout when `NativeShell.AppHost.getDefaultLayout` returns `'tv'` (see the `getDefaultLayout` member of the AppHost object in `src/shell.js` — line numbers drift, grep for the function name). Action buttons (Play, Library, Shuffle, Mark watched, Heart) render inline beneath the title row; the desktop top-right toolbar and 3-dot overflow are not used. This is intrinsic web-client behavior, not a shell defect.
 
 Source: [JEL-3 QA verdict](/JEL/issues/JEL-3#comment-ca52517e-fdbf-4e65-946a-01a9710184b9).

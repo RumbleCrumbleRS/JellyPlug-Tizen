@@ -20,12 +20,15 @@ By default this writes to dist/boot-shell.min.js (a build output) and runs the
 equivalence guard — it does NOT overwrite the committed, on-device-validated
 src/boot-shell.min.js. Pass --promote to overwrite the committed artifact.
 
-IMPORTANT: a rebuilt artifact is byte-different from the hand-maintained one
-(esbuild's own quote/whitespace choices) even though it is SEMANTICALLY identical
-(verify_boot_shell_src.py proves this). The committed src/boot-shell.min.js is the
-validated deploy. Promoting a rebuild ships new bytes to a wedge-prone locked TV
-(see memory `tv-webview-wedge-on-reinstall`), so --promote requires fresh
-on-device validation before release.
+IMPORTANT: since JEL-195 the committed src/boot-shell.min.js is itself a
+--promote output, so rebuilding an unchanged .src.js with the lockfile-pinned
+esbuild reproduces it byte-for-byte (verified JEL-628; a different esbuild
+version may re-introduce quote/whitespace drift, which the equivalence guard
+proves semantically identical via verify_boot_shell_src.py). The committed
+blob is still the on-device-validated deploy: whenever --promote changes its
+bytes, that ships new bytes to a wedge-prone locked TV (see memory
+`tv-webview-wedge-on-reinstall`) and requires fresh on-device validation
+before release.
 
 Usage:
   python3 build_boot_shell.py                  # -> dist/boot-shell.min.js (+verify)

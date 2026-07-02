@@ -221,6 +221,14 @@ def emit_manifest_stub(wgt: Path, ver: str) -> Path:
         "sha256": sha256_file(wgt),
         "sizeBytes": wgt.stat().st_size,
         "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required.",
+        # JEL-628: the referenced .wgt is intentionally NOT in this repo — it is
+        # signed and attached as a GitHub Release asset by bootstrap-sign.yml
+        # (bootstrap-v* tag). The committed manifest only advertises the most
+        # recent build's identity; a repo-local existence check would always
+        # fail by design.
+        "provenance": "sha256/sizeBytes describe the release-pipeline-emitted "
+        ".wgt (bootstrap-sign.yml, bootstrap-v* tag); the binary ships as a "
+        "GitHub Release asset and is never committed.",
     }
     out = PKG_ROOT / "manifest.bootstrap.json"
     out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
