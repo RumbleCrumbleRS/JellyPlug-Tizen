@@ -13,6 +13,8 @@ ${server}/shell/
 ├── manifest.json       # version + sha256 of shell.min.js (TVs read this first)
 ├── shell.min.js        # full shell logic (rebuilt from _jel*_v80_src/shell.js)
 ├── babel.min.js        # @babel/standalone, lazy-loaded for legacy Tizen 5.0/5.5
+├── tx-manifest.json    # (optional) pre-lowered transpile drop index (JEL-621)
+├── tx/<hash>.js        # (optional) pre-lowered ES5 bodies, fnv1a(source)-keyed
 └── (optional) JellyfinShellBootstrap_v<ver>.wgt
                         # advertised in manifest for Device Manager pull installs
 ```
@@ -44,6 +46,44 @@ python3 emit_manifest.py /var/www/jellyfin/shell/
 ```
 
 No TV-side install required. `intershell_support` can be `disabled` for years.
+
+## Pre-lowered transpile drop (JEL-621)
+
+THE dominant cold-boot cost on Tizen 5.0 is Babel: the shell serially
+transforms ~1.9 MB of plugin JS on the TV main thread (21-42 s measured).
+`scripts/build-tx-drop.mjs` runs the exact same transform offline — it loads
+the repo's vendored `babel.min.js` with the byte-identical option literal
+from the shells — and publishes:
+
+```
+${server}/shell/tx/<fnv1a-of-source>.js   pre-lowered ES5 body per input
+${server}/shell/tx-manifest.json          { format, babelOptsKey, entries }
+```
+
+At boot the shells fetch `tx-manifest.json` in parallel with the `/web/`
+RTT; every transpile slow path hashes its fetched source and, on a manifest
+hit, downloads the pre-lowered body instead of loading Babel. Content
+addressing keeps it correct across plugin config changes: new content, new
+hash, manifest miss, on-device Babel fallback. On-device gates: manifest
+`babelOptsKey` must match the shell's `BABEL_OPTS_KEY`, and every body must
+pass the strict fully-lowered oracle before it is inlined. Kill switch:
+`localStorage["jellyfin.shell.txDropDisabled"]="1"`.
+
+Regenerate whenever plugins / snippet-channel config change (the tool names
+no plugin — point it at what your server serves):
+
+```
+node scripts/build-tx-drop.mjs /var/www/jellyfin/shell \
+  --url "https://server/<your-snippet-channel>/public.js" \
+  --web-index https://server \
+  --url-list tv-plugin-urls.txt        # e.g. the TV's recorded
+                                       # jellyfin.shell.pluginUrls list
+```
+
+Hook the same command into whatever regenerates your snippet-channel
+config (the JEL-178 Caddy-regen hook is a natural place) so the drop is
+never stale for more than one boot — a stale drop is safe (hash miss →
+on-device transpile), just slow.
 
 ## manifest.json schema
 
