@@ -34,7 +34,7 @@
     BABEL_OPTS_KEY =
       "presets:[[env,{targets:{chrome:56},modules:false,loose:true}]];sourceType:script;compact:true;comments:false",
     BABEL_FPR =
-      "2451554:2166756e6374696f6e2865297b696628766f696420303d3d3d652e70726f6365:6973262628676c6f62616c546869732e426162656c3d6a62292c6a627d28293b";
+      "2091715:2f2a20626162656c2e6d696e2e6a7320e28094204a454c2d36323020736c696d:303b4c39652e426162656c3d74493b766172206147653d74493b7d2928293b0a";
   function txFnv1a(s) {
     for (var h = 2166136261, i = 0; i < s.length; i++)
       ((h ^= s.charCodeAt(i)),
