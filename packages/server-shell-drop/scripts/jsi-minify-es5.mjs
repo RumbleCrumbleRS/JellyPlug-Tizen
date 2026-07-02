@@ -178,6 +178,16 @@ export function transformSnippet(text, { Babel, esbuild, minify }) {
     if (!out || typeof out.code !== "string" || !out.code.length)
       throw new Error("babel produced no output");
     body = out.code;
+    // Gate BEFORE minifying: if the lockstep Babel transform could not
+    // clear the precheck (e.g. BigInt literals — no chrome:56 lowering
+    // exists), reject NOW. Newer esbuilds would otherwise "lower" such
+    // syntax to runtime calls (10n -> BigInt(10)) that parse as ES5 but
+    // throw ReferenceError on the panels — a silent deploy of broken code.
+    if (PRECHECK_RE.test(body))
+      throw new Error(
+        "lowered output still trips the shell precheck — " +
+          "un-lowerable at the chrome:56 floor",
+      );
   }
   if (minify) {
     body = esbuild.transformSync(body, {
