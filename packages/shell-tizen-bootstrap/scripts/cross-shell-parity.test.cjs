@@ -158,8 +158,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    retail: "3e8df9bbd9aafed8",
-    boot: "47d148e6d417c23f",
+    retail: "e1815da10ed00742",
+    boot: "43256f696a46d9fd",
   },
   {
     name: "buildDiagSeedScript",
