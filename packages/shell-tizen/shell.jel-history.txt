@@ -152,6 +152,11 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-197 Idempotency : if the document already references a public.js
 *JEL-196 the cutover: the two carry independent content today, and on
 *JEL-204 JEL-203 parent audit): the delivery route is overridable via
+*JEL-618 channel body cache. The channel is the aggregate of EVERY
+*JEL-618 bodies > 256 KiB — so pre- the TV re-downloaded AND re-babel
+*JEL-618 cache = pre- refetch-every-boot behaviour) and only while
+*JEL-178 up: the one-boot-lag contract widens to a bounded TTL for
+*JEL-618 a fresh cached channel body (already transpiled + gated on
 *JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
 *JEL-178 query-bearing: transpileLegacyScripts then routes it through
 *JEL-216 an active channel on a legacy engine guarantees a transpile
@@ -180,6 +185,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1959 record /web/ <link rel=stylesheet> URLs for next-boot
 *JEL-1924 Mirrors shape: no adoption (browser HTTP cache coalesces
 *JEL-1580 + HomeScreen serve from /PluginName/, v58 lesson). Cap 20.
+*JEL-618 an inlined cached channel body is FINAL executable output
+*JEL-618 adopt the finished channel body into the channel cache.
 *JEL-554 v32): cache short-circuit. Skip fetch + babel entirely
 *JEL-1654 adopt the in-flight prefetch from the head IIFE
 *JEL-1580 first cold boot). IIFE filters by server origin
@@ -217,10 +224,12 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-99 . The only sound "defers ran" signals are __webpack_require_
 *JEL-1832 warm-boot string fast path.
 *JEL-197 the JS-Injector snippet channel must inject + transpile
+*JEL-618 public.js, which only the DOMParser path can do. : unless a
 *JEL-1980 inline body whenever present (raw or patched).
 *JEL-1971 beacon body comes last so it picks up the seed-installed
 *JEL-126 fast path is legacy-only by construction (bailed "modern"
 *JEL-1980 fast-path body-cache adoption — main.jellyfin
+*JEL-618 splice the cached channel body in last, immediately before
 *JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
 *JEL-134 JEL-132 v2): boot-time restore from the IndexedDB creds
 *JEL-1034 v53): speculative babel prime, flag-gated.

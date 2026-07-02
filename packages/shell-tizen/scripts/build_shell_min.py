@@ -72,6 +72,9 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # manifest out-of-band (shell.jel-history.txt): the committed blob had crept
 # to 3 B under the old cap, so the next non-trivial shell change failed the
 # build. The cap now covers pure minified code (~128.5 KB at the raise).
+# JEL-618 (this branch) needed the same headroom for the chunked JSI-channel
+# body cache and had bumped the cap independently; JEL-625 landed first and
+# owns the cap policy, so its version is taken here verbatim.
 #
 # CAP POLICY (JEL-625): shell.min.js ships in the retail .wgt (index.html
 # loads it) and is also the hosted /shell/ payload, so the cap is a payload-
