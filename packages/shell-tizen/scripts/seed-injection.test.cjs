@@ -211,9 +211,15 @@ check(
 );
 
 // A5. (3) auto-focus interval — 600 ms cadence, 24-tick budget, auth-gated.
+// JEL-623: the interval arms via __shellPaintGate.onPaint (first view
+// painted), no longer at seed time — see C3 for the execution proof.
 check(
-  "seed runs a " + AUTOFOCUS_MS + "ms auto-focus interval",
-  tvSrc.includes("}," + AUTOFOCUS_MS + ");"),
+  "seed defines a " + AUTOFOCUS_MS + "ms auto-focus interval (paint-gated)",
+  tvSrc.includes("setInterval(__afTick," + AUTOFOCUS_MS + ");"),
+);
+check(
+  "auto-focus interval registers on the paint gate",
+  tvSrc.includes("pg.onPaint(__armAF)"),
 );
 check(
   "auto-focus budget seeded to " + AUTOFOCUS_BUDGET + " ticks",
@@ -535,6 +541,7 @@ function runSeed(ua) {
     bound: win.__shellBodyFocusRescueBound,
     budget: win.__shellAutoFocusBudget,
     seeded: win.__shellSeededServer,
+    win,
     intervals,
     keydown,
     // the seed overrode window.fetch — fetching config.json must now return the
@@ -583,24 +590,47 @@ async function main() {
     JSON.stringify({ bound: br.bound, keydown: br.keydown }),
   );
 
-  // C3. (3) auto-focus interval — 600 ms, budget 24, on both.
-  check(
-    "TV: " +
-      AUTOFOCUS_MS +
-      "ms auto-focus interval running, budget=" +
-      AUTOFOCUS_BUDGET,
-    tv.intervals.indexOf(AUTOFOCUS_MS) !== -1 && tv.budget === AUTOFOCUS_BUDGET,
-    JSON.stringify({ intervals: tv.intervals, budget: tv.budget }),
-  );
-  check(
-    "browser: " +
-      AUTOFOCUS_MS +
-      "ms auto-focus interval running, budget=" +
-      AUTOFOCUS_BUDGET +
-      " (identical)",
-    br.intervals.indexOf(AUTOFOCUS_MS) !== -1 && br.budget === AUTOFOCUS_BUDGET,
-    JSON.stringify({ intervals: br.intervals, budget: br.budget }),
-  );
+  // C3. (3) auto-focus interval — JEL-623: armed via __shellPaintGate.onPaint,
+  //     no longer at seed time. Pre-fire the seed must NOT have registered the
+  //     600 ms interval (that is the bundle-blackout relief being pinned);
+  //     firing the gate arms it with the 24-tick budget intact. Both platforms.
+  for (const [label, ctx] of [
+    ["TV", tv],
+    ["browser", br],
+  ]) {
+    const g = ctx.win.__shellPaintGate;
+    check(
+      label + ": paint gate installed (onApi/onPaint/fire)",
+      !!g &&
+        typeof g.onApi === "function" &&
+        typeof g.onPaint === "function" &&
+        typeof g.fire === "function",
+    );
+    check(
+      label +
+        ": " +
+        AUTOFOCUS_MS +
+        "ms auto-focus interval NOT armed before first paint (JEL-623)",
+      ctx.intervals.indexOf(AUTOFOCUS_MS) === -1,
+      JSON.stringify({ intervals: ctx.intervals }),
+    );
+    check(
+      label + ": auto-focus budget seeded to " + AUTOFOCUS_BUDGET,
+      ctx.budget === AUTOFOCUS_BUDGET,
+      JSON.stringify({ budget: ctx.budget }),
+    );
+    try {
+      g.fire("test");
+    } catch (_) {}
+    check(
+      label +
+        ": " +
+        AUTOFOCUS_MS +
+        "ms auto-focus interval armed after paint-gate fire",
+      ctx.intervals.indexOf(AUTOFOCUS_MS) !== -1,
+      JSON.stringify({ intervals: ctx.intervals }),
+    );
+  }
 
   // C4. The config.json intercept is LIVE before remote scripts on both: fetch
   //     resolves to the seeded {servers:[serverUrl], multiserver:false}, with
@@ -673,8 +703,9 @@ async function main() {
   }
   console.log(
     "seed-injection verification PASSED — seed injected before remote scripts; " +
-      "__TXVER correct, focus rescue + 600ms auto-focuser installed, NativeShell " +
-      "stubs in place; TV vs browser identical except the legacy-gated __TXVER owner.",
+      "__TXVER correct, focus rescue installed, 600ms auto-focuser paint-gated " +
+      "(JEL-623), NativeShell stubs in place; TV vs browser identical except " +
+      "the legacy-gated __TXVER owner.",
   );
 }
 
