@@ -55,7 +55,13 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
 # in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
 # the 80-line breadcrumb floor under the old cap.
-HARD_CAP = 131072
+# JEL-621 raised it 131072 -> 139264 (136 KiB): the pre-lowered transpile
+# drop (manifest loader + txDropResolve + seed __txDropGet/__txResolve,
+# mirrored in boot-shell) grew the minified base to ~129.3 KB — the base
+# alone exceeded the old cap before any breadcrumbs. Same rationale as the
+# prior bumps: shell.min.js is the HOSTED blob (not wgt-packaged since
+# JEL-124), so the cap only budgets the breadcrumb manifest.
+HARD_CAP = 139264
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
 # `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
 MIN_JEL_LINES = 80
