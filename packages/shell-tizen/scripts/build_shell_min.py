@@ -2,17 +2,26 @@
 Build shell.min.js for the Jellyfin Tizen browser-shell.
 
 Per JEL-929: minify shell.js with esbuild (mangle OFF, public symbols
-preserved) and prepend a JEL- ticket-history manifest so breadcrumb
+preserved) and record a JEL- ticket-history manifest so breadcrumb
 tickets survive minification.
 
-Acceptance (JEL-929):
-- grep -c JEL- shell.min.js  >= 80
-- shell.min.js                <= 70 KB
+JEL-625: the manifest used to be PREPENDED to shell.min.js as a
+/*! JEL history */ comment and tail-trimmed to fit HARD_CAP; the blob
+crept to 3 bytes under the cap, so any shell growth failed the build.
+The manifest now lives OUT-OF-BAND in ../shell.jel-history.txt
+(package root, deliberately outside src/ so build-wgt.sh never stages
+it) and is no longer trimmed — the full breadcrumb set is kept.
+shell.min.js is pure minified code. verify_shell_src.py fails CI if
+the history file goes stale relative to shell.js.
+
+Acceptance (JEL-929, restated for the out-of-band manifest):
+- grep -c '^\\*JEL-' shell.jel-history.txt  >= 80
+- shell.min.js                              <= HARD_CAP
 - mangle OFF (esbuild --minify-whitespace --minify-syntax only)
 
-Manifest format: one /*! ... */ block at the top, one breadcrumb per
-line in `*JEL-N [context]` form so `grep -c JEL-` reports one match
-per source breadcrumb.
+Manifest format: header lines, then one breadcrumb per line in
+`*JEL-N [context]` form so `grep -c '^*JEL-'` reports one match per
+source breadcrumb.
 
 Usage: python3 build_shell_min.py
 """
@@ -33,6 +42,10 @@ TIZEN = HERE.parent / "tizen"
 SHELL_JS = SRC / "shell.js"
 SHELL_MIN = SRC / "shell.min.js"
 CLEAN_MIN = SRC / "shell.min.js.eb_clean"
+# JEL-625: out-of-band breadcrumb manifest. Lives at the PACKAGE root, not in
+# src/ — build-wgt.sh stages src/ wholesale minus an explicit dev-file list,
+# so a src/ location would silently ship the manifest in the retail .wgt.
+JEL_HISTORY = HERE.parent / "shell.jel-history.txt"
 BABEL_MIN = SRC / "babel.min.js"
 CONFIG_XML = TIZEN / "config.xml"
 QA_BEACON_JS = SRC / "qa-beacon.js"  # JEL-1971: optional QA telemetry body
@@ -55,19 +68,25 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
 # in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
 # the 80-line breadcrumb floor under the old cap.
-HARD_CAP = 131072
-# MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
-# `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
+# JEL-625 raised it 131072 -> 147456 (144 KiB) and moved the breadcrumb
+# manifest out-of-band (shell.jel-history.txt): the committed blob had crept
+# to 3 B under the old cap, so the next non-trivial shell change failed the
+# build. The cap now covers pure minified code (~128.5 KB at the raise).
+#
+# CAP POLICY (JEL-625): shell.min.js ships in the retail .wgt (index.html
+# loads it) and is also the hosted /shell/ payload, so the cap is a payload-
+# diet growth tripwire (JEL-124), NOT a platform hard limit — boot-shell.min.js
+# has no cap and the TVs parse far larger plugin bundles. When a legitimate
+# feature outgrows it: raise in 16 KiB steps, in the ticket that grows the
+# code, leaving >= SOFT_HEADROOM of room after the raise; never absorb the
+# bump silently in an unrelated change. The build warns (does not fail) when
+# headroom drops below SOFT_HEADROOM so the wall is visible one ticket early.
+HARD_CAP = 147456
+SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
+# MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
+# >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
+# meaningful drift signal (pre-JEL-625 this floor applied to shell.min.js).
 MIN_JEL_LINES = 80
-# JEL-91: budget the breadcrumb manifest against HARD_CAP, not a fixed 100000.
-# The old TARGET (100000) had drifted *below* the minified base size (~101.3 KB
-# after accumulated feature growth, incl. JEL-90's resolveDeviceName model read),
-# so build_manifest computed a negative budget and emitted every breadcrumb
-# unbounded — overflowing the cap (~102994 B). The manifest now trims breadcrumbs
-# from the tail to fit under HARD_CAP while preserving the MIN_JEL_LINES floor, so
-# future code growth self-corrects here instead of failing the build.
-TARGET_BYTES = HARD_CAP  # manifest budget tracks the hard cap (was 100000)
-BASE_BYTES_PLACEHOLDER = 0  # filled at runtime after esbuild pass
 
 # Prefer the lockfile-pinned workspace install (integrity-checked by pnpm)
 # over PATH or an ad-hoc npx download (JEL-119 supply-chain hardening).
@@ -239,55 +258,32 @@ def collect_breadcrumbs(src: str):
     return result
 
 
-def build_manifest(base_size: int, breadcrumbs) -> str:
-    header = "/*! JEL history (passthrough JEL-929):\n"
-    footer = "*/\n"
+def build_history_text(breadcrumbs) -> str:
+    """JEL-625: render the out-of-band breadcrumb manifest.
 
-    # JEL-120: budget in UTF-8 BYTES, not str chars — context lines harvested
-    # from source comments can carry non-ASCII (arrows, ≡), and the manifest
-    # is written encoded, so char-based math overshot HARD_CAP by the
-    # multibyte surplus.
-    def blen(s: str) -> int:
-        return len(s.encode("utf-8"))
-
-    budget = TARGET_BYTES - base_size - blen(header) - blen(footer)
-
-    lines = ["*" + " ".join(refs) + "\n" for refs, _ in breadcrumbs]
-
-    # JEL-91: trim breadcrumbs from the tail (source order) until the bare lines
-    # fit the byte budget, but never drop below the MIN_JEL_LINES grep floor.
-    # base_size now sits close to HARD_CAP, so the full breadcrumb set no longer
-    # fits; shedding tail entries holds the deployed blob under the cap without
-    # bloating it. Trimming is deterministic, so the output is reproducible.
-    kept = len(lines)
-    while kept > MIN_JEL_LINES and sum(blen(l) for l in lines[:kept]) > budget:
-        kept -= 1
-    dropped = len(lines) - kept
-    if dropped:
-        print(
-            f"manifest: trimmed {dropped} of {len(lines)} breadcrumb lines "
-            f"to fit {budget} B budget (kept {kept}, floor {MIN_JEL_LINES})"
-        )
-    lines = lines[:kept]
-    breadcrumbs = breadcrumbs[:kept]
-
-    bare = sum(blen(l) for l in lines)
-    remaining = budget - bare
-
-    for i, (_, ctx) in enumerate(breadcrumbs):
-        if not ctx:
-            continue
-        base = lines[i].rstrip("\n")
-        max_extra = min(45, remaining - 1)
-        if max_extra <= 2:
-            break
-        extra = " " + ctx[: max_extra - 1]
-        while blen(extra) > max_extra:
-            extra = extra[:-1]
-        lines[i] = base + extra + "\n"
-        remaining -= blen(extra)
-
-    return header + "".join(lines) + footer
+    Deterministic function of shell.js alone (source order, no size budget,
+    no trimming — the pre-JEL-625 in-blob manifest tail-trimmed to fit
+    HARD_CAP and silently dropped history). verify_shell_src.py regenerates
+    this text in CI and requires byte identity with the committed file, so
+    keep it free of anything non-reproducible.
+    """
+    header = (
+        "JEL breadcrumb history for shell.min.js — GENERATED, do not edit.\n"
+        "Regenerate: python3 packages/shell-tizen/scripts/build_shell_min.py\n"
+        "One `*JEL-N [context]` line per shell.js source breadcrumb, in source\n"
+        "order. Formerly a /*! JEL history */ comment prepended to shell.min.js\n"
+        "(JEL-929); moved out-of-band by JEL-625 so the deployed blob spends its\n"
+        "HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).\n"
+        "\n"
+    )
+    lines = []
+    for refs, ctx in breadcrumbs:
+        line = "*" + " ".join(refs)
+        if ctx:
+            # Clamp context for line tidiness; refs are the drift signal.
+            line += " " + ctx[:60].rstrip()
+        lines.append(line + "\n")
+    return header + "".join(lines)
 
 
 def main() -> int:
@@ -297,29 +293,40 @@ def main() -> int:
     minified = inject_shell_version(minified)
     minified = inject_qa_beacon(minified)
     CLEAN_MIN.write_bytes(minified)
-    base_size = len(minified)
+
+    # JEL-625: shell.min.js is pure minified code; the breadcrumb manifest is
+    # written out-of-band, full-length, next to the package (not in src/).
+    SHELL_MIN.write_bytes(minified)
 
     crumbs = collect_breadcrumbs(src)
-    manifest = build_manifest(base_size, crumbs)
+    history = build_history_text(crumbs)
+    JEL_HISTORY.write_text(history, encoding="utf-8")
 
-    out = manifest.encode("utf-8") + minified
-    SHELL_MIN.write_bytes(out)
-
-    jel_lines = sum(1 for l in out.decode("utf-8").split("\n") if "JEL-" in l)
+    jel_lines = sum(1 for l in history.split("\n") if l.startswith("*JEL-"))
+    headroom = HARD_CAP - len(minified)
     print(
-        f"shell.min.js  bytes={len(out)}  jel_lines={jel_lines}  "
+        f"shell.min.js  bytes={len(minified)}  headroom={headroom}  "
         f"babel_fpr={babel_fingerprint()}  shell_ver={shell_version()}"
     )
+    print(f"shell.jel-history.txt  breadcrumb_lines={jel_lines}")
 
-    # JEL-91: if even the MIN_JEL_LINES floor can't fit under HARD_CAP, the
-    # minified code itself has outgrown the budget — a real cap bump is owed
-    # (precedent: JEL-1977). Fail loudly rather than ship an oversized blob.
-    assert len(out) <= HARD_CAP, (
-        f"size {len(out)} > {HARD_CAP} ({HARD_CAP // 1024} KiB cap): minified base "
-        f"{base_size} B leaves no room for the {MIN_JEL_LINES}-line breadcrumb "
-        "floor — trim shell.js or raise HARD_CAP with justification (JEL-1977)"
+    if headroom < SOFT_HEADROOM:
+        print(
+            f"WARNING: only {headroom} B of headroom under the "
+            f"{HARD_CAP // 1024} KiB cap (< {SOFT_HEADROOM} B) — plan a cap "
+            "raise per the CAP POLICY comment before the next sizable change"
+        )
+
+    # If the minified code itself outgrows the budget, a deliberate cap bump
+    # is owed (see CAP POLICY above; precedent: JEL-1977/120/131/134/625).
+    # Fail loudly rather than ship an oversized blob.
+    assert len(minified) <= HARD_CAP, (
+        f"size {len(minified)} > {HARD_CAP} ({HARD_CAP // 1024} KiB cap): "
+        "trim shell.js or raise HARD_CAP per the CAP POLICY comment"
     )
-    assert jel_lines >= MIN_JEL_LINES, f"jel_lines {jel_lines} < {MIN_JEL_LINES}"
+    assert jel_lines >= MIN_JEL_LINES, (
+        f"history breadcrumb lines {jel_lines} < {MIN_JEL_LINES} (JEL-929 floor)"
+    )
     return 0
 
 
