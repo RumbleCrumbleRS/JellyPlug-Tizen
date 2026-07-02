@@ -2838,6 +2838,105 @@
     } catch (_) {}
     return JSI_PUBLIC_PATH;
   }
+  // JEL-618: channel body cache. The channel is the aggregate of EVERY
+  // enabled JS-Injector snippet (~1.2 MB live), and txSetStatic refuses
+  // bodies > 256 KiB — so pre-JEL-618 the TV re-downloaded AND re-babeled
+  // the whole channel on every boot (the txc: content key deduped nothing
+  // for it), and its presence alone forced the slow DOMParser boot path.
+  // The FINAL executable body (post-transpile, post-jQuery-gate) is
+  // persisted in its own chunked localStorage record: one key per 128 KiB
+  // slice + a meta record carrying {v: TX_VER, t: writtenAt, n: chunks,
+  // l: length, h: fnv1a}. The record deliberately bypasses the shared tx
+  // cache (whose 256 KiB ceiling guards it against exactly this payload).
+  // Freshness contract: a cached body is served for at most
+  // JSI_CHANNEL_MAXAGE_DEFAULT (6 h; override via
+  // localStorage['jellyfin.shell.jsiChannelMaxAgeMs'], '0' disables the
+  // cache = pre-JEL-618 refetch-every-boot behaviour) and only while
+  // TX_VER matches (a transpiler/epoch change re-derives it, same rule as
+  // the tx cache). Within the window a snippet-config edit is NOT picked
+  // up: the JEL-178 one-boot-lag contract widens to a bounded TTL for
+  // this one aggregate — a deliberate trade, since only JellyPlug deploys
+  // (not the user) edit snippet config, and a deploy needing immediate
+  // effect can clear the record on-device or wait out the window.
+  // Chunks are written first and meta last, so a mid-write quota failure
+  // can never leave a meta adopting missing/foreign chunks; the joined
+  // body is length- and hash-checked on read regardless. Plugin-agnostic:
+  // keyed on our own record keys, never on a plugin name or route.
+  var JSI_CHANNEL_META_KEY = "jellyfin.shell.jsiChannel.meta";
+  var JSI_CHANNEL_CHUNK_PFX = "jellyfin.shell.jsiChannel.c";
+  var JSI_CHANNEL_MAXAGE_KEY = "jellyfin.shell.jsiChannelMaxAgeMs";
+  var JSI_CHANNEL_MAXAGE_DEFAULT = 21600000;
+  var JSI_CHANNEL_CHUNK_LEN = 131072;
+  var JSI_CHANNEL_MAX_CHUNKS = 32;
+  function jsiChannelMaxAge() {
+    try {
+      var v = localStorage.getItem(JSI_CHANNEL_MAXAGE_KEY);
+      if (v != null && /^[0-9]+$/.test(v)) return parseInt(v, 10);
+    } catch (_) {}
+    return JSI_CHANNEL_MAXAGE_DEFAULT;
+  }
+  function jsiChannelCacheClear() {
+    try {
+      localStorage.removeItem(JSI_CHANNEL_META_KEY);
+      for (var i = 0; i < JSI_CHANNEL_MAX_CHUNKS; i++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + i);
+    } catch (_) {}
+  }
+  function jsiChannelCacheGet() {
+    try {
+      var maxAge = jsiChannelMaxAge();
+      if (maxAge <= 0) return null;
+      var meta = JSON.parse(localStorage.getItem(JSI_CHANNEL_META_KEY));
+      if (!meta || meta.v !== TX_VER) return null;
+      // Math.abs: a TV clock jump in EITHER direction bounds staleness
+      // instead of making a backdated record immortal.
+      if (!(meta.t > 0) || Math.abs(Date.now() - meta.t) > maxAge) return null;
+      if (!(meta.n >= 1) || meta.n > JSI_CHANNEL_MAX_CHUNKS) return null;
+      var parts = [];
+      for (var i = 0; i < meta.n; i++) {
+        var c = localStorage.getItem(JSI_CHANNEL_CHUNK_PFX + i);
+        if (c == null) return null;
+        parts.push(c);
+      }
+      var body = parts.join("");
+      if (body.length !== meta.l || txFnv1a(body) !== meta.h) return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+  function jsiChannelCacheSet(body) {
+    try {
+      if (typeof body !== "string" || !body) return;
+      if (body.length > JSI_CHANNEL_CHUNK_LEN * JSI_CHANNEL_MAX_CHUNKS) return;
+      if (jsiChannelMaxAge() <= 0) return;
+      var n = Math.ceil(body.length / JSI_CHANNEL_CHUNK_LEN);
+      for (var i = 0; i < n; i++)
+        localStorage.setItem(
+          JSI_CHANNEL_CHUNK_PFX + i,
+          body.slice(
+            i * JSI_CHANNEL_CHUNK_LEN,
+            (i + 1) * JSI_CHANNEL_CHUNK_LEN,
+          ),
+        );
+      for (var j = n; j < JSI_CHANNEL_MAX_CHUNKS; j++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + j);
+      localStorage.setItem(
+        JSI_CHANNEL_META_KEY,
+        JSON.stringify({
+          v: TX_VER,
+          t: Date.now(),
+          n: n,
+          l: body.length,
+          h: txFnv1a(body),
+        }),
+      );
+    } catch (_) {
+      // Quota mid-write: drop the whole record so a later boot can never
+      // pair a surviving meta with half-written chunks.
+      jsiChannelCacheClear();
+    }
+  }
   function injectJsInjectorChannel(doc, serverUrl) {
     try {
       if (jsiChannelDisabled()) return;
@@ -2847,6 +2946,22 @@
       // carries one (server- or plugin-injected). The existing copy is
       // fetched, transpiled and run by transpileLegacyScripts.
       if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
+      // JEL-618: a fresh cached channel body (already transpiled + gated on
+      // a prior boot) is inlined directly — no <script src>, no download,
+      // no babel. transpileLegacyScripts skips it via data-shell-jsi-cached,
+      // and a body that is already lowered needs no babel eager-kick.
+      var cachedBody = jsiChannelCacheGet();
+      try {
+        window.__shellJsiChannelCache = cachedBody != null ? "hit" : "miss";
+      } catch (_) {}
+      if (cachedBody != null) {
+        var sc = doc.createElement("script");
+        sc.textContent = cachedBody;
+        sc.setAttribute("data-shell-jsi-channel", "1");
+        sc.setAttribute("data-shell-jsi-cached", "1");
+        doc.body.appendChild(sc);
+        return;
+      }
       var s = doc.createElement("script");
       // JEL-216: the channel aggregates arbitrary user JS-Injector snippets, so
       // its body is config-mutable AND may carry modern syntax the M63 firewall
@@ -3263,6 +3378,14 @@
       // anything else by design.
       if (s.getAttribute("data-shell-seed") === "1") return null;
       if (s.getAttribute("data-shell-diag") === "1") return null;
+      // JEL-618: an inlined cached channel body is FINAL executable output
+      // (transpiled + jQuery-gated on a prior boot). Running the modern-
+      // syntax pre-check over ~1 MB — or worse, a string-literal false
+      // positive re-babeling it — would refund the entire caching win.
+      if (s.getAttribute("data-shell-jsi-cached") === "1") {
+        counts.skipped++;
+        return null;
+      }
       if (s.getAttribute("data-shell-bundle-patched")) {
         counts.skipped++;
         return null;
@@ -3274,6 +3397,10 @@
           return null;
         }
         counts.scriptsFound++;
+        // JEL-618: adopt the finished channel body into the channel cache.
+        // Attribute-matched (our own injected tag), never URL-matched, so a
+        // server-injected public.js is never recorded. Plugin-agnostic.
+        var isJsiChannelTag = s.getAttribute("data-shell-jsi-channel") === "1";
         var url;
         try {
           url = new URL(src, baseUrl).href;
@@ -3351,6 +3478,7 @@
               s.setAttribute("data-shell-tx-cached", "1");
               counts.transpiled++;
               counts.cachedHits++;
+              if (isJsiChannelTag) jsiChannelCacheSet(pre);
               return;
             }
             // JEL-554 (v32): fast path for plugins that don't use
@@ -3367,6 +3495,7 @@
               s.setAttribute("data-shell-fast-path", "1");
               if (gatedRaw) s.setAttribute("data-shell-jquery-gated", "1");
               txSetStatic(ck, bodyRaw);
+              if (isJsiChannelTag) jsiChannelCacheSet(bodyRaw);
               counts.transpiled++;
               counts.fastPath++;
               shellLog("fast-path+inlined", url, gatedRaw ? "(jq-gated)" : "");
@@ -3426,6 +3555,7 @@
               s.setAttribute("data-shell-transpiled-from", url);
               if (gated) s.setAttribute("data-shell-jquery-gated", "1");
               txSetStatic(ck, body);
+              if (isJsiChannelTag) jsiChannelCacheSet(body);
               shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
             });
           })
@@ -3898,12 +4028,31 @@
     } catch (_) {}
     if (babelNeeded) return bail("babelNeeded");
     // JEL-197: the JS-Injector snippet channel must inject + transpile
-    // public.js, which only the DOMParser path can do. If the channel is on
-    // and the document doesn't already carry a public.js tag, take the slow
-    // path so injectJsInjectorChannel + transpileLegacyScripts run it through
-    // the firewall. Killswitch (jsiChannelDisabled) restores the fast path.
-    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0)
-      return bail("jsiChannel");
+    // public.js, which only the DOMParser path can do. JEL-618: unless a
+    // fresh cached channel body exists — then the fast path splices it
+    // inline before </body> (the same position the DOM path appends it)
+    // and the slow walk isn't needed for the channel at all. A stale or
+    // absent cache still bails so injectJsInjectorChannel + the walk
+    // refresh it. Killswitch (jsiChannelDisabled) keeps the fast path on
+    // with no channel at all.
+    var jsiInlineTag = null;
+    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0) {
+      var jsiBody = jsiChannelCacheGet();
+      if (jsiBody == null) return bail("jsiChannel");
+      // A "</script" literal inside a snippet body would terminate the
+      // spliced inline tag and corrupt the document (same guard as the
+      // bundle path). The DOM path tolerates such a body via textContent;
+      // only the string splice can't.
+      if (jsiBody.indexOf("</script") >= 0)
+        return bail("jsiChannelScriptClose");
+      jsiInlineTag =
+        '<script data-shell-jsi-channel="1" data-shell-jsi-cached="1">' +
+        jsiBody +
+        "</script>";
+      try {
+        window.__shellJsiChannelCache = "hit";
+      } catch (_) {}
+    }
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
     // Bundle precheck: only legal fast-path verdicts are
@@ -4027,6 +4176,14 @@
       // browser fetches via <script src> from HTTP cache, same as
       // patchPlaybackBundles' window.__shellBundleCacheHit branch.
       window.__shellBundleCacheHit++;
+    }
+    // JEL-618: splice the cached channel body in last, immediately before
+    // </body> — after the bundle replace so its position mirrors the DOM
+    // path's body.appendChild ordering (channel executes after bundles).
+    if (jsiInlineTag) {
+      var jsiAt = patched.lastIndexOf("</body>");
+      if (jsiAt < 0) return bail("jsiChannelNoBody");
+      patched = patched.slice(0, jsiAt) + jsiInlineTag + patched.slice(jsiAt);
     }
     window.__shellFastPathHits++;
     return patched;

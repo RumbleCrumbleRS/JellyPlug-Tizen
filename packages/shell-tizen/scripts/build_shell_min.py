@@ -55,7 +55,14 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
 # in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
 # the 80-line breadcrumb floor under the old cap.
-HARD_CAP = 131072
+# JEL-618 raised it 131072 -> 147456 (144 KiB): the committed blob sat 3 B
+# under the old cap, so the chunked JSI-channel-body cache (mirrored in
+# boot-shell) could not fit. Minimal bump only: TARGET_BYTES deliberately
+# stays at the OLD cap so the breadcrumb manifest does NOT balloon to fill
+# the new headroom (this is a payload-diet ticket). JEL-625 owns the real
+# cap policy (out-of-band breadcrumb manifest + headroom warning) and
+# supersedes this note when it lands.
+HARD_CAP = 147456
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.min.js must carry >= 80
 # `*JEL-N` breadcrumb lines so `grep -c JEL-` stays a meaningful drift signal.
 MIN_JEL_LINES = 80
@@ -64,9 +71,10 @@ MIN_JEL_LINES = 80
 # after accumulated feature growth, incl. JEL-90's resolveDeviceName model read),
 # so build_manifest computed a negative budget and emitted every breadcrumb
 # unbounded — overflowing the cap (~102994 B). The manifest now trims breadcrumbs
-# from the tail to fit under HARD_CAP while preserving the MIN_JEL_LINES floor, so
-# future code growth self-corrects here instead of failing the build.
-TARGET_BYTES = HARD_CAP  # manifest budget tracks the hard cap (was 100000)
+# from the tail to fit under the budget while preserving the MIN_JEL_LINES floor,
+# so future code growth self-corrects here instead of failing the build.
+# JEL-618: pinned at the pre-JEL-618 cap value (see HARD_CAP note above).
+TARGET_BYTES = 131072
 BASE_BYTES_PLACEHOLDER = 0  # filled at runtime after esbuild pass
 
 # Prefer the lockfile-pinned workspace install (integrity-checked by pnpm)
