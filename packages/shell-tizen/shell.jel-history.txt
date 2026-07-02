@@ -165,9 +165,11 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-618 a fresh cached channel body (already transpiled + gated on
 *JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
 *JEL-178 query-bearing: transpileLegacyScripts then routes it through
-*JEL-216 an active channel on a legacy engine guarantees a transpile
-*JEL-621 unless the pre-lowered drop manifest already resolved OK — a
-*JEL-216 per-script slow path neutralize fail-safe unchanged).
+*JEL-216 an active channel on a legacy engine used to GUARANTEE a
+*JEL-216 Babel in the slow path, neutralize fail-safe unchanged
+*JEL-620 the channel body routes through the content-addressed
+*JEL-178 JEL-618 JEL-1984 tx-cache /, so honor the unused-streak
+*JEL-621 unless the pre-lowered drop manifest already resolved OK —
 *JEL-554 v32): tx cache constants shared with the in-document seed
 *JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
 *JEL-1034 v53): persistent flag — set true on any boot that triggered

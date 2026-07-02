@@ -3072,17 +3072,30 @@
       // snippets self-defer (window.onload / MutationObserver) for ApiClient
       // and rendered DOM, so document-order execution is safe.
       doc.body.appendChild(s);
-      // JEL-216: an active channel on a legacy engine guarantees a transpile is
-      // needed; kick the babel load now (idempotent cached promise) so it isn't
-      // started lazily inside the pre-write critical path where a cold parse can
-      // lose the give-up race and let raw `?.`/`??` reach the engine.
-      // JEL-621: unless the pre-lowered drop manifest already resolved OK — a
-      // drop-covered channel body never touches Babel, so the eager kick would
-      // burn the 3.13 MB fetch + ~500-800 ms V8 parse on the happy path. A
-      // drop MISS for the current channel bytes still lazy-loads Babel in the
-      // per-script slow path (JEL-216 neutralize fail-safe unchanged).
+      // JEL-216: an active channel on a legacy engine used to GUARANTEE a
+      // transpile; kick the babel load now (idempotent cached promise) so it
+      // isn't started lazily inside the pre-write critical path where a cold
+      // parse can lose the give-up race and let raw `?.`/`??` reach the engine.
+      // Two independent reasons now let us skip that eager kick on the happy
+      // path (either one suffices — a genuine per-script miss still lazy-loads
+      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
+      //   JEL-620: the channel body routes through the content-addressed
+      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      //   soft-skip — streak >= 2 means the last two full passes (channel
+      //   included) were cache-covered; a miss resets the streak so the next
+      //   boot kicks eagerly again.
+      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
+      //   a drop-covered channel body never touches Babel, so the eager kick
+      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
+      var jsiStreakSkip = false;
+      try {
+        jsiStreakSkip =
+          (parseInt(localStorage.getItem(BABEL_UNUSED_STREAK_KEY) || "0", 10) ||
+            0) >= 2;
+      } catch (_) {}
       if (
         isLegacyChromium() &&
+        !jsiStreakSkip &&
         typeof window.__ensureBabel === "function" &&
         !(window.__shellTxDrop && window.__shellTxDrop.ok)
       )
