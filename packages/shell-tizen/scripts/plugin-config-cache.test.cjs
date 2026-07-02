@@ -101,6 +101,14 @@ const keyers = {
     liftSeedFn(bootSrc, "__txKey", "bootstrap shell"),
     "__txKey",
   ),
+  // JEL-619: the bootstrap WIDGET-side txKey was still the v35 full-query
+  // strip — latent while query-bearing URLs never reached txGetStatic, but
+  // version-keyed fetch caching makes the key the staleness contract, so it
+  // now joins the lockstep set.
+  "bootstrap widget-side txKey": compile(
+    extractFnDecl(bootSrc, "txKey", "bootstrap shell"),
+    "txKey",
+  ),
 };
 
 // --- Contract cases ----------------------------------------------------------
