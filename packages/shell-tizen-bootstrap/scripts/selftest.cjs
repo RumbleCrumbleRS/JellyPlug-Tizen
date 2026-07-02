@@ -377,5 +377,108 @@ async function runScenario(opts) {
             + ' matches config.xml widget version (' + diagCalls.length + ' call sites)');
     }
 
+    // Scenario 14 (JEL-627): package.json's version must track config.xml, the
+    // single source of truth for the shipped build (scenarios 12/13 pin the two
+    // diag literals to it; this pins the workspace manifest). Nothing consumes
+    // package.json's version field, which is exactly how it silently drifted to
+    // 2.0.0 while config.xml shipped 2.0.18 — a stale manifest misleads anyone
+    // reading the workspace. Bump both in lockstep when cutting a release.
+    {
+        const CONFIG_XML = path.join(__dirname, '..', 'src', 'config.xml');
+        const configText = fs.readFileSync(CONFIG_XML, 'utf8');
+        const cfgMatch = configText.match(/<widget[^>]*\bversion="([^"]+)"/);
+        if (!cfgMatch) fail('scenario 14: widget version not found in config.xml');
+        const configVersion = cfgMatch[1];
+
+        const PKG = path.join(__dirname, '..', 'package.json');
+        const pkgVersion = JSON.parse(fs.readFileSync(PKG, 'utf8')).version;
+        if (!pkgVersion) fail('scenario 14: version field not found in package.json');
+
+        if (pkgVersion !== configVersion)
+            fail('scenario 14: package.json version (' + pkgVersion + ') must equal '
+                + 'config.xml widget version (' + configVersion + '). config.xml is the '
+                + 'source of truth for the shipped build — bump package.json in lockstep '
+                + '(JEL-627).');
+        console.log('OK 14: package.json version ' + pkgVersion
+            + ' matches config.xml widget version');
+    }
+
+    // JEL-622 scenarios: warm-boot manifest cache. A prior boot cached the
+    // manifest's sha256 (+ shellUrl) in localStorage; the bootloader must load
+    // the version-pinned (HTTP-cacheable) shell URL IMMEDIATELY — no manifest
+    // RTT on the critical path, no ?t=Date.now() cache-buster — while the
+    // manifest revalidates in the background for the NEXT boot.
+
+    // Scenario 15: cached hash + manifest timeout → shell?v=<cachedHash> loads
+    // anyway (the manifest probe is fully off the critical path).
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            extraStore: { 'jellyfin.shell.hsbCachedHash': 'cafebabe' },
+        });
+        const scripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT'; });
+        if (scripts.length !== 1)
+            fail('scenario 15: expected exactly 1 script append, got ' + scripts.length);
+        if (scripts[0].src !== 'https://srv.example/shell/shell.min.js?v=cafebabe')
+            fail('scenario 15: expected version-pinned warm load, got ' + scripts[0].src);
+        console.log('OK 15: cached manifest hash → shell?v=<hash> despite manifest timeout');
+    }
+
+    // Scenario 16: cached hash 'oldhash', live manifest says 'newhash' → THIS
+    // boot still loads ?v=oldhash (stale-while-revalidate; no double load),
+    // but the background revalidation stores newhash for the next boot.
+    {
+        const manifest = JSON.stringify({ version: '2.0.0', sha256: 'newhash', shellUrl: null });
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: manifest,
+            manifestStatus: 200,
+            extraStore: { 'jellyfin.shell.hsbCachedHash': 'oldhash' },
+        });
+        const scripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT'; });
+        if (scripts.length !== 1)
+            fail('scenario 16: expected exactly 1 script append (no double load), got ' + scripts.length);
+        if (scripts[0].src !== 'https://srv.example/shell/shell.min.js?v=oldhash')
+            fail('scenario 16: warm boot must use the CACHED hash, got ' + scripts[0].src);
+        const store = r.sandbox.localStorage.store;
+        if (store['jellyfin.shell.hsbCachedHash'] !== 'newhash')
+            fail('scenario 16: background revalidation must store the new hash, got '
+                + store['jellyfin.shell.hsbCachedHash']);
+        if (store['jellyfin.shell.hsbCachedVer'] !== '2.0.0')
+            fail('scenario 16: background revalidation must store the new version, got '
+                + store['jellyfin.shell.hsbCachedVer']);
+        console.log('OK 16: warm boot uses cached hash; revalidation stores the new one for next boot');
+    }
+
+    // Scenario 17: cached manifest shellUrl is honored on the warm path, and a
+    // cold-path manifest 200 persists shellUrl+hash so the NEXT boot is warm.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            extraStore: {
+                'jellyfin.shell.hsbCachedHash': 'cafebabe',
+                'jellyfin.shell.hsbCachedShellUrl': 'https://cdn.example/shell-2.min.js',
+            },
+        });
+        const scripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT'; });
+        if (scripts.length !== 1 || scripts[0].src !== 'https://cdn.example/shell-2.min.js?v=cafebabe')
+            fail('scenario 17: expected cached shellUrl warm load, got '
+                + JSON.stringify(scripts.map(function(s){ return s.src; })));
+        const manifest = JSON.stringify({ version: '3.0.0', sha256: 'f00dfeed', shellUrl: 'https://cdn.example/shell-3.min.js' });
+        const r2 = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: manifest,
+            manifestStatus: 200,
+        });
+        const store2 = r2.sandbox.localStorage.store;
+        if (store2['jellyfin.shell.hsbCachedHash'] !== 'f00dfeed'
+            || store2['jellyfin.shell.hsbCachedShellUrl'] !== 'https://cdn.example/shell-3.min.js')
+            fail('scenario 17: cold-path manifest 200 must persist hash+shellUrl for the next boot, got '
+                + store2['jellyfin.shell.hsbCachedHash'] + ' / ' + store2['jellyfin.shell.hsbCachedShellUrl']);
+        console.log('OK 17: cached shellUrl honored warm; cold 200 persists hash+shellUrl');
+    }
+
     console.log('ALL SCENARIOS PASS');
 })().catch(function(e){ console.error('SELFTEST ERROR', e); process.exit(1); });

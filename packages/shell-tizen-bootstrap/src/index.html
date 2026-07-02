@@ -63,6 +63,10 @@
             var SERVER_KEY = 'jellyfin.shell.serverUrl';
             var HSB_VER_KEY = 'jellyfin.shell.hsbCachedVer';
             var HSB_HASH_KEY = 'jellyfin.shell.hsbCachedHash';
+            // JEL-622: manifest.shellUrl from the last good manifest ('' when
+            // that manifest carried none), so the warm path below can rebuild
+            // the exact shell URL without a blocking manifest RTT.
+            var HSB_SHELL_URL_KEY = 'jellyfin.shell.hsbCachedShellUrl';
             var HSB_DEBUG_KEY = 'jellyfin.shell.hsbDebug';
             // JEL-332: the true installed bootstrap version. MUST equal the
             // config.xml widget version (the single source of truth that
@@ -264,43 +268,88 @@
                     );
                 }
 
-                try {
-                    var xhr = new XMLHttpRequest();
-                    xhr.open('GET', base + 'manifest.json?_=' + Date.now(), true);
-                    xhr.timeout = 1500;
-                    xhr.onload = function(){
-                        if (done) return;
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            try {
-                                var m = JSON.parse(xhr.responseText);
-                                if (m && typeof m.version === 'string') {
-                                    try { localStorage.setItem(HSB_VER_KEY, m.version); } catch(_){}
+                // Fetch manifest.json and persist its version/sha256/shellUrl
+                // as the last-good manifest. Calls onSettled(manifest|null)
+                // exactly once; LS is updated even when the caller no longer
+                // cares (warm-path background revalidation).
+                function fetchManifest(onSettled) {
+                    try {
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('GET', base + 'manifest.json?_=' + Date.now(), true);
+                        xhr.timeout = 1500;
+                        xhr.onload = function(){
+                            var m = null;
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                try {
+                                    m = JSON.parse(xhr.responseText);
+                                    if (m && typeof m.version === 'string') {
+                                        try { localStorage.setItem(HSB_VER_KEY, m.version); } catch(_){}
+                                    }
+                                    if (m && typeof m.sha256 === 'string') {
+                                        try { localStorage.setItem(HSB_HASH_KEY, m.sha256); } catch(_){}
+                                        try {
+                                            localStorage.setItem(HSB_SHELL_URL_KEY,
+                                                (typeof m.shellUrl === 'string' && m.shellUrl) ? m.shellUrl : '');
+                                        } catch(_){}
+                                        hsbState.manifestSha = m.sha256;
+                                    }
+                                } catch(e){
+                                    m = null;
+                                    hsbState.errors.push('manifest-parse:' + (e && e.message || e));
                                 }
-                                if (m && typeof m.sha256 === 'string') {
-                                    try { localStorage.setItem(HSB_HASH_KEY, m.sha256); } catch(_){}
-                                    hsbState.manifestSha = m.sha256;
-                                }
-                                var u = (m && typeof m.shellUrl === 'string' && m.shellUrl) || (base + 'shell.min.js');
-                                var v = (m && m.sha256) ? ('?v=' + encodeURIComponent(m.sha256)) : ('?t=' + Date.now());
-                                loadShellAt(u + v);
-                                return;
-                            } catch(e){
-                                hsbState.errors.push('manifest-parse:' + (e && e.message || e));
+                            } else {
+                                hsbState.errors.push('manifest-http-' + xhr.status);
                             }
-                        } else {
-                            hsbState.errors.push('manifest-http-' + xhr.status);
-                        }
-                        loadShellAt(base + 'shell.min.js?t=' + Date.now());
-                    };
-                    xhr.onerror = xhr.ontimeout = function(){
-                        if (done) return;
-                        hsbState.errors.push('manifest-' + (xhr.status === 0 ? 'neterr' : 'timeout'));
-                        loadShellAt(base + 'shell.min.js?t=' + Date.now());
-                    };
-                    xhr.send();
-                } catch(_) {
-                    loadShellAt(base + 'shell.min.js?t=' + Date.now());
+                            onSettled(m);
+                        };
+                        xhr.onerror = xhr.ontimeout = function(){
+                            hsbState.errors.push('manifest-' + (xhr.status === 0 ? 'neterr' : 'timeout'));
+                            onSettled(null);
+                        };
+                        xhr.send();
+                    } catch(_) {
+                        onSettled(null);
+                    }
                 }
+
+                // JEL-622 warm path: a prior boot cached the manifest's sha256
+                // (and shellUrl). Load the version-pinned shell URL immediately
+                // — the manifest RTT (up to 1.5 s of the 4 s boot budget) is
+                // off the critical path, and an UNCHANGED shell.min.js is
+                // served from the engine's HTTP cache instead of being
+                // re-downloaded every boot (`?v=<hash>` is a stable URL,
+                // unlike the old `?t=Date.now()` buster). The manifest still
+                // revalidates in the background so the NEXT boot adopts a new
+                // build — same stale-while-revalidate contract as the /web/
+                // body cache. If the pinned URL 404s/errors, the existing
+                // onerror → baked-fallback path still catches it.
+                var cachedSha = null, cachedShellUrl = null;
+                try {
+                    cachedSha = localStorage.getItem(HSB_HASH_KEY);
+                    cachedShellUrl = localStorage.getItem(HSB_SHELL_URL_KEY);
+                } catch(_){}
+                if (cachedSha) {
+                    hsbPhase('manifest-cache-hit', 'ok');
+                    hsbState.manifestSha = cachedSha;
+                    fetchManifest(function(){});
+                    loadShellAt((cachedShellUrl || (base + 'shell.min.js'))
+                        + '?v=' + encodeURIComponent(cachedSha));
+                    return;
+                }
+
+                // Cold path (no last-good manifest yet): probe the manifest
+                // first; if it fails fast, fall back to the unversioned
+                // shell.min.js with a cache-buster, exactly as before.
+                fetchManifest(function(m){
+                    if (done) return;
+                    if (m) {
+                        var u = (typeof m.shellUrl === 'string' && m.shellUrl) || (base + 'shell.min.js');
+                        var v = m.sha256 ? ('?v=' + encodeURIComponent(m.sha256)) : ('?t=' + Date.now());
+                        loadShellAt(u + v);
+                        return;
+                    }
+                    loadShellAt(base + 'shell.min.js?t=' + Date.now());
+                });
             }
 
             var server;
