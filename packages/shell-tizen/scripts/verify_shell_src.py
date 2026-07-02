@@ -28,6 +28,12 @@ config.xml's widget version, or qa-beacon.js change without a blob rebuild —
 each of those is real staleness in the shipped artifact (e.g. a babel swap
 invalidates the baked transpile-cache fingerprint).
 
+JEL-625: the JEL breadcrumb manifest moved out of shell.min.js into
+../shell.jel-history.txt. This guard now also regenerates that file's text
+from shell.js (via build_shell_min.build_history_text) and requires byte
+identity with the committed copy, so the out-of-band manifest cannot drift
+from source any more than the blob can.
+
 Usage:
   python3 verify_shell_src.py             # auto-resolve esbuild / npx
   python3 verify_shell_src.py --esbuild /path/to/esbuild
@@ -46,6 +52,7 @@ import build_shell_min as build  # noqa: E402  (same dir, shared build logic)
 SRC = HERE.parent / "src"
 SHELL_MIN = SRC / "shell.min.js"
 SHELL_JS = SRC / "shell.js"
+JEL_HISTORY = HERE.parent / "shell.jel-history.txt"  # JEL-625 out-of-band manifest
 
 # Canonicalization flags — must stay in lockstep with build_shell_min.run_esbuild.
 ESBUILD_FLAGS = [
@@ -91,11 +98,12 @@ def canonicalize(esbuild: list[str], source: bytes) -> bytes:
 
 
 def strip_manifest(blob: bytes) -> bytes:
-    """Drop the leading `/*! JEL history ... */` manifest comment.
+    """Drop a leading `/*! JEL history ... */` manifest comment, if present.
 
-    shell.min.js is `MANIFEST + CODE`; the manifest is a passthrough breadcrumb
-    block (JEL-929) that esbuild would discard anyway, so we strip it before
-    canonicalizing.
+    Since JEL-625 shell.min.js is pure code (the manifest lives in
+    shell.jel-history.txt), so this is a no-op for current blobs; kept so the
+    guard still verifies pre-JEL-625 blobs (`MANIFEST + CODE`) during
+    transitions/rollbacks.
     """
     if blob.startswith(b"/*!"):
         end = blob.find(b"*/\n")
@@ -136,6 +144,24 @@ def main() -> int:
 
     esbuild = resolve_esbuild(args.esbuild)
 
+    # JEL-625: the out-of-band breadcrumb manifest must match shell.js exactly.
+    expected_history = build.build_history_text(
+        build.collect_breadcrumbs(SHELL_JS.read_text(encoding="utf-8"))
+    )
+    actual_history = (
+        JEL_HISTORY.read_text(encoding="utf-8") if JEL_HISTORY.exists() else None
+    )
+    if actual_history != expected_history:
+        print(
+            "FAIL: shell.jel-history.txt is "
+            + ("missing" if actual_history is None else "stale")
+            + " — the out-of-band JEL breadcrumb manifest (JEL-625) no longer "
+            "matches shell.js. Re-sync with `python3 scripts/build_shell_min.py` "
+            "and commit shell.min.js + shell.jel-history.txt together.",
+            file=sys.stderr,
+        )
+        return 1
+
     deployed_code = strip_manifest(SHELL_MIN.read_bytes())
     source_code = forward_build(esbuild)
 
@@ -145,7 +171,8 @@ def main() -> int:
     if canon_deployed == canon_source:
         print(
             f"OK: shell.js (+ placeholder inputs) ≡ shell.min.js "
-            f"(canonical {len(canon_source)} bytes, esbuild={' '.join(esbuild)})"
+            f"(canonical {len(canon_source)} bytes, esbuild={' '.join(esbuild)}); "
+            f"shell.jel-history.txt in sync"
         )
         return 0
 
