@@ -377,5 +377,31 @@ async function runScenario(opts) {
             + ' matches config.xml widget version (' + diagCalls.length + ' call sites)');
     }
 
+    // Scenario 14 (JEL-627): package.json's version must track config.xml, the
+    // single source of truth for the shipped build (scenarios 12/13 pin the two
+    // diag literals to it; this pins the workspace manifest). Nothing consumes
+    // package.json's version field, which is exactly how it silently drifted to
+    // 2.0.0 while config.xml shipped 2.0.18 — a stale manifest misleads anyone
+    // reading the workspace. Bump both in lockstep when cutting a release.
+    {
+        const CONFIG_XML = path.join(__dirname, '..', 'src', 'config.xml');
+        const configText = fs.readFileSync(CONFIG_XML, 'utf8');
+        const cfgMatch = configText.match(/<widget[^>]*\bversion="([^"]+)"/);
+        if (!cfgMatch) fail('scenario 14: widget version not found in config.xml');
+        const configVersion = cfgMatch[1];
+
+        const PKG = path.join(__dirname, '..', 'package.json');
+        const pkgVersion = JSON.parse(fs.readFileSync(PKG, 'utf8')).version;
+        if (!pkgVersion) fail('scenario 14: version field not found in package.json');
+
+        if (pkgVersion !== configVersion)
+            fail('scenario 14: package.json version (' + pkgVersion + ') must equal '
+                + 'config.xml widget version (' + configVersion + '). config.xml is the '
+                + 'source of truth for the shipped build — bump package.json in lockstep '
+                + '(JEL-627).');
+        console.log('OK 14: package.json version ' + pkgVersion
+            + ' matches config.xml widget version');
+    }
+
     console.log('ALL SCENARIOS PASS');
 })().catch(function(e){ console.error('SELFTEST ERROR', e); process.exit(1); });
