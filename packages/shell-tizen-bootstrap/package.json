@@ -1,12 +1,12 @@
 {
   "name": "@jellyfin-tv/shell-tizen-bootstrap",
-  "version": "2.0.0",
+  "version": "2.0.18",
   "private": true,
   "description": "Hosted Shell Bootstrap (HSB) WGT — installed once on a Tizen TV via Samsung Device Manager GUI. Fetches ${server}/shell/shell.min.js at launch with a baked boot-shell.min.js fallback so every shell update afterwards is a server-side file swap (no sdb shell, no pkgcmd).",
   "license": "GPL-2.0-only",
   "scripts": {
     "build": "python3 scripts/build_bootstrap.py",
-    "test": "node scripts/selftest.cjs && node scripts/babel-transpile.test.cjs && node scripts/defer-watchdog.test.cjs && node scripts/boot-progress.test.cjs && node scripts/connect-form-parity.test.cjs && node scripts/iterator-resweep.test.cjs && node scripts/jel137-login-wedge.test.cjs && node scripts/debug-variant.test.cjs && node scripts/connect-branding.test.cjs",
+    "test": "node scripts/selftest.cjs && node scripts/babel-transpile.test.cjs && node scripts/defer-watchdog.test.cjs && node scripts/boot-progress.test.cjs && node scripts/connect-form-parity.test.cjs && node scripts/cross-shell-parity.test.cjs && node scripts/iterator-resweep.test.cjs && node scripts/jel137-login-wedge.test.cjs && node scripts/debug-variant.test.cjs && node scripts/connect-branding.test.cjs",
     "clean": "rm -rf dist manifest.bootstrap.json"
   }
 }
