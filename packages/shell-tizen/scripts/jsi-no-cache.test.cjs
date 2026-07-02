@@ -4,10 +4,14 @@
 // server content on TV, exactly like the browser. An earlier fix special-cased
 // the JS-Injector path by name; this pins the PLUGIN-AGNOSTIC design:
 //
-//   1. Query-bearing (cache-busted) script URLs are NOT served from the URL
-//      transpile cache (their path doesn't change when content does).
-//   2. They are fetched with a per-fetch unique cache-buster (the M63 WebView
-//      ignores fetch cache:"no-store"), so the network read is always current.
+//   1. A query-bearing script URL is served from the version-keyed cache ONLY
+//      when a kept query token pins the content version (JEL-619: config
+//      ticks / dotted version / hash — see plugin-fetch-cache.test.cjs).
+//      A URL with no version signal (static marker like ?_jsi=1) is NEVER
+//      served from cache — its body is config-mutable and nothing tracks it.
+//   2. Any version-key MISS is fetched with a per-fetch unique cache-buster
+//      (the M63 WebView ignores fetch cache:"no-store"), so the network read
+//      is always current.
 //   3. The transpile result is cached by a HASH OF THE SOURCE (`txc:`+fnv1a),
 //      so unchanged content reuses the cached transpile (no Babel re-run) while
 //      any content change yields a new key (re-transpile) — for every plugin,

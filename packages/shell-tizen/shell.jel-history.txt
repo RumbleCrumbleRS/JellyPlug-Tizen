@@ -72,6 +72,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1150 TX_VER is derived from babel inputs at widget parse time
 *JEL-178 drop ONLY the per-load epoch-ms cache-buster (JE's
 *JEL-26 side txKey above lockstep).
+*JEL-619 version-keyed plugin fetch caching in the DYNAMIC pipeline
 *JEL-554 v34): record the first 10 missed src URLs alongside the
 *JEL-405 dynamic-injection paths inline plugin bodies via textContent
 *JEL-557 cache short-circuit before network fetch.
@@ -177,7 +178,14 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v35): normalize cache key by stripping the per-load cache-bu
 *JEL-178 stripping the ENTIRE query — but that over-corrected : plugi
 *JEL-26 lockstep) — both run on the same localStorage tx-cache.
+*JEL-619 JEL-178 version-keyed plugin FETCH caching. 's per-boot &__sb=
+*JEL-178 network; ANY token change still misses -> busted fetch (the
+*JEL-619 boot stays a fresh busted read (pre- behaviour).
 *JEL-554 v34): record first 10 missed URLs to expose static/dynamic
+*JEL-619 version-keyed eligibility gate (see txQueryClass above).
+*JEL-619 deref a version-slot pointer to its content-addressed body.
+*JEL-619 download-skip telemetry (a query-bearing hit means a
+*JEL-619 cap raised 262144 -> 2097152 so the JSI channel aggregate
 *JEL-621 Pre-lowered transpile drop
 *JEL-131 measured — see the primer comment in buildSeedScript). The
 *JEL-178 same txFnv1a the `txc:` cache key already uses. At boot the
@@ -195,6 +203,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1034 v53): babel may not be loaded yet — it's lazy. Do NOT
 *JEL-1654 record plugin <script src> URLs for next-boot prefetch.
 *JEL-1289 Mirrors the bundle-URL pattern: index.html head IIFE will
+*JEL-619 skip query-bearing (cache-busted) plugin URLs — preloading
 *JEL-1924 record secondary .bundle.js URLs (runtime/vendors/jquery/
 *JEL-1289 noto/lang/etc.) for next-boot prefetch. Extends (main
 *JEL-1654 bundle only) + (plugin <script src>). Without this
@@ -204,11 +213,16 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-618 an inlined cached channel body is FINAL executable output
 *JEL-618 adopt the finished channel body into the channel cache.
 *JEL-554 v32): cache short-circuit. Skip fetch + babel entirely
+*JEL-619 query-bearing URLs are eligible too — txGetStatic serves
+*JEL-178 miss -> the busted fetch below, staleness intact).
 *JEL-1654 adopt the in-flight prefetch from the head IIFE
 *JEL-1580 first cold boot). IIFE filters by server origin
 *JEL-178 a query string marks a cache-busted (config-mutable
+*JEL-619 this busted fetch now runs only on a version-key MISS
 *JEL-178 content-addressed transpile cache key. A query-bearing
+*JEL-619 promote the content-hash hit to the version-keyed
 *JEL-554 v32): fast path for plugins that don't use
+*JEL-619 version-keyed slot so an unchanged ?v= token skips
 *JEL-621 pre-lowered drop attempt before the Babel slow path.
 *JEL-618 JEL-621 x : the drop already carries the transpiled
 *JEL-1034 v53): slow path triggers lazy babel load.
@@ -216,6 +230,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-216 same fail-safe for a transform that threw.
 *JEL-401 to a blob: URL. Two reasons follow-up
 *JEL-618 cache the transpiled JSI-channel body for the
+*JEL-619 version-keyed slot so an unchanged ?v= token skips
 *JEL-621 pre-lowered drop attempt before the Babel slow path —
 *JEL-1034 v53): slow path triggers lazy babel load.
 *JEL-436 Bundle source patcher v24

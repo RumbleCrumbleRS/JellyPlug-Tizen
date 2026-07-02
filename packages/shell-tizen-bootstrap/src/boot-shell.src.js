@@ -1034,9 +1034,23 @@
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
-      '    function __txGet(src){if(String(src).indexOf("?")>=0)return null;try{var k=__txKey(src);var v=localStorage.getItem(__TXPFX+k);if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
+      // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
+      // (JE-style createElement+src submodules). Class 2 = a kept query token
+      // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
+      // cache until the token changes; class 1 = only a per-load epoch-ms
+      // buster (stripped by __txKey) -> cache with a 24 h TTL ("ts:" sibling
+      // key); class 0 = static marker query (?_jsi=1) -> never cached, fetch
+      // stays busted every boot. Epoch test lockstep with __txKey/txKey.
+      // "@@shellref:" values are pointers the STATIC layer writes into the
+      // shared keyspace (body lives once under its txc: slot) — deref on
+      // read, treat a pruned target as a miss. Kill-switch (shared with the
+      // widget side): jellyfin.shell.pluginFetchCacheDisabled='1'.
+      '    var __TXREF="@@shellref:";',
+      '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;}return pin?2:bust?1:0;}',
+      '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
+      '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(String(src).indexOf("?")>=0)return;if(typeof body!=="string"||body.length>262144)return;var k=__txKey(src);try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -2494,26 +2508,145 @@
       localStorage.setItem(BABEL_NEEDED_KEY, "1");
     } catch (_) {}
   }
+  // JEL-619: ported the TV shell's JEL-178 txKey (drop ONLY per-load
+  // epoch-ms busters, keep config-version tokens). The old bootstrap-side
+  // full-query strip was latent — query-bearing URLs never reached
+  // txGetStatic before version-keyed fetch caching — but with JEL-619 the
+  // key IS the staleness contract, so the v35 full-strip shape would have
+  // replayed stale bodies across config changes. Lockstep with shell.js
+  // txKey / the seed-side __txKey (JEL-26).
   function txKey(url) {
-    var u = String(url || ""),
-      i = u.indexOf("?");
-    return i < 0 ? u : u.substring(0, i);
+    var u = String(url || "");
+    var i = u.indexOf("?");
+    if (i < 0) return u;
+    var path = u.substring(0, i);
+    var pairs = u.substring(i + 1).split("&");
+    var keep = [];
+    var now = Date.now();
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var p = pairs[pi];
+      if (!p) continue;
+      var eq = p.indexOf("=");
+      var val = eq < 0 ? p : p.substring(eq + 1);
+      if (/^[0-9]{12,14}$/.test(val)) {
+        var n = parseInt(val, 10);
+        if (n > 0 && Math.abs(n - now) < 6048e5) continue;
+      }
+      keep.push(p);
+    }
+    return keep.length ? path + "?" + keep.join("&") : path;
+  }
+  // JEL-619: version-keyed plugin FETCH caching (mirror of shell.js — see
+  // the block comment there). Class 2 = version-pinned token, served until
+  // the token changes; class 1 = per-load epoch buster stripped, 24 h TTL;
+  // class 0 = unpinned marker (?_jsi=1), never served from cache. Bodies
+  // live once under the content-addressed txc: slot; version slots hold
+  // "@@shellref:" pointers; the per-path "vqk:" index frees the previous
+  // generation on a token change. Kill-switch:
+  // localStorage['jellyfin.shell.pluginFetchCacheDisabled']='1'.
+  var TX_QUERY_TTL_MS = 864e5,
+    TX_REF_PFX = "@@shellref:",
+    PLUGIN_FETCH_CACHE_DISABLED_KEY = "jellyfin.shell.pluginFetchCacheDisabled";
+  function pluginFetchCacheDisabled() {
+    try {
+      return localStorage.getItem(PLUGIN_FETCH_CACHE_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function txQueryClass(u) {
+    var i = u.indexOf("?");
+    if (i < 0) return 0;
+    var pairs = u.substring(i + 1).split("&"),
+      now = Date.now(),
+      pinned = false,
+      busted = false;
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var p = pairs[pi];
+      if (!p) continue;
+      var eq = p.indexOf("="),
+        val = eq < 0 ? p : p.substring(eq + 1);
+      if (/^[0-9]{12,14}$/.test(val)) {
+        var n = parseInt(val, 10);
+        if (n > 0 && Math.abs(n - now) < 6048e5) {
+          busted = true;
+          continue;
+        }
+      }
+      if (
+        /^[0-9]{15,}$/.test(val) ||
+        /^\d+(\.\d+){2,}/.test(val) ||
+        (/^[0-9a-fA-F]{12,}$/.test(val) && /[a-fA-F]/.test(val))
+      )
+        pinned = true;
+    }
+    return pinned ? 2 : busted ? 1 : 0;
+  }
+  function txRecordQuerySlot(url, ck) {
+    try {
+      var u = String(url || ""),
+        qi = u.indexOf("?");
+      if (qi < 0) return;
+      var k = txKey(u),
+        pathKey = TX_PFX + "vqk:" + u.substring(0, qi),
+        prev = null;
+      try {
+        prev = JSON.parse(localStorage.getItem(pathKey) || "null");
+      } catch (_) {}
+      if (prev) {
+        if (prev.c && prev.c !== ck) localStorage.removeItem(TX_PFX + prev.c);
+        if (prev.k && prev.k !== k) {
+          localStorage.removeItem(TX_PFX + prev.k);
+          localStorage.removeItem(TX_PFX + "ts:" + prev.k);
+        }
+      }
+      localStorage.setItem(pathKey, JSON.stringify({ k: k, c: ck }));
+      var qc = txQueryClass(u);
+      if (qc > 0 && !pluginFetchCacheDisabled()) {
+        localStorage.setItem(TX_PFX + k, TX_REF_PFX + ck);
+        if (qc === 1)
+          localStorage.setItem(TX_PFX + "ts:" + k, String(Date.now()));
+      }
+    } catch (_) {}
   }
   function txGetStatic(url) {
     try {
-      var v = localStorage.getItem(TX_PFX + txKey(url));
+      var u = String(url || ""),
+        k;
+      if (u.indexOf("?") >= 0) {
+        if (pluginFetchCacheDisabled()) return null;
+        var qc = txQueryClass(u);
+        if (qc === 0) return null;
+        k = txKey(u);
+        if (qc === 1) {
+          var ts = 0;
+          try {
+            ts = parseInt(localStorage.getItem(TX_PFX + "ts:" + k), 10) || 0;
+          } catch (_) {}
+          if (Date.now() - ts > TX_QUERY_TTL_MS) return null;
+        }
+      } else {
+        k = txKey(u);
+      }
+      var v = localStorage.getItem(TX_PFX + k);
+      if (v != null && v.lastIndexOf(TX_REF_PFX, 0) === 0)
+        v = localStorage.getItem(TX_PFX + v.substring(TX_REF_PFX.length));
       if (v == null) {
         var miss = window.__shellTxCacheMissUrlsStatic;
         (miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
           miss.length < 10 && miss.push(url));
+      } else if (u.indexOf("?") >= 0) {
+        window.__shellQvHits = (window.__shellQvHits || 0) + 1;
       }
       return v;
     } catch (_) {
       return null;
     }
   }
+  // JEL-619: cap raised 262144 -> 2097152 (mirror of shell.js txSetStatic)
+  // so the JSI channel aggregate can cache its transpile under txc:.
   function txSetStatic(url, body) {
-    if (!(typeof body != "string" || body.length > 262144))
+    if (!(typeof body != "string" || body.length > 2097152))
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
       } catch (_) {}
@@ -2760,10 +2893,15 @@
         !pUs.getAttribute("data-shell-bundle-patched")
       ) {
         var pUsrc = pUs.getAttribute("src");
+        // JEL-619: skip query-bearing (cache-busted) plugin URLs — preloading
+        // them is ALWAYS wasted bandwidth: a version-keyed cache hit needs no
+        // network at all, and a miss is fetched with a fresh &__sb= buster
+        // that can never match the preloaded URL.
         if (
           pUsrc &&
           !/^(?:data|blob|javascript):/i.test(pUsrc) &&
-          !isJellyfinWebBundle(pUsrc)
+          !isJellyfinWebBundle(pUsrc) &&
+          pUsrc.indexOf("?") < 0
         )
           try {
             var pUurl = new URL(pUsrc, baseUrl).href;
@@ -2891,7 +3029,11 @@
         } catch (_) {
           return null;
         }
-        var cached = url.indexOf("?") >= 0 ? null : txGetStatic(url);
+        // JEL-619: query-bearing URLs are eligible too — txGetStatic serves
+        // them from the version-keyed slot (unchanged config-version token
+        // -> ZERO network; token change / TTL expiry / unpinned marker ->
+        // miss -> the busted fetch below, JEL-178 staleness intact).
+        var cached = txGetStatic(url);
         if (cached != null)
           return (
             s.removeAttribute("src"),
@@ -2919,6 +3061,12 @@
                 // (the server ignores unknown query params). Content-addressed
                 // keying below then dedups the transpile, so this only costs a
                 // download, not a re-transpile. Plugin-agnostic.
+                // JEL-619: this busted fetch now runs only on a version-key
+                // MISS (token changed / TTL expired / unpinned marker / cold
+                // cache) — an unchanged version token was served above with
+                // zero network. The buster still matters on a miss: a token
+                // flip-flop (A->B->A) or TTL revalidation re-uses a URL M63's
+                // HTTP cache may hold a stale body for.
                 url.indexOf("?") >= 0
                   ? url +
                       "&__sb=" +
@@ -2954,6 +3102,10 @@
                   counts.transpiled++,
                   counts.cachedHits++);
                 if (isJsiChannelTag) jsiChannelCacheSet(pre);
+                // JEL-619: promote the content-hash hit to the version-keyed
+                // slot so the NEXT boot skips the download too (token changed
+                // but the body didn't).
+                if (url.indexOf("?") >= 0) txRecordQuerySlot(url, ck);
                 return;
               }
               if (!needsTranspile(code)) {
@@ -2969,6 +3121,9 @@
                   gatedRaw && s.setAttribute("data-shell-jquery-gated", "1"),
                   txSetStatic(ck, bodyRaw),
                   isJsiChannelTag && jsiChannelCacheSet(bodyRaw),
+                  // JEL-619: version-keyed slot so an unchanged ?v= token
+                  // skips the download entirely next boot.
+                  url.indexOf("?") >= 0 && txRecordQuerySlot(url, ck),
                   counts.transpiled++,
                   counts.fastPath++,
                   shellLog(
@@ -3051,6 +3206,9 @@
                       gated && s.setAttribute("data-shell-jquery-gated", "1"),
                       txSetStatic(ck, body),
                       isJsiChannelTag && jsiChannelCacheSet(body),
+                      // JEL-619: version-keyed slot so an unchanged ?v= token
+                      // skips the download entirely next boot.
+                      url.indexOf("?") >= 0 && txRecordQuerySlot(url, ck),
                       shellLog(
                         "transpiled+inlined",
                         url,
@@ -3693,6 +3851,13 @@
           var txBody = null;
           try {
             txBody = localStorage.getItem(TX_PFX + txKey(txAbsUrl));
+            // JEL-619: a bare-path slot can hold a "@@shellref:" pointer
+            // (an epoch-busted URL strips to its bare path). Deref it —
+            // inlining the raw pointer string would corrupt the script.
+            if (txBody != null && txBody.lastIndexOf(TX_REF_PFX, 0) === 0)
+              txBody = localStorage.getItem(
+                TX_PFX + txBody.substring(TX_REF_PFX.length),
+              );
           } catch (_) {}
           if (txBody == null) {
             txBail = "txCacheMiss";
