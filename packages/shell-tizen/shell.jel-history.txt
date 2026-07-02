@@ -1,0 +1,254 @@
+JEL breadcrumb history for shell.min.js — GENERATED, do not edit.
+Regenerate: python3 packages/shell-tizen/scripts/build_shell_min.py
+One `*JEL-N [context]` line per shell.js source breadcrumb, in source
+order. Formerly a /*! JEL history */ comment prepended to shell.min.js
+(JEL-929); moved out-of-band by JEL-625 so the deployed blob spends its
+HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
+
+*JEL-3 Jellyfin Tizen browser-shell prototype , milestone M1).
+*JEL-2 Architecture (per roadmap section 3
+*JEL-557 capture shell.js IIFE entry timestamp so the diag HUD can re
+*JEL-63 bounded boot-fetch timeout. With a saved server URL pointing
+*JEL-85 JEL-314 /: connect-form probe gets a tighter bound than boot. The
+*JEL-1150 Transpile cache key
+*JEL-26 mirror the bootstrap shell's BigInt false-positive guard. Th
+*JEL-354 the original denylist only screened ES2020+ tokens, but the
+*JEL-417 the brace-anchored object-spread alternatives above only cat
+*JEL-354 written RAW -> SyntaxError on M56 (the exact failure mode, n
+*JEL-26 used target chrome:63 + loose mode + the `assumptions` block
+*JEL-354 the Splide iterable/iterator throw on the M63. : the target
+*JEL-26 regress . The `assumptions` block is part of the transform o
+*JEL-178 cache-epoch salt (lockstep with boot-shell.src.js). Bumping
+*JEL-216 bumped to jel216-1 (lockstep with boot-shell.src.js) alongsi
+*JEL-354 bumped to jel354-1 (lockstep with boot-shell.src.js) alongsi
+*JEL-417 bumped to jel417-1 (lockstep with boot-shell.src.js) alongsi
+*JEL-1776 Bundle patch state cache
+*JEL-1289 overlapped via index.html prefetch , but the CPU cost of
+*JEL-1980 3 MB cap. main.jellyfin.bundle.js raw is ~1.5–2.5 MB on
+*JEL-1776 cache patched body so warm boot skips fetch+scan.
+*JEL-1980 cache RAW body too when needsPatch=false so warm/cold-
+*JEL-1977 Web index/config body cache
+*JEL-1973 optional babel preload only partially overlap; on non-
+*JEL-1289 JEL-1654 JEL-1776 JEL-1924 JEL-1959 Mirror the / / / / record-
+*JEL-178 never persist a web-index HTML that has a transpiled plugin
+*JEL-85 JEL-314 /: bound the probe (mirrors boot-shell.src.js). A
+*JEL-85 endpoint is not a Jellyfin server bug #2).
+*JEL-3 Subset required by jellyfin-web (see jellyfin-web grep on
+*JEL-12 server's Sessions API to report : the actual web client
+*JEL-144 "No player found for the requested media" on playback .
+*JEL-401 JEL-206 supersedes : we no longer strip non-builtin plugin
+*JEL-132 creds-guard. jellyfin-web 10.11's connection manager
+*JEL-132 means store-level loss (the alternate hypothesis
+*JEL-134 JEL-132 v2): creds vault. The on-device trail capture
+*JEL-134 before the vault existed (e.g. a login on a pre- build).
+*JEL-1580 post-login Home leaves activeElement on <body> on
+*JEL-1580 v58 retry): v57 listener bound but rescue counter
+*JEL-1580 v59 retry-2): keypress-only rescue requires the
+*JEL-138 default the login "Remember Me" checkbox to CHECKED.
+*JEL-138 Field report + browser-verified root cause (results-.md
+*JEL-138 Board decision interaction c0b35a10 = "default_checked"
+*JEL-238 JEL-237 defense-in-depth for : media-bar YouTube-iframe crash
+*JEL-484 actually decoded, so the old TV never crashed. update: cappi
+*JEL-1580 v60: synthetic AF self-test harness. Gated by either
+*JEL-1779 Tizen 5.5 first-boot hits NotSupportedError when web
+*JEL-727 v47: Tizen 5.0 (Chrome 56) ships a buggy
+*JEL-567 v43: pin the "SyntaxError: Unexpected end of JSON input"
+*JEL-406 Dynamic-script intercept . Server plugins like JellyfinEnhan
+*JEL-184 never intercept cross-origin third-party scripts. The
+*JEL-131 like a browser. Mirrors the primer's same-origin guard.
+*JEL-554 v32): same pre-check as static transpileLegacyScripts.
+*JEL-26 keep this seed-side pre-check in lockstep with the widget-si
+*JEL-417 this seed regex is a PRE-check (gates needsTx -> maybeTransp
+*JEL-557 cache transpiled plugin bodies in localStorage so warm cold
+*JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
+*JEL-1150 TX_VER is derived from babel inputs at widget parse time
+*JEL-178 drop ONLY the per-load epoch-ms cache-buster (JE's
+*JEL-26 side txKey above lockstep).
+*JEL-554 v34): record the first 10 missed src URLs alongside the
+*JEL-405 dynamic-injection paths inline plugin bodies via textContent
+*JEL-557 cache short-circuit before network fetch.
+*JEL-554 v32): only call babel.transform when the body actually
+*JEL-557 v36): intercept telemetry. v33 QA reported only 3 of the
+*JEL-407 appendChild/insertBefore hooks above only fire when src is
+*JEL-557 cache short-circuit before network fetch.
+*JEL-554 v32): fast path for plugin bodies that parse on Chromium 56.
+*JEL-131 JEL-557 cold tx-cache priming. On a FRESH install the cache
+*JEL-557 serial-RTT model in the comment above is outdated) costs
+*JEL-1654 1. __recDyn persists intercepted dynamic URLs pattern
+*JEL-129 late window.onload rescue (legacy Chromium only). After the
+*JEL-99 bundles never auto-execute — the rewritten document's
+*JEL-88 exactly the telemetry (tx executed, ecAdded=0
+*JEL-202 also dumps Settings form-field IDs so PowerShell+PIL can OCR
+*JEL-436 followup: capture btnPlay click context so QA can screenshot
+*JEL-530 followup: also capture .stack from unhandledrejection so HUD
+*JEL-513 followup: wrap window.ApiClient.getItem once it appears
+*JEL-1580 v58: surface rescue listener state for QA pixel-read.
+*JEL-1580 v59: AF:a/s sc=h/N where a/s=auto-focuser attempts
+*JEL-1580 v60: synthetic AF self-test status row. "-" when off.
+*JEL-1924 secondary .bundle.js prefetch counter. SBP:N/B where
+*JEL-1959 /web/ <link rel=stylesheet> prefetch counter. Same
+*JEL-1967 <link rel=preload> counters from head IIFE.
+*JEL-131 login-idle tx-cache primer status. TP:f/t/e/q(:stop
+*JEL-436 followup: render btnPlay capture state when present.
+*JEL-513 followup: render last getItem response info.
+*JEL-530 followup: stack trace from unhandledrejection.
+*JEL-436 workaround: on Tizen 5.0 (Chromium 56), navigating to a
+*JEL-436 v23: walk webpack module cache to find connectionManager
+*JEL-534 and playbackManager. confirmed window.connectionManager is
+*JEL-530 where getItem returned ServerId but a different item
+*JEL-567 v43: an ApiClient is "authenticated" when it carries an
+*JEL-567 v43: connectionManager can return a token-less ApiClient
+*JEL-567 v43: read the registered-player roster off the
+*JEL-562 guard against undefined / empty-items dispatch. Without
+*JEL-562 v41): derive MediaType from Type when missing.
+*JEL-562 v41): diagnostic log of first 5 dispatches. Captures
+*JEL-567 v43: emit via console.warn (not console.log) so the
+*JEL-567 v43: fold the conclusive playback state into __shellDiag.pm
+*JEL-727 defensive force-load of built-in media players when the
+*JEL-727 pluginManager singleton shape. loadPlugin + ofType +
+*JEL-535 v24: shape-based CM detection fallback. Prototype string'
+*JEL-727 capture pluginManager singleton so pm.play wrap can
+*JEL-137 never force-require modules before the webpack entry
+*JEL-535 v24: webpack 5 wr.c exists but is empty (closure-bound'
+*JEL-727 also pick factories that look like pluginManager so we
+*JEL-401 Plugin script transpilation
+*JEL-401 `Chromium/56` instead of `Chrome/56` (Q60R 2019 panels seen
+*JEL-436 will reject, preventing <video> element creation on Tizen 5.
+*JEL-354 chrome:56 (runtime floor), not 63 — lowers all ES2018
+*JEL-26 panels can't parse. loose+assumptions retained for iterator.
+*JEL-405 when we XHR-fetch a plugin <script src> and inline it
+*JEL-401 Shell diagnostic HUD followup
+*JEL-557 timing milestones for boot → first-card. window.__shellT0 is
+*JEL-562 detect Response via Object.prototype.toString tag so prior
+*JEL-567 capture column + stack, not just file:line. Minified
+*JEL-562 preventDefault on unhandledrejection AFTER recording so
+*JEL-562 fmt every arg BEFORE delegating to native console so dlog
+*JEL-557 cache + timing readout: tx hit/miss + boot milestone deltas
+*JEL-131 pr= prime counters f/t/e/q(+stop reason) from
+*JEL-1977 /web/ index.html + config.json body cache status.
+*JEL-1980 main.jellyfin.bundle.js body LS-cache status.
+*JEL-1984 babel-preload soft-skip state. BUS=babelUnusedStreak
+*JEL-727 surface PM/CM patch state + player roster + force-load
+*JEL-98 the visible on-screen overlay is opt-in via the same debug f
+*JEL-1832 polyfill body extracted from injectChromium56Polyfills so th
+*JEL-404 throw `TypeError: not a constructor` . Hand-rolled
+*JEL-567 Jellyfin 10.11.8 ships a React/MUI web client. Its
+*JEL-111 one-shot install proved insufficient on the M63 — home
+*JEL-21 's details-route throw is this same class); (3) the
+*JEL-1971 QA HTTP beacon body. Replaces `0 debug` AUL handshake
+*JEL-1969 ~2 sessions per TV boot) + persistent WebInspector
+*JEL-1970 silently ignored on consumer release-signed Tizen 5.0
+*JEL-126 compositor-driven boot progress indicator for the written
+*JEL-125 hung decomposition). This inline script runs at head parse
+*JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
+*JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
+*JEL-178 caching honouring public.js's ?v= config-version query.
+*JEL-197 Idempotency : if the document already references a public.js
+*JEL-196 the cutover: the two carry independent content today, and on
+*JEL-204 JEL-203 parent audit): the delivery route is overridable via
+*JEL-618 channel body cache. The channel is the aggregate of EVERY
+*JEL-618 bodies > 256 KiB — so pre- the TV re-downloaded AND re-babel
+*JEL-618 cache = pre- refetch-every-boot behaviour) and only while
+*JEL-178 up: the one-boot-lag contract widens to a bounded TTL for
+*JEL-618 a fresh cached channel body (already transpiled + gated on
+*JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
+*JEL-178 query-bearing: transpileLegacyScripts then routes it through
+*JEL-216 an active channel on a legacy engine guarantees a transpile
+*JEL-554 v32): tx cache constants shared with the in-document seed
+*JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
+*JEL-1034 v53): persistent flag — set true on any boot that triggered
+*JEL-1984 sibling counter to BABEL_NEEDED_KEY. Incremented at the end
+*JEL-554 v35): normalize cache key by stripping the per-load cache-bu
+*JEL-178 stripping the ENTIRE query — but that over-corrected : plugi
+*JEL-26 lockstep) — both run on the same localStorage tx-cache.
+*JEL-554 v34): record first 10 missed URLs to expose static/dynamic
+*JEL-554 v32): fast pre-check for syntax that Chromium 56 can't parse
+*JEL-354 the ES2018 forms Chrome 56 also lacks: object rest/spread
+*JEL-1150 MODERN_SYNTAX_RE hoisted to top-of-IIFE so its source feeds
+*JEL-417 the PRE-check gates on MODERN_PRECHECK_RE (broader — also ca
+*JEL-216 turn a modern-syntax external script we could not transpile
+*JEL-1034 v53): babel is lazy. Don't gate the whole pipeline on
+*JEL-1984 settle babelUnusedStreak after the per-script jobs
+*JEL-1034 v53): unified lazy-babel gate. Resolves to true if
+*JEL-1034 v53): babel may not be loaded yet — it's lazy. Do NOT
+*JEL-1654 record plugin <script src> URLs for next-boot prefetch.
+*JEL-1289 Mirrors the bundle-URL pattern: index.html head IIFE will
+*JEL-1924 record secondary .bundle.js URLs (runtime/vendors/jquery/
+*JEL-1289 noto/lang/etc.) for next-boot prefetch. Extends (main
+*JEL-1654 bundle only) + (plugin <script src>). Without this
+*JEL-1959 record /web/ <link rel=stylesheet> URLs for next-boot
+*JEL-1924 Mirrors shape: no adoption (browser HTTP cache coalesces
+*JEL-1580 + HomeScreen serve from /PluginName/, v58 lesson). Cap 20.
+*JEL-618 an inlined cached channel body is FINAL executable output
+*JEL-618 adopt the finished channel body into the channel cache.
+*JEL-554 v32): cache short-circuit. Skip fetch + babel entirely
+*JEL-1654 adopt the in-flight prefetch from the head IIFE
+*JEL-1580 first cold boot). IIFE filters by server origin
+*JEL-178 a query string marks a cache-busted (config-mutable
+*JEL-178 content-addressed transpile cache key. A query-bearing
+*JEL-554 v32): fast path for plugins that don't use
+*JEL-1034 v53): slow path triggers lazy babel load.
+*JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+*JEL-216 same fail-safe for a transform that threw.
+*JEL-401 to a blob: URL. Two reasons follow-up
+*JEL-1034 v53): slow path triggers lazy babel load.
+*JEL-436 Bundle source patcher v24
+*JEL-534 JEL-536 / confirmed two failed in-process strategies
+*JEL-530 getItem() returned ServerId in the same session confirmed
+*JEL-537
+*JEL-1776 warm-boot cache counters. CacheHit = URL match (any
+*JEL-554 v29): the `item or serverId cannot be null` throw is
+*JEL-436 Chromium <70 (see root-cause analysis above). On modern
+*JEL-1289 v55): speculative bundle prefetch. The main.*.bundle.js
+*JEL-1776 read once outside the loop; verdict is per-URL but the
+*JEL-555 the `item or serverId cannot be null` throw lives in
+*JEL-537 main.*.bundle.js (per . Scanning every bundle on every
+*JEL-1776 warm-boot cache hit. URL match means the bundle
+*JEL-1980 body cache covers BOTH patched (needsPatch=true
+*JEL-1289 adopt the in-flight prefetch when the URL matches
+*JEL-1776 record no-patch verdict so the next warm
+*JEL-1980 also persist raw body so the next boot
+*JEL-1776 cache patched body so the next warm boot
+*JEL-554 JEL-1832 v32) defer-script watchdog. Extracted so both the
+*JEL-723 See history above for poll vs blind-timer rationale.
+*JEL-101 JEL-99 ports : raised from 5500. On the failing Tizen 5.0
+*JEL-137 JEL-99 a partially-executed defer sequence is NOT the
+*JEL-101 JEL-99 ports : drop the original (still-unrun) defer node
+*JEL-101 JEL-99 ports : do NOT treat document.readyState ===
+*JEL-99 . The only sound "defers ran" signals are __webpack_require_
+*JEL-1832 warm-boot string fast path.
+*JEL-197 the JS-Injector snippet channel must inject + transpile
+*JEL-618 public.js, which only the DOMParser path can do. : unless a
+*JEL-1980 inline body whenever present (raw or patched).
+*JEL-1971 beacon body comes last so it picks up the seed-installed
+*JEL-126 fast path is legacy-only by construction (bailed "modern"
+*JEL-1980 fast-path body-cache adoption — main.jellyfin
+*JEL-618 splice the cached channel body in last, immediately before
+*JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
+*JEL-134 JEL-132 v2): boot-time restore from the IndexedDB creds
+*JEL-1034 v53): speculative babel prime, flag-gated.
+*JEL-1984 align the speculative prime with the head-IIFE soft-skip
+*JEL-554 v29): drop `cache:'no-store'`. Forcing no-store re-downloads
+*JEL-63 race both critical-path boot fetches against a bounded timer
+*JEL-1977 stale-while-revalidate body cache for /web/index.html +
+*JEL-1289 v55): also capture the speculative bundle prefetch
+*JEL-1654 park plugin prefetch promises on a stable global so
+*JEL-1977 record body for next-boot stale-while-
+*JEL-134 vault restore joins the document.write gate so jellyfin-web
+*JEL-1832 warm-boot fast path skips DOMParser+outerHTML
+*JEL-1034 v53): lazy-load babel; defer 3.13 MB fetch until
+*JEL-1215 '__SHELL_VER__' is build-time substituted by
+*JEL-1971 append QA HTTP beacon script tag (no-op in prod
+*JEL-126 boot progress dots that survive the ~20 s main-thread
+*JEL-197 ensure the JS-Injector snippet channel (public.js) is
+*JEL-554 v29): run bundle patch + legacy transpile in parallel.
+*JEL-554 v32): Chromium 56 defer-script lifecycle bug.
+*JEL-555 QA on v29 (verdict reassigned to FoundingEngineer
+*JEL-554 v34): timeout was 2000 ms. QA confirmed normal
+*JEL-723 the fixed 5500 ms blind wait was the wrong
+*JEL-723 defer queue and double-runs the webpack runtime —
+*JEL-739 connect.css moved off the critical path. Warm saved-server
+*JEL-934 v51): #boot-root is `display:none` by default in
+*JEL-63 pre-fill the saved server URL (if any) so the boot-failure
+*JEL-555 skip the /System/Info/Public pre-flight on resume.
+*JEL-63 do NOT clear the saved server URL on a boot-time network
