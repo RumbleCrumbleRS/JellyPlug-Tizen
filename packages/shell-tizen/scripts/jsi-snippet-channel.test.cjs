@@ -126,10 +126,22 @@ function makeDoc(existingSrcs) {
 function loadChannel(file) {
   const src = fs.readFileSync(file, "utf8");
   const harness =
+    // JEL-618: the cache functions hash bodies with the shipped txFnv1a.
+    extractFunction(src, "txFnv1a", file) +
+    "\n" +
     extractFunction(src, "jsiChannelDisabled", file) +
     "\n" +
     // JEL-204: jsiChannelPath() resolves the (overridable) delivery route.
     extractFunction(src, "jsiChannelPath", file) +
+    "\n" +
+    // JEL-618: chunked channel-body cache.
+    extractFunction(src, "jsiChannelMaxAge", file) +
+    "\n" +
+    extractFunction(src, "jsiChannelCacheClear", file) +
+    "\n" +
+    extractFunction(src, "jsiChannelCacheGet", file) +
+    "\n" +
+    extractFunction(src, "jsiChannelCacheSet", file) +
     "\n" +
     extractFunction(src, "injectJsInjectorChannel", file) +
     "\n" +
@@ -146,15 +158,34 @@ function loadChannel(file) {
     "globalThis.__babelKicks = 0;\n" +
     "globalThis.window = globalThis;\n" +
     "globalThis.__ensureBabel = function () { globalThis.__babelKicks++; };\n" +
+    // JEL-618: record constants + a fixed TX_VER stand-in (the shipped one
+    // hashes babel inputs; the cache only ever compares it for equality).
+    'var JSI_CHANNEL_META_KEY = "jellyfin.shell.jsiChannel.meta";\n' +
+    'var JSI_CHANNEL_CHUNK_PFX = "jellyfin.shell.jsiChannel.c";\n' +
+    'var JSI_CHANNEL_MAXAGE_KEY = "jellyfin.shell.jsiChannelMaxAgeMs";\n' +
+    "var JSI_CHANNEL_MAXAGE_DEFAULT = 21600000;\n" +
+    "var JSI_CHANNEL_CHUNK_LEN = 131072;\n" +
+    "var JSI_CHANNEL_MAX_CHUNKS = 32;\n" +
+    'var TX_VER = "txv-test";\n' +
     "globalThis.__inject = injectJsInjectorChannel;\n" +
     "globalThis.__disabled = jsiChannelDisabled;\n" +
-    "globalThis.__path = jsiChannelPath;\n";
+    "globalThis.__path = jsiChannelPath;\n" +
+    "globalThis.__cacheGet = jsiChannelCacheGet;\n" +
+    "globalThis.__cacheSet = jsiChannelCacheSet;\n" +
+    "globalThis.__cacheClear = jsiChannelCacheClear;\n" +
+    "globalThis.__setNow = function (n) { Date.now = function () { return n; }; };\n";
   const store = {};
+  let failSetAfter = Infinity;
+  let setCalls = 0;
   const sandbox = {
     localStorage: {
       getItem: (k) => (k in store ? store[k] : null),
       setItem: (k, v) => {
+        if (++setCalls > failSetAfter) throw new Error("QuotaExceededError");
         store[k] = String(v);
+      },
+      removeItem: (k) => {
+        delete store[k];
       },
     },
     console,
@@ -166,6 +197,15 @@ function loadChannel(file) {
     inject: sandbox.__inject,
     disabled: sandbox.__disabled,
     path: sandbox.__path,
+    cacheGet: sandbox.__cacheGet,
+    cacheSet: sandbox.__cacheSet,
+    cacheClear: sandbox.__cacheClear,
+    setNow: sandbox.__setNow,
+    // Arm the localStorage mock to throw (quota) after n more setItem calls.
+    failSetAfter: (n) => {
+      failSetAfter = n;
+      setCalls = 0;
+    },
     store,
     kicks: () => sandbox.__babelKicks,
   };
@@ -199,7 +239,8 @@ for (const [label, file] of [
     added.length ? "got " + added[0].src : "none injected",
   );
   check(
-    label + ": JEL-216 — channel src is query-bearing (routes through freshness path)",
+    label +
+      ": JEL-216 — channel src is query-bearing (routes through freshness path)",
     added.length === 1 && added[0].src.indexOf("?") >= 0,
     added.length ? "got " + added[0].src : "none injected",
   );
@@ -309,6 +350,147 @@ for (const [label, file] of [
     "kicks went " + kicksBefore + " -> " + m.kicks(),
   );
   delete m.store["jellyfin.shell.legacy.babelUnusedStreak"];
+  // ---- JEL-618: chunked channel-body cache ------------------------------
+
+  // Case 6: roundtrip — set stores chunks+meta, get returns the exact body.
+  const c = loadChannel(file);
+  c.setNow(1000000000000);
+  const smallBody = 'window.__snip=1;/*es5 body*/"x";';
+  c.cacheSet(smallBody);
+  check(
+    label + ": JEL-618 cache roundtrip returns the exact body",
+    c.cacheGet() === smallBody,
+  );
+  const meta6 = JSON.parse(c.store["jellyfin.shell.jsiChannel.meta"]);
+  check(
+    label + ": JEL-618 meta records TX_VER + single chunk",
+    meta6.v === "txv-test" && meta6.n === 1 && meta6.l === smallBody.length,
+  );
+
+  // Case 7: a body over one chunk splits and rejoins losslessly.
+  const bigBody = "var pad='" + "a".repeat(300000) + "';";
+  c.cacheSet(bigBody);
+  const meta7 = JSON.parse(c.store["jellyfin.shell.jsiChannel.meta"]);
+  check(
+    label + ": JEL-618 >128KiB body chunks (n=3) and rejoins losslessly",
+    meta7.n === 3 && c.cacheGet() === bigBody,
+  );
+  check(
+    label + ": JEL-618 shrinking rewrite leaves no orphan chunks",
+    (c.cacheSet(smallBody),
+    c.store["jellyfin.shell.jsiChannel.c1"] === undefined &&
+      c.cacheGet() === smallBody),
+  );
+
+  // Case 8: inject() with a fresh cache inlines the body — no src fetch tag.
+  let cdoc = makeDoc([]);
+  c.inject(cdoc, SERVER);
+  check(
+    label + ": JEL-618 cached inject inlines exactly one script, no src",
+    cdoc.__scripts.length === 1 &&
+      !cdoc.__scripts[0].src &&
+      cdoc.__scripts[0].textContent === smallBody,
+  );
+  check(
+    label + ": JEL-618 cached inject carries channel + cached markers",
+    cdoc.__scripts[0].getAttribute("data-shell-jsi-channel") === "1" &&
+      cdoc.__scripts[0].getAttribute("data-shell-jsi-cached") === "1",
+  );
+  // Killswitch + idempotency still beat the cache.
+  c.store["jellyfin.shell.jsiChannelDisabled"] = "1";
+  cdoc = makeDoc([]);
+  c.inject(cdoc, SERVER);
+  check(
+    label + ": JEL-618 killswitch suppresses cached inject too",
+    cdoc.__scripts.length === 0,
+  );
+  delete c.store["jellyfin.shell.jsiChannelDisabled"];
+  cdoc = makeDoc([SERVER + "/JavaScriptInjector/public.js?v=1"]);
+  c.inject(cdoc, SERVER);
+  check(
+    label + ": JEL-618 existing public.js tag suppresses cached inject",
+    cdoc.__scripts.length === 1,
+  );
+
+  // Case 9: freshness — TTL expiry, override key, and '0' = disabled.
+  check(
+    label + ": JEL-618 body within default TTL is served",
+    (c.setNow(1000000000000 + 21599000), c.cacheGet() === smallBody),
+  );
+  check(
+    label + ": JEL-618 body older than default TTL is stale",
+    (c.setNow(1000000000000 + 21600001), c.cacheGet() === null),
+  );
+  check(
+    label + ": JEL-618 backdated clock (meta.t in the future) is stale too",
+    (c.setNow(1000000000000 - 21600001), c.cacheGet() === null),
+  );
+  c.setNow(1000000000000);
+  c.store["jellyfin.shell.jsiChannelMaxAgeMs"] = "1000";
+  check(
+    label + ": JEL-618 maxAge override key shortens the window",
+    (c.setNow(1000000000000 + 1001), c.cacheGet() === null),
+  );
+  c.store["jellyfin.shell.jsiChannelMaxAgeMs"] = "0";
+  c.setNow(1000000000000);
+  check(label + ": JEL-618 maxAge '0' disables reads", c.cacheGet() === null);
+  const before0 = c.store["jellyfin.shell.jsiChannel.meta"];
+  c.cacheSet("var neverStored=1;");
+  check(
+    label + ": JEL-618 maxAge '0' disables writes",
+    c.store["jellyfin.shell.jsiChannel.meta"] === before0,
+  );
+  delete c.store["jellyfin.shell.jsiChannelMaxAgeMs"];
+
+  // Case 10: integrity — TX_VER mismatch, missing chunk, tampered chunk.
+  c.setNow(1000000000000);
+  c.cacheSet(smallBody);
+  const goodMeta = c.store["jellyfin.shell.jsiChannel.meta"];
+  c.store["jellyfin.shell.jsiChannel.meta"] = goodMeta.replace(
+    "txv-test",
+    "txv-other",
+  );
+  check(
+    label + ": JEL-618 TX_VER mismatch invalidates the record",
+    c.cacheGet() === null,
+  );
+  c.store["jellyfin.shell.jsiChannel.meta"] = goodMeta;
+  const goodChunk = c.store["jellyfin.shell.jsiChannel.c0"];
+  delete c.store["jellyfin.shell.jsiChannel.c0"];
+  check(
+    label + ": JEL-618 missing chunk invalidates the record",
+    c.cacheGet() === null,
+  );
+  c.store["jellyfin.shell.jsiChannel.c0"] = goodChunk.slice(0, -1) + "!";
+  check(
+    label + ": JEL-618 tampered chunk fails the hash check",
+    c.cacheGet() === null,
+  );
+  c.store["jellyfin.shell.jsiChannel.c0"] = goodChunk;
+  check(
+    label + ": JEL-618 restored record reads again (sanity)",
+    c.cacheGet() === smallBody,
+  );
+
+  // Case 11: quota failure mid-write drops the whole record (no half state).
+  c.failSetAfter(1);
+  c.cacheSet(bigBody);
+  c.failSetAfter(Infinity);
+  check(
+    label + ": JEL-618 quota mid-write clears meta + chunks",
+    c.store["jellyfin.shell.jsiChannel.meta"] === undefined &&
+      c.store["jellyfin.shell.jsiChannel.c0"] === undefined &&
+      c.cacheGet() === null,
+  );
+
+  // Case 12: clear() empties the record.
+  c.cacheSet(smallBody);
+  c.cacheClear();
+  check(
+    label + ": JEL-618 cacheClear removes the record",
+    c.cacheGet() === null &&
+      c.store["jellyfin.shell.jsiChannel.meta"] === undefined,
+  );
 }
 
 // Source-level wiring assertions across both shells.
@@ -325,6 +507,34 @@ for (const [label, file] of [
     label + ': fast path bails for the channel (bail("jsiChannel"))',
     /bail\("jsiChannel"\)/.test(src),
   );
+  // JEL-618: fast path splices a fresh cached body instead of bailing …
+  check(
+    label + ": fast path splices the cached channel body before </body>",
+    src.indexOf(
+      '\'<script data-shell-jsi-channel="1" data-shell-jsi-cached="1">\'',
+    ) >= 0 && /bail\("jsiChannelNoBody"\)/.test(src),
+  );
+  // … but never when a "</script" literal would corrupt the document.
+  check(
+    label + ': fast path guards "</script" bodies (jsiChannelScriptClose)',
+    /bail\("jsiChannelScriptClose"\)/.test(src),
+  );
+  // JEL-618: the walker must skip the inlined cached body (a string-literal
+  // pre-check false positive re-babeling ~1MB would refund the entire win).
+  check(
+    label + ": transpile walker skips data-shell-jsi-cached scripts",
+    /getAttribute\("data-shell-jsi-cached"\) === "1"/.test(src),
+  );
+  // JEL-618: all three finalize branches (txc pre-hit, raw fast path, babel
+  // output) adopt the finished channel body into the channel cache.
+  const recordHooks = (
+    src.match(/(?<!function )jsiChannelCacheSet\((pre|bodyRaw|body)\)/g) || []
+  ).length;
+  check(
+    label + ": all 3 transpile finalize branches record the channel body",
+    recordHooks === 3,
+    "found " + recordHooks,
+  );
 }
 
 // Lockstep: the killswitch key + path constant must match across both shells.
@@ -333,9 +543,37 @@ function literal(file, name) {
   const m = new RegExp(name + '\\s*=\\s*"([^"]*)"').exec(src);
   return m ? m[1] : null;
 }
-for (const c of ["JSI_CHANNEL_DISABLED_KEY", "JSI_PUBLIC_PATH"]) {
+for (const c of [
+  "JSI_CHANNEL_DISABLED_KEY",
+  "JSI_PUBLIC_PATH",
+  // JEL-618: cache record keys must stay lockstep — both shells read the
+  // SAME localStorage record (boot-shell writes it, hosted shell reads it,
+  // and vice versa across upgrade paths).
+  "JSI_CHANNEL_META_KEY",
+  "JSI_CHANNEL_CHUNK_PFX",
+  "JSI_CHANNEL_MAXAGE_KEY",
+]) {
   const a = literal(SHELL, c);
   const b = literal(BOOT, c);
+  check(
+    "lockstep: " + c + " identical across both shells",
+    a !== null && a === b,
+    "shell.js=" + a + " vs boot-shell.src.js=" + b,
+  );
+}
+// JEL-618: numeric cache constants lockstep (chunking geometry + TTL).
+function numericLiteral(file, name) {
+  const src = fs.readFileSync(file, "utf8");
+  const m = new RegExp(name + "\\s*=\\s*([0-9]+)").exec(src);
+  return m ? m[1] : null;
+}
+for (const c of [
+  "JSI_CHANNEL_MAXAGE_DEFAULT",
+  "JSI_CHANNEL_CHUNK_LEN",
+  "JSI_CHANNEL_MAX_CHUNKS",
+]) {
+  const a = numericLiteral(SHELL, c);
+  const b = numericLiteral(BOOT, c);
   check(
     "lockstep: " + c + " identical across both shells",
     a !== null && a === b,

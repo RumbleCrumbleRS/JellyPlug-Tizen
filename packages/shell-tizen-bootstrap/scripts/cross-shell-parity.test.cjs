@@ -193,8 +193,10 @@ const INTENTIONAL_DIVERGENCES = [
     name: "transpileLegacyScriptsInner",
     class: "hsb-feature",
     why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    retail: "a118fc192c53fd73",
-    boot: "44cc7f0a1506d2eb",
+    // Re-pinned JEL-618 (channel-cache walker skip + record hooks landed
+    // in BOTH shells; divergence class unchanged).
+    retail: "05b227541549f41c",
+    boot: "436acbb159260653",
   },
   {
     name: "patchPlaybackBundles",
@@ -228,8 +230,10 @@ const INTENTIONAL_DIVERGENCES = [
     name: "maybeStringFastPath",
     class: "hsb-feature",
     why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
-    retail: "d98fbf09b41c3eaa",
-    boot: "022a65695fd72609",
+    // Re-pinned JEL-618 (cached-channel-body splice landed in BOTH
+    // shells; divergence class unchanged).
+    retail: "bbd18216a03986be",
+    boot: "9323bb152876f6b2",
   },
   {
     name: "loadRemoteWebClient",
