@@ -49,7 +49,15 @@ function check(name, cond, detail) {
   }
 }
 
-// Brace-match a `function NAME(...) {...}` declaration, skipping string bodies.
+// Brace-match a `function NAME(...) {...}` declaration, skipping string
+// bodies AND comments. JEL-619 regression fix: the old scanner treated
+// apostrophes inside `//` comments as string delimiters, so its quote state
+// was garbage and it only ever terminated by parity luck (on main it
+// silently returned an over-long slice ending at an unrelated brace); any
+// comment edit could flip the parity and make it throw. Comments are now
+// skipped like a real tokenizer, so the returned slice is the exact
+// function. (Regex literals stay unhandled — the extracted functions
+// contain none.)
 function extractFunction(src, name, file) {
   const start = src.indexOf("function " + name);
   if (start === -1) throw new Error(`no function ${name} in ${file}`);
@@ -64,6 +72,18 @@ function extractFunction(src, name, file) {
         continue;
       }
       if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      const nl = src.indexOf("\n", i);
+      if (nl === -1) break;
+      i = nl;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      if (end === -1) break;
+      i = end + 1;
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {
