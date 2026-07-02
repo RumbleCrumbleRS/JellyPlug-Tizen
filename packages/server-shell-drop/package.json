@@ -5,6 +5,7 @@
   "description": "Canonical layout + manifest emitter for ${server}/shell/ — the server-hosted drop folder that the Hosted Shell Bootstrap pulls shell.min.js from at launch.",
   "license": "GPL-2.0-only",
   "scripts": {
-    "emit-manifest": "python3 scripts/emit_manifest.py"
+    "emit-manifest": "python3 scripts/emit_manifest.py",
+    "test": "node scripts/jsi-minify.test.cjs"
   }
 }
