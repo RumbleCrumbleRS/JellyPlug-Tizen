@@ -161,9 +161,10 @@
     WEB_CACHE_VER = "1.0.88",
     WEB_CACHE_MAX = 262144,
     WEB_CACHE_GATE_KEY = "jellyfin.shell.indexCache";
+  // JEL-622: ON by default (SWR passed its QA parity soak); '0' opts out.
   function webCacheEnabled() {
     try {
-      return localStorage.getItem(WEB_CACHE_GATE_KEY) === "1";
+      return localStorage.getItem(WEB_CACHE_GATE_KEY) !== "0";
     } catch (_) {
       return !1;
     }
