@@ -11,7 +11,7 @@ HTTPS.
 ```
 ${server}/shell/
 ├── manifest.json       # version + sha256 of shell.min.js (TVs read this first)
-├── shell.min.js        # full shell logic (rebuilt from _jel*_v80_src/shell.js)
+├── shell.min.js        # full shell logic (rebuilt from packages/shell-tizen/src/shell.js)
 ├── babel.min.js        # @babel/standalone, lazy-loaded for legacy Tizen 5.0/5.5
 ├── tx-manifest.json    # (optional) pre-lowered transpile drop index (JEL-621)
 ├── tx/<hash>.js        # (optional) pre-lowered ES5 bodies, fnv1a(source)-keyed
@@ -34,13 +34,13 @@ The bootstrap WGT's `index.html` runs this flow at every cold boot:
 That means an update is just:
 
 ```
-# 1. rebuild shell.min.js from the v80 src as usual
-python3 _jel1963_v80_src/build_shell_min.py
+# 1. rebuild shell.min.js from the shell-tizen package (run from repo root)
+python3 packages/shell-tizen/scripts/build_shell_min.py
 
 # 2. drop into the server /shell/ host
-cp _jel1963_v80_src/shell.min.js   /var/www/jellyfin/shell/shell.min.js
-cp _jel1963_v80_src/babel.min.js   /var/www/jellyfin/shell/babel.min.js
-python3 emit_manifest.py /var/www/jellyfin/shell/
+cp packages/shell-tizen/src/shell.min.js   /var/www/jellyfin/shell/shell.min.js
+cp packages/shell-tizen/src/babel.min.js   /var/www/jellyfin/shell/babel.min.js
+python3 packages/server-shell-drop/scripts/emit_manifest.py /var/www/jellyfin/shell/
 
 # 3. TVs pick it up on next launch (or window.location.reload from QA console).
 ```
@@ -129,5 +129,5 @@ Jellyfin-side companion ticket (server-plugin path).
 ## Bootstrap WGT pulls
 
 When a new TV joins the fleet, the bootstrap WGT v(N) install path is documented
-in `../_jel2040_bootstrap_src/INSTALL.md` — Samsung Device Manager GUI is the
+in `../shell-tizen-bootstrap/INSTALL.md` — Samsung Device Manager GUI is the
 primary path (no `sdb shell`).
