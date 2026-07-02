@@ -297,9 +297,9 @@
   //   - 256 KB cap per body (LS quota; current index.html ~50 KB, config
   //     ~5 KB, well within)
   //
-  // Gated by `jellyfin.shell.indexCache` localStorage flag: defaults '0'
-  // (off) so initial QA is opt-in. Set to '1' post-QA parity smoke to
-  // turn on stale-while-revalidate boot.
+  // Gated by `jellyfin.shell.indexCache` localStorage flag: ON by default
+  // (JEL-622 — SWR passed its QA parity soak, so every boot now skips the
+  // pre-document.write /web/ RTT pair). Set '0' to opt out.
   var WEB_INDEX_CACHE_KEY = "jellyfin.shell.webIndexHtml";
   var WEB_CONFIG_CACHE_KEY = "jellyfin.shell.webConfig";
   var WEB_CACHE_VER = "__SHELL_VER__";
@@ -308,7 +308,7 @@
 
   function webCacheEnabled() {
     try {
-      return localStorage.getItem(WEB_CACHE_GATE_KEY) === "1";
+      return localStorage.getItem(WEB_CACHE_GATE_KEY) !== "0";
     } catch (_) {
       return false;
     }
@@ -4255,8 +4255,8 @@
     // immediately from cache and treat the in-flight fetch as background
     // revalidation that updates LS for the next boot. Eliminates the
     // /web/ RTT pair (200–500 ms on cold HTTP cache) from the pre-
-    // document.write critical path. Off by default — set
-    // `jellyfin.shell.indexCache='1'` post-QA parity smoke.
+    // document.write critical path. On by default (JEL-622) — set
+    // `jellyfin.shell.indexCache='0'` to opt out.
     window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0;
     window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0;
     window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0;
