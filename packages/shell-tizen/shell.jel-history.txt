@@ -8,6 +8,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-3 Jellyfin Tizen browser-shell prototype , milestone M1).
 *JEL-2 Architecture (per roadmap section 3
 *JEL-557 capture shell.js IIFE entry timestamp so the diag HUD can re
+*JEL-617 boot-phase ring. Persists per-boot launch→connect→login→home
+*JEL-616 rehaul can be read on-device without host tooling (Q60R bloc
 *JEL-63 bounded boot-fetch timeout. With a saved server URL pointing
 *JEL-85 JEL-314 /: connect-form probe gets a tighter bound than boot. The
 *JEL-1150 Transpile cache key
@@ -119,6 +121,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-405 when we XHR-fetch a plugin <script src> and inline it
 *JEL-401 Shell diagnostic HUD followup
 *JEL-557 timing milestones for boot → first-card. window.__shellT0 is
+*JEL-617 connect/login/home phase marks added; every __tm() also
+*JEL-617 route-phase poll. jellyfin-web is hash-routed on both TV
 *JEL-562 detect Response via Object.prototype.toString tag so prior
 *JEL-567 capture column + stack, not just file:line. Minified
 *JEL-562 preventDefault on unhandledrejection AFTER recording so
@@ -128,6 +132,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1977 /web/ index.html + config.json body cache status.
 *JEL-1980 main.jellyfin.bundle.js body LS-cache status.
 *JEL-1984 babel-preload soft-skip state. BUS=babelUnusedStreak
+*JEL-617 cn/lg/hm = connect/login/home phase marks; prev = the
 *JEL-727 surface PM/CM patch state + player roster + force-load
 *JEL-98 the visible on-screen overlay is opt-in via the same debug f
 *JEL-1832 polyfill body extracted from injectChromium56Polyfills so th
@@ -240,6 +245,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-723 defer queue and double-runs the webpack runtime —
 *JEL-739 connect.css moved off the critical path. Warm saved-server
 *JEL-934 v51): #boot-root is `display:none` by default in
+*JEL-617 boot-phase mark — the shell's own connect form is now
 *JEL-63 pre-fill the saved server URL (if any) so the boot-failure
 *JEL-555 skip the /System/Info/Public pre-flight on resume.
 *JEL-63 do NOT clear the saved server URL on a boot-time network
