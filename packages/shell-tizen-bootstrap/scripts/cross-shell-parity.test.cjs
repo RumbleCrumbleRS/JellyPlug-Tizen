@@ -116,6 +116,9 @@ const EXPECTED_MIRRORED = [
   "injectJsInjectorChannel",
   "txGetStatic",
   "txSetStatic",
+  "txDropDisabled",
+  "loadTxDropManifest",
+  "txDropResolve",
   "needsTranspile",
   "neutralizeUntranspiled",
   "ensureBabelReady",
@@ -158,8 +161,10 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    retail: "e1815da10ed00742",
-    boot: "43256f696a46d9fd",
+    // Re-pinned JEL-621: tx-drop resolver (__txResolve/__txDropGet) seeded into
+    // both shells; divergence class unchanged (still hsb-feature).
+    retail: "d1502ef55fac7fee",
+    boot: "e85e83a832f7efcf",
   },
   {
     name: "buildDiagSeedScript",
@@ -186,17 +191,18 @@ const INTENTIONAL_DIVERGENCES = [
     name: "transpileLegacyScripts",
     class: "hsb-feature",
     why: "fast-path stability check counts boot-only pluginBabelLazy vs retail babelLazyTriggered — entangled with HSB lazy-babel; unify in shell-core extraction",
-    retail: "4b3b60b89132fc4e",
-    boot: "bbbb74413ed110a1",
+    retail: "59a159693c71a78d",
+    boot: "4331928eaf0e5289",
   },
   {
     name: "transpileLegacyScriptsInner",
     class: "hsb-feature",
     why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    // Re-pinned JEL-618 (channel-cache walker skip + record hooks landed
-    // in BOTH shells; divergence class unchanged).
-    retail: "05b227541549f41c",
-    boot: "436acbb159260653",
+    // Re-pinned JEL-618 (channel-cache walker skip + record hooks) and
+    // JEL-621 (tx-drop resolve path + drop-hit channel-cache seed) — both
+    // landed in BOTH shells; divergence class unchanged.
+    retail: "97128e7cd7493763",
+    boot: "24ac3385828aefc3",
   },
   {
     name: "patchPlaybackBundles",
@@ -239,8 +245,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "loadRemoteWebClient",
     class: "hsb-feature",
     why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
-    retail: "5c2b917b9b0b3918",
-    boot: "476473967cddcb59",
+    retail: "b2abcabb38fb60b0",
+    boot: "0e14ea9af3a9ce82",
   },
 ];
 

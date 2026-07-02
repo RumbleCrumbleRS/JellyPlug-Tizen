@@ -1001,6 +1001,27 @@
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
+      // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
+      // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
+      // window.__shellTxDrop (window survives the document.write handoff);
+      // on a hash hit the pre-lowered ES5 body is fetched from the server's
+      // /shell/ drop and Babel is never invoked for that script. Misses and
+      // failures fall back to maybeTranspile unchanged. __txFnv must stay
+      // byte-lockstep with the widget-side txFnv1a (same fnv1a the JEL-178
+      // `txc:` key uses), and __oracleRe with MODERN_SYNTAX_RE_SRC — the
+      // STRICT post-transpile oracle, NOT the broader __modernRe pre-check
+      // above, which would false-positive on legal ES2015 `, ...x` array/
+      // call spread that preset-env legitimately leaves in lowered output.
+      "    var __oracleRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      "    function __txFnv(s){var h=0x811c9dc5;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;}return h.toString(36);}",
+      "    function __txDropGet(code){",
+      '      try{if(localStorage.getItem("jellyfin.shell.txDropDisabled")==="1")return Promise.resolve(null);}catch(_){}',
+      "      var d=window.__shellTxDrop;",
+      "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
+      '      var rel=d.entries[__txFnv(String(code||""))];',
+      '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      "    }",
       "    var __TXVER=" + JSON.stringify(TX_VER) + ";",
       "    try{window.__TXVER=__TXVER;}catch(_){}",
       '    var __TXPFX="shell.tx"+__TXVER+":";',
@@ -1040,9 +1061,13 @@
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
-      '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      // JEL-621: server pre-lowered drop attempt first — on a hit neither
+      // __ensureBabel nor maybeTranspile runs for this script.
+      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      "          return __dp.then(function(pre){",
+      '          var __p=pre==null&&needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
       "          return __p.then(function(){",
-      "            var out=maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code);",
       "            if(out==null){",
       "              try{parent.removeChild(stub);}catch(_){}",
       '              try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -1058,6 +1083,7 @@
       "            try{parent.replaceChild(node,stub);}catch(_){try{parent.appendChild(node);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "          });",
       "          });",
       "        })",
       "        .catch(function(err){",
@@ -1108,9 +1134,12 @@
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
-      '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      // JEL-621: server pre-lowered drop attempt first (see rewrite above).
+      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      "          return __dp.then(function(pre){",
+      '          var __p=pre==null&&needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
       "          return __p.then(function(){",
-      "            var out=maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code);",
       '            if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '            var ns=document.createElement("script");',
       "            var gated=needsJq(out);",
@@ -1123,6 +1152,7 @@
       "            catch(_){try{(document.head||document.documentElement).appendChild(ns);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "          });",
       "          });",
       "        })",
       '        .catch(function(err){try{console.warn("shell: setter fetch/transpile failed",src,err&&err.message);}catch(_){}dispatchEvt(node,"error");});',
@@ -1239,14 +1269,19 @@
       "        busy=true;",
       "        setTimeout(function(){",
       "          if(authed()){stopAuth();busy=false;return;}",
-      '          var __p=needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
-      "          __p.then(function(){",
-      "            try{",
-      "              var out=maybeTranspile(it.c);",
-      "              if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
-      "            }catch(_){P.e++;}",
-      "            busy=false;",
-      "            drain();",
+      // JEL-621: try the pre-lowered drop before priming Babel — on a drop
+      // hit the primer caches the server-lowered body and Babel stays cold.
+      "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
+      "          __dp.then(function(pre){",
+      '            var __p=pre==null&&needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "            __p.then(function(){",
+      "              try{",
+      "                var out=pre!=null?pre:maybeTranspile(it.c);",
+      "                if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
+      "              }catch(_){P.e++;}",
+      "              busy=false;",
+      "              drain();",
+      "            });",
       "          });",
       "        },120);",
       "      }",
@@ -2424,13 +2459,17 @@
       // is not lazily started inside the pre-write critical path where a cold
       // parse on a slow TV can lose the give-up race and let raw modern
       // syntax through. Fire-and-forget; transpileLegacyScripts still awaits it.
-      // JEL-620: since the channel body routes through the content-addressed
-      // tx-cache (JEL-178/JEL-618), a warm boot no longer needs Babel for it —
-      // honor the JEL-1984 unused-streak soft-skip here too. streak >= 2 means
-      // the last two full passes (channel included) were cache-covered; on a
-      // genuine miss the per-script ensureBabelReady path still loads Babel
-      // and the pass awaits it, and the miss resets the streak so the next
-      // boot kicks eagerly again.
+      // Two independent reasons now let us skip that eager kick on the happy
+      // path (either one suffices — a genuine per-script miss still lazy-loads
+      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
+      //   JEL-620: the channel body routes through the content-addressed
+      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      //   soft-skip — streak >= 2 means the last two full passes (channel
+      //   included) were cache-covered; a miss resets the streak so the next
+      //   boot kicks eagerly again.
+      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
+      //   a drop-covered channel body never touches Babel, so the eager kick
+      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
       var jsiStreakSkip = false;
       try {
         jsiStreakSkip =
@@ -2440,7 +2479,8 @@
       if (
         isLegacyChromium() &&
         !jsiStreakSkip &&
-        typeof window.__ensureBabel == "function"
+        typeof window.__ensureBabel == "function" &&
+        !(window.__shellTxDrop && window.__shellTxDrop.ok)
       )
         try {
           window.__ensureBabel();
@@ -2477,6 +2517,121 @@
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
       } catch (_) {}
+  }
+  // ---- Pre-lowered transpile drop (JEL-621) ------------------------------
+  // THE dominant cold-boot cost on Tizen 5.0 is Babel itself (~1.9 MB of
+  // plugin JS serially transformed on the TV main thread, 21-42 s measured).
+  // The /shell/ drop (packages/server-shell-drop, build-tx-drop.mjs) may
+  // publish pre-lowered ES5 bodies keyed by the fnv1a hash of the ORIGINAL
+  // source text (same txFnv1a the JEL-178 `txc:` key uses). The shell fetches
+  // ${server}/shell/tx-manifest.json in parallel with the /web/ RTT; each
+  // slow-path script hashes its fetched source and, on a manifest hit,
+  // downloads the pre-lowered body instead of loading Babel at all. A drop
+  // body is accepted ONLY if the STRICT post-transpile oracle
+  // (MODERN_SYNTAX_RE) finds no modern token, and the manifest must carry
+  // this shell's exact BABEL_OPTS_KEY — anything else falls back to the
+  // on-device Babel path, never to raw modern source. Mirrored 1:1 with
+  // shell.js (JEL-624 EXPECTED_MIRRORED).
+  // Kill switch: localStorage["jellyfin.shell.txDropDisabled"]="1".
+  var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
+  function txDropDisabled() {
+    try {
+      return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function loadTxDropManifest(serverUrl) {
+    // Parks a never-rejecting promise on window.__shellTxDropReady and the
+    // resolved {ok,base,entries,...} state on window.__shellTxDrop (read by
+    // the in-document seed pipelines — window survives document.write).
+    // Non-legacy engines and disabled boots resolve null immediately; a
+    // missing/invalid manifest (today's servers: /shell/ 404) resolves null
+    // after one small bounded fetch, and every consumer falls back to the
+    // on-device transpile path unchanged.
+    if (!isLegacyChromium() || txDropDisabled()) {
+      window.__shellTxDropReady = Promise.resolve(null);
+      return window.__shellTxDropReady;
+    }
+    var p = withBootTimeout(
+      fetch(
+        // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
+        // reliably; a per-fetch unique token forces a real network read so
+        // a freshly regenerated drop is picked up on the next boot.
+        serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
+        { credentials: "omit", cache: "no-store" },
+      ),
+      "tx drop manifest",
+      4000,
+    )
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (mf) {
+        if (!mf || typeof mf !== "object" || !mf.entries) return null;
+        // Different transform semantics (target/loose/assumptions drift
+        // between the drop builder and this shell) could pass the syntax
+        // oracle yet behave differently at runtime; require an exact match.
+        if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
+        var d = {
+          ok: true,
+          base: serverUrl + "/shell/",
+          entries: mf.entries,
+          h: 0,
+          m: 0,
+          r: 0,
+          f: 0,
+        };
+        window.__shellTxDrop = d;
+        return d;
+      })
+      .catch(function () {
+        return null;
+      });
+    window.__shellTxDropReady = p;
+    return p;
+  }
+  function txDropResolve(code) {
+    // Promise<loweredBody|null>. null means "no usable drop body" — the
+    // caller falls back to the Babel slow path. Never rejects.
+    var ready = window.__shellTxDropReady;
+    if (!ready || typeof ready.then !== "function")
+      return Promise.resolve(null);
+    return ready
+      .then(function (d) {
+        if (!d || !d.ok || !d.entries) return null;
+        var rel = d.entries[txFnv1a(String(code || ""))];
+        if (typeof rel !== "string" || !rel) {
+          d.m++;
+          return null;
+        }
+        return fetch(d.base + rel, { credentials: "omit" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (body) {
+            if (
+              typeof body !== "string" ||
+              !body.length ||
+              MODERN_SYNTAX_RE.test(body)
+            ) {
+              d.r++;
+              return null;
+            }
+            d.h++;
+            return body;
+          })
+          .catch(function () {
+            d.f++;
+            return null;
+          });
+      })
+      .catch(function () {
+        return null;
+      });
   }
   // JEL-417: PRE-check gates on the broader MODERN_PRECHECK_RE (also catches
   // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
@@ -2523,8 +2678,11 @@
           } catch (_) {}
           var next = prev;
           if ((c.scriptsFound || 0) > 0) {
+            // JEL-621: a script served by the pre-lowered drop needed no
+            // Babel either — count it toward full coverage so drop-covered
+            // servers reach streak>=2 and stop the eager babel preload.
             (c.pluginBabelLazy || 0) === 0 &&
-            (c.cachedHits || 0) === c.scriptsFound
+            (c.cachedHits || 0) + (c.txDropHits || 0) === c.scriptsFound
               ? (next = prev + 1)
               : (next = 0);
             try {
@@ -2586,7 +2744,8 @@
       (counts.fastPath = 0),
       (counts.babelLazyTriggered = 0),
       (counts.pluginBabelLazy = 0),
-      (counts.pluginPrefetchAdopted = 0));
+      (counts.pluginPrefetchAdopted = 0),
+      (counts.txDropHits = 0));
     for (
       var pluginPrefetch = window.__shellPluginPrefetch || null,
         pluginUrlsForNextBoot = [],
@@ -2819,57 +2978,87 @@
                   ));
                 return;
               }
-              return (
-                counts.babelLazyTriggered++,
-                counts.pluginBabelLazy++,
-                markBabelNeeded(),
-                ensureBabelReady().then(function (ready) {
-                  if (!ready) {
-                    counts.transpileFailed++;
-                    // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
-                    // leaving the raw external <script src> in place would let
-                    // un-transpiled `?.`/`??` reach the M63 engine — a SyntaxError
-                    // that kills the ENTIRE script (e.g. the whole concatenated
-                    // JS-Injector public.js, taking every snippet with it). Drop
-                    // the src so it cannot execute raw; markBabelNeeded() above
-                    // primes babel on the next boot, which then transpiles it
-                    // (graceful one-boot degradation instead of a hard crash).
-                    neutralizeUntranspiled(s, url);
-                    try {
-                      console.warn(
-                        "shell: babel not available, dropped untranspiled",
-                        url,
-                      );
-                    } catch (_) {}
-                    return;
-                  }
-                  counts.babel = !0;
-                  var out = babelTranspile(code);
-                  if (out == null) {
-                    counts.transpileFailed++;
-                    // JEL-216: same fail-safe for a transform that threw.
-                    neutralizeUntranspiled(s, url);
-                    return;
-                  }
-                  (counts.transpiled++,
-                    s.removeAttribute("src"),
+              // JEL-621: pre-lowered drop attempt before the Babel slow path.
+              // On a manifest hit the server already ran this exact transform
+              // offline — inline the drop body (same jq gate + tx-cache write
+              // as the Babel path) and never touch Babel for this script.
+              return txDropResolve(code).then(function (dropped) {
+                if (dropped != null) {
+                  (s.removeAttribute("src"),
                     s.removeAttribute("defer"),
                     s.removeAttribute("async"),
                     s.removeAttribute("type"));
-                  var gated = needsJQueryGate(out),
-                    body = gated ? wrapForJQuery(out) : out;
-                  ((s.textContent = body),
+                  var gatedD = needsJQueryGate(dropped),
+                    bodyD = gatedD ? wrapForJQuery(dropped) : dropped;
+                  ((s.textContent = bodyD),
                     s.setAttribute("data-shell-transpiled-from", url),
-                    gated && s.setAttribute("data-shell-jquery-gated", "1"),
-                    txSetStatic(ck, body),
-                    isJsiChannelTag && jsiChannelCacheSet(body),
+                    s.setAttribute("data-shell-tx-drop", "1"),
+                    gatedD && s.setAttribute("data-shell-jquery-gated", "1"),
+                    txSetStatic(ck, bodyD),
+                    // JEL-618 x JEL-621: drop already carries the transpiled
+                    // JSI-channel body — seed the channel-body cache here too.
+                    isJsiChannelTag && jsiChannelCacheSet(bodyD),
+                    counts.transpiled++,
+                    counts.txDropHits++,
                     shellLog(
-                      "transpiled+inlined",
+                      "tx-drop+inlined",
                       url,
-                      gated ? "(jq-gated)" : "",
+                      gatedD ? "(jq-gated)" : "",
                     ));
-                })
-              );
+                  return;
+                }
+                return (
+                  counts.babelLazyTriggered++,
+                  counts.pluginBabelLazy++,
+                  markBabelNeeded(),
+                  ensureBabelReady().then(function (ready) {
+                    if (!ready) {
+                      counts.transpileFailed++;
+                      // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+                      // leaving the raw external <script src> in place would let
+                      // un-transpiled `?.`/`??` reach the M63 engine — a SyntaxError
+                      // that kills the ENTIRE script (e.g. the whole concatenated
+                      // JS-Injector public.js, taking every snippet with it). Drop
+                      // the src so it cannot execute raw; markBabelNeeded() above
+                      // primes babel on the next boot, which then transpiles it
+                      // (graceful one-boot degradation instead of a hard crash).
+                      neutralizeUntranspiled(s, url);
+                      try {
+                        console.warn(
+                          "shell: babel not available, dropped untranspiled",
+                          url,
+                        );
+                      } catch (_) {}
+                      return;
+                    }
+                    counts.babel = !0;
+                    var out = babelTranspile(code);
+                    if (out == null) {
+                      counts.transpileFailed++;
+                      // JEL-216: same fail-safe for a transform that threw.
+                      neutralizeUntranspiled(s, url);
+                      return;
+                    }
+                    (counts.transpiled++,
+                      s.removeAttribute("src"),
+                      s.removeAttribute("defer"),
+                      s.removeAttribute("async"),
+                      s.removeAttribute("type"));
+                    var gated = needsJQueryGate(out),
+                      body = gated ? wrapForJQuery(out) : out;
+                    ((s.textContent = body),
+                      s.setAttribute("data-shell-transpiled-from", url),
+                      gated && s.setAttribute("data-shell-jquery-gated", "1"),
+                      txSetStatic(ck, body),
+                      isJsiChannelTag && jsiChannelCacheSet(body),
+                      shellLog(
+                        "transpiled+inlined",
+                        url,
+                        gated ? "(jq-gated)" : "",
+                      ));
+                  })
+                );
+              });
             })
             .catch(function (e) {
               counts.transpileFailed++;
@@ -2883,25 +3072,39 @@
       return !content || !content.replace(/\s/g, "")
         ? null
         : needsTranspile(content)
-          ? (counts.babelLazyTriggered++,
-            markBabelNeeded(),
-            ensureBabelReady().then(function (ready) {
-              if (!ready) {
-                try {
-                  console.warn(
-                    "shell: babel not available, skip inline transpile",
-                  );
-                } catch (_) {}
+          ? // JEL-621: pre-lowered drop attempt before the Babel slow path —
+            // inline bodies hash the same way as fetched external sources.
+            txDropResolve(content).then(function (droppedInline) {
+              if (droppedInline != null) {
+                ((s.textContent = droppedInline),
+                  s.setAttribute("data-shell-transpiled-inline", "1"),
+                  s.setAttribute("data-shell-tx-drop", "1"),
+                  counts.txDropHits++,
+                  shellLog("tx-drop inline script"));
                 return;
               }
-              counts.babel = !0;
-              var transpiled = babelTranspile(content);
-              transpiled != null &&
-                transpiled !== content &&
-                ((s.textContent = transpiled),
-                s.setAttribute("data-shell-transpiled-inline", "1"),
-                shellLog("transpiled inline script"));
-            }))
+              return (
+                counts.babelLazyTriggered++,
+                markBabelNeeded(),
+                ensureBabelReady().then(function (ready) {
+                  if (!ready) {
+                    try {
+                      console.warn(
+                        "shell: babel not available, skip inline transpile",
+                      );
+                    } catch (_) {}
+                    return;
+                  }
+                  counts.babel = !0;
+                  var transpiled = babelTranspile(content);
+                  transpiled != null &&
+                    transpiled !== content &&
+                    ((s.textContent = transpiled),
+                    s.setAttribute("data-shell-transpiled-inline", "1"),
+                    shellLog("transpiled inline script"));
+                })
+              );
+            })
           : (counts.fastPath++, null);
     });
     return Promise.all(jobs);
@@ -3672,6 +3875,12 @@
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
+    // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
+    // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
+    // without a /shell/ drop and every consumer falls back to Babel.
+    try {
+      loadTxDropManifest(serverUrl);
+    } catch (_) {}
     try {
       babelNeededFlag = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}

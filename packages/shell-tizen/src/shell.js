@@ -1210,6 +1210,34 @@
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
+      // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
+      // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
+      // window.__shellTxDrop (window survives the document.write handoff);
+      // on a hash hit the pre-lowered ES5 body is fetched from the server's
+      // /shell/ drop and Babel is never invoked for that script. Misses and
+      // failures fall back to maybeTranspile unchanged. __txFnv must stay
+      // byte-lockstep with the widget-side txFnv1a (same fnv1a the JEL-178
+      // `txc:` key uses), and __oracleRe with MODERN_SYNTAX_RE_SRC — the
+      // STRICT post-transpile oracle, NOT the broader __modernRe pre-check
+      // above, which would false-positive on legal ES2015 `, ...x` array/
+      // call spread that preset-env legitimately leaves in lowered output.
+      "    var __oracleRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      "    function __txFnv(s){var h=0x811c9dc5;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;}return h.toString(36);}",
+      "    function __txDropGet(code){",
+      '      try{if(localStorage.getItem("jellyfin.shell.txDropDisabled")==="1")return Promise.resolve(null);}catch(_){}',
+      "      var d=window.__shellTxDrop;",
+      "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
+      '      var rel=d.entries[__txFnv(String(code||""))];',
+      '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      "    }",
+      // Async drop-in for the synchronous maybeTranspile at both dynamic
+      // call sites (rewrite + srcPipeline): resolves to the same
+      // lowered-body-or-null contract, trying the server drop first.
+      "    function __txResolve(code){",
+      "      if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return Promise.resolve(code);}",
+      "      return __txDropGet(code).then(function(b){if(b!=null)return b;return maybeTranspile(code);});",
+      "    }",
       // JEL-557: cache transpiled plugin bodies in localStorage so warm cold
       // boots skip the fetch+Babel cycle on every dynamic <script src> the
       // server plugins inject. Browser uses a ServiceWorker on server origin;
@@ -1277,11 +1305,13 @@
       "      }",
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
-      "        .then(function(code){",
       // JEL-554 (v32): only call babel.transform when the body actually
       // contains ES2020+ syntax. Most plugin scripts parse fine on
       // Chromium 56 as-is and don\'t need the ~50–200 ms transpile pass.
-      "          var out=maybeTranspile(code);",
+      // JEL-621: __txResolve tries the server's pre-lowered drop first,
+      // then falls back to the same maybeTranspile contract.
+      "        .then(function(code){return __txResolve(code);})",
+      "        .then(function(out){",
       "          if(out==null){",
       "            try{parent.removeChild(stub);}catch(_){}",
       '            try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -1364,9 +1394,10 @@
       "      }",
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
-      "        .then(function(code){",
       // JEL-554 (v32): fast path for plugin bodies that parse on Chromium 56.
-      "          var out=maybeTranspile(code);",
+      // JEL-621: server pre-lowered drop attempt first (see __txResolve).
+      "        .then(function(code){return __txResolve(code);})",
+      "        .then(function(out){",
       '          if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '          var ns=document.createElement("script");',
       "          var gated=needsJq(out);",
@@ -1494,14 +1525,19 @@
       "        busy=true;",
       "        setTimeout(function(){",
       "          if(authed()){stopAuth();busy=false;return;}",
-      '          var __p=needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
-      "          __p.then(function(){",
-      "            try{",
-      "              var out=maybeTranspile(it.c);",
-      "              if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
-      "            }catch(_){P.e++;}",
-      "            busy=false;",
-      "            drain();",
+      // JEL-621: try the pre-lowered drop before priming Babel — on a drop
+      // hit the primer caches the server-lowered body and Babel stays cold.
+      "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
+      "          __dp.then(function(pre){",
+      '            var __p=pre==null&&needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "            __p.then(function(){",
+      "              try{",
+      "                var out=pre!=null?pre:maybeTranspile(it.c);",
+      "                if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
+      "              }catch(_){P.e++;}",
+      "              busy=false;",
+      "              drain();",
+      "            });",
       "          });",
       "        },120);",
       "      }",
@@ -3040,13 +3076,17 @@
       // transpile; kick the babel load now (idempotent cached promise) so it
       // isn't started lazily inside the pre-write critical path where a cold
       // parse can lose the give-up race and let raw `?.`/`??` reach the engine.
-      // JEL-620: since the channel body routes through the content-addressed
-      // tx-cache (JEL-178/JEL-618), a warm boot no longer needs Babel for it —
-      // honor the JEL-1984 unused-streak soft-skip here too. streak >= 2 means
-      // the last two full passes (channel included) were cache-covered; on a
-      // genuine miss the per-script ensureBabelReady path still loads Babel
-      // and the pass awaits it, and the miss resets the streak so the next
-      // boot kicks eagerly again.
+      // Two independent reasons now let us skip that eager kick on the happy
+      // path (either one suffices — a genuine per-script miss still lazy-loads
+      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
+      //   JEL-620: the channel body routes through the content-addressed
+      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      //   soft-skip — streak >= 2 means the last two full passes (channel
+      //   included) were cache-covered; a miss resets the streak so the next
+      //   boot kicks eagerly again.
+      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
+      //   a drop-covered channel body never touches Babel, so the eager kick
+      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
       var jsiStreakSkip = false;
       try {
         jsiStreakSkip =
@@ -3056,7 +3096,8 @@
       if (
         isLegacyChromium() &&
         !jsiStreakSkip &&
-        typeof window.__ensureBabel === "function"
+        typeof window.__ensureBabel === "function" &&
+        !(window.__shellTxDrop && window.__shellTxDrop.ok)
       )
         try {
           window.__ensureBabel();
@@ -3163,6 +3204,130 @@
     }
   }
 
+  // ---- Pre-lowered transpile drop (JEL-621) ------------------------------
+  //
+  // THE dominant cold-boot cost on Tizen 5.0 is Babel itself: the shell
+  // serially transforms ~1.9 MB of plugin JS on the TV main thread (21-42 s
+  // measured — see the JEL-131 primer comment in buildSeedScript). The
+  // server can do that work ONCE, offline: the /shell/ drop
+  // (packages/server-shell-drop, build-tx-drop.mjs) may publish pre-lowered
+  // ES5 bodies keyed by the fnv1a hash of the ORIGINAL source text — the
+  // same txFnv1a the JEL-178 `txc:` cache key already uses. At boot the
+  // shell fetches ${server}/shell/tx-manifest.json in parallel with the
+  // /web/ RTT; each slow-path script then hashes its fetched source and, on
+  // a manifest hit, downloads the pre-lowered body instead of loading Babel
+  // at all. localStorage caching downstream is unchanged, so bodies within
+  // the 256 KB cap short-circuit before even the drop fetch on later boots.
+  //   Safety: a drop body is accepted ONLY if the STRICT post-transpile
+  //   oracle (MODERN_SYNTAX_RE) finds no modern token, so an incompatible
+  //   or corrupt drop entry falls back to the on-device Babel path — never
+  //   to raw modern source reaching the M56 parser. The manifest must also
+  //   carry this shell's exact BABEL_OPTS_KEY so transform semantics (loose
+  //   iterables, JEL-26 assumptions) match what the TV would produce.
+  //   Kill switch: localStorage["jellyfin.shell.txDropDisabled"]="1".
+  //   Counters (QA): window.__shellTxDrop {h:hits, m:manifest-misses,
+  //   r:oracle-rejects, f:drop-fetch-fails}.
+  var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
+  function txDropDisabled() {
+    try {
+      return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function loadTxDropManifest(serverUrl) {
+    // Parks a never-rejecting promise on window.__shellTxDropReady and the
+    // resolved {ok,base,entries,...} state on window.__shellTxDrop (read by
+    // the in-document seed pipelines — window survives document.write).
+    // Non-legacy engines and disabled boots resolve null immediately; a
+    // missing/invalid manifest (today's servers: /shell/ 404) resolves null
+    // after one small bounded fetch, and every consumer falls back to the
+    // on-device transpile path unchanged.
+    if (!isLegacyChromium() || txDropDisabled()) {
+      window.__shellTxDropReady = Promise.resolve(null);
+      return window.__shellTxDropReady;
+    }
+    var p = withBootTimeout(
+      fetch(
+        // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
+        // reliably; a per-fetch unique token forces a real network read so
+        // a freshly regenerated drop is picked up on the next boot.
+        serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
+        { credentials: "omit", cache: "no-store" },
+      ),
+      "tx drop manifest",
+      4000,
+    )
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (mf) {
+        if (!mf || typeof mf !== "object" || !mf.entries) return null;
+        // Different transform semantics (target/loose/assumptions drift
+        // between the drop builder and this shell) could pass the syntax
+        // oracle yet behave differently at runtime; require an exact match.
+        if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
+        var d = {
+          ok: true,
+          base: serverUrl + "/shell/",
+          entries: mf.entries,
+          h: 0,
+          m: 0,
+          r: 0,
+          f: 0,
+        };
+        window.__shellTxDrop = d;
+        return d;
+      })
+      .catch(function () {
+        return null;
+      });
+    window.__shellTxDropReady = p;
+    return p;
+  }
+  function txDropResolve(code) {
+    // Promise<loweredBody|null>. null means "no usable drop body" — the
+    // caller falls back to the Babel slow path. Never rejects.
+    var ready = window.__shellTxDropReady;
+    if (!ready || typeof ready.then !== "function")
+      return Promise.resolve(null);
+    return ready
+      .then(function (d) {
+        if (!d || !d.ok || !d.entries) return null;
+        var rel = d.entries[txFnv1a(String(code || ""))];
+        if (typeof rel !== "string" || !rel) {
+          d.m++;
+          return null;
+        }
+        return fetch(d.base + rel, { credentials: "omit" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (body) {
+            if (
+              typeof body !== "string" ||
+              !body.length ||
+              MODERN_SYNTAX_RE.test(body)
+            ) {
+              d.r++;
+              return null;
+            }
+            d.h++;
+            return body;
+          })
+          .catch(function () {
+            d.f++;
+            return null;
+          });
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
   // JEL-554 (v32): fast pre-check for syntax that Chromium 56 can't parse.
   // babel.transform() takes ~50–200 ms per plugin on a 2019 Q60R panel; with
   // 30–50 plugins that's the bulk of the 25 s post-shellBoot gap. Many
@@ -3229,9 +3394,12 @@
           } catch (_) {}
           var next = prev;
           if ((c.scriptsFound || 0) > 0) {
+            // JEL-621: a script served by the pre-lowered drop needed no
+            // Babel either — count it toward full coverage so drop-covered
+            // servers reach streak>=2 and stop the eager babel preload.
             if (
               (c.babelLazyTriggered || 0) === 0 &&
-              (c.cachedHits || 0) === c.scriptsFound
+              (c.cachedHits || 0) + (c.txDropHits || 0) === c.scriptsFound
             ) {
               next = prev + 1;
             } else {
@@ -3309,6 +3477,7 @@
     counts.fastPath = 0;
     counts.babelLazyTriggered = 0;
     counts.pluginPrefetchAdopted = 0;
+    counts.txDropHits = 0;
     // JEL-1654: record plugin <script src> URLs for next-boot prefetch.
     // Mirrors the JEL-1289 bundle-URL pattern: index.html head IIFE will
     // kick off these fetches in parallel with shell.min.js parse + babel
@@ -3573,62 +3742,91 @@
               shellLog("fast-path+inlined", url, gatedRaw ? "(jq-gated)" : "");
               return;
             }
-            // JEL-1034 (v53): slow path triggers lazy babel load.
-            counts.babelLazyTriggered++;
-            return ensureBabelReady().then(function (ready) {
-              if (!ready) {
-                counts.transpileFailed++;
-                // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
-                // leaving the raw external <script src> would let un-transpiled
-                // `?.`/`??` reach the M63 engine — a SyntaxError that kills the
-                // ENTIRE script (e.g. the whole concatenated JS-Injector
-                // public.js). Drop the src so it can't execute raw;
-                // markBabelNeeded primes babel for the next boot.
-                neutralizeUntranspiled(s, url);
-                try {
-                  console.warn(
-                    "shell: babel not available, dropped untranspiled",
-                    url,
-                  );
-                } catch (_) {}
+            // JEL-621: pre-lowered drop attempt before the Babel slow path.
+            // On a manifest hit the server already ran this exact transform
+            // offline — inline the drop body (same jq gate + tx-cache write
+            // as the Babel path) and never touch Babel for this script.
+            return txDropResolve(code).then(function (dropped) {
+              if (dropped != null) {
+                s.removeAttribute("src");
+                s.removeAttribute("defer");
+                s.removeAttribute("async");
+                s.removeAttribute("type");
+                var gatedD = needsJQueryGate(dropped);
+                var bodyD = gatedD ? wrapForJQuery(dropped) : dropped;
+                s.textContent = bodyD;
+                s.setAttribute("data-shell-transpiled-from", url);
+                s.setAttribute("data-shell-tx-drop", "1");
+                if (gatedD) s.setAttribute("data-shell-jquery-gated", "1");
+                txSetStatic(ck, bodyD);
+                // JEL-618 x JEL-621: the drop already carries the transpiled
+                // JSI-channel body, so seed the channel-body cache here too —
+                // otherwise a drop hit would bypass the next-boot fast splice.
+                if (isJsiChannelTag) jsiChannelCacheSet(bodyD);
+                counts.transpiled++;
+                counts.txDropHits++;
+                shellLog("tx-drop+inlined", url, gatedD ? "(jq-gated)" : "");
                 return;
               }
-              counts.babel = true;
-              var out = babelTranspile(code);
-              if (out == null) {
-                counts.transpileFailed++;
-                // JEL-216: same fail-safe for a transform that threw.
-                neutralizeUntranspiled(s, url);
-                return;
-              }
-              counts.transpiled++;
-              // Inline the transpiled code instead of swapping `src`
-              // to a blob: URL. Two reasons (JEL-401 follow-up):
-              //   1. Chromium 56's document.open()/document.write()
-              //      handoff can invalidate Blob URL bindings created
-              //      on the prior document, so <script src="blob:...">
-              //      resolves to about:blank and the plugin silently
-              //      never executes.
-              //   2. The default Tizen widget CSP (`default-src 'self'`)
-              //      blocks `blob:` and `data:` script sources unless
-              //      the widget opts in, which we don't.
-              // Inline scripts execute at parse time; defer/async on
-              // the original tag are dropped, but server plugins are
-              // typically self-contained DOM/CSS injectors and
-              // tolerate earlier execution. Original src is preserved
-              // on a data attribute for diagnostics.
-              s.removeAttribute("src");
-              s.removeAttribute("defer");
-              s.removeAttribute("async");
-              s.removeAttribute("type");
-              var gated = needsJQueryGate(out);
-              var body = gated ? wrapForJQuery(out) : out;
-              s.textContent = body;
-              s.setAttribute("data-shell-transpiled-from", url);
-              if (gated) s.setAttribute("data-shell-jquery-gated", "1");
-              txSetStatic(ck, body);
-              if (isJsiChannelTag) jsiChannelCacheSet(body);
-              shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
+              // JEL-1034 (v53): slow path triggers lazy babel load.
+              counts.babelLazyTriggered++;
+              return ensureBabelReady().then(function (ready) {
+                if (!ready) {
+                  counts.transpileFailed++;
+                  // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+                  // leaving the raw external <script src> would let un-transpiled
+                  // `?.`/`??` reach the M63 engine — a SyntaxError that kills the
+                  // ENTIRE script (e.g. the whole concatenated JS-Injector
+                  // public.js). Drop the src so it can't execute raw;
+                  // markBabelNeeded primes babel for the next boot.
+                  neutralizeUntranspiled(s, url);
+                  try {
+                    console.warn(
+                      "shell: babel not available, dropped untranspiled",
+                      url,
+                    );
+                  } catch (_) {}
+                  return;
+                }
+                counts.babel = true;
+                var out = babelTranspile(code);
+                if (out == null) {
+                  counts.transpileFailed++;
+                  // JEL-216: same fail-safe for a transform that threw.
+                  neutralizeUntranspiled(s, url);
+                  return;
+                }
+                counts.transpiled++;
+                // Inline the transpiled code instead of swapping `src`
+                // to a blob: URL. Two reasons (JEL-401 follow-up):
+                //   1. Chromium 56's document.open()/document.write()
+                //      handoff can invalidate Blob URL bindings created
+                //      on the prior document, so <script src="blob:...">
+                //      resolves to about:blank and the plugin silently
+                //      never executes.
+                //   2. The default Tizen widget CSP (`default-src 'self'`)
+                //      blocks `blob:` and `data:` script sources unless
+                //      the widget opts in, which we don't.
+                // Inline scripts execute at parse time; defer/async on
+                // the original tag are dropped, but server plugins are
+                // typically self-contained DOM/CSS injectors and
+                // tolerate earlier execution. Original src is preserved
+                // on a data attribute for diagnostics.
+                s.removeAttribute("src");
+                s.removeAttribute("defer");
+                s.removeAttribute("async");
+                s.removeAttribute("type");
+                var gated = needsJQueryGate(out);
+                var body = gated ? wrapForJQuery(out) : out;
+                s.textContent = body;
+                s.setAttribute("data-shell-transpiled-from", url);
+                if (gated) s.setAttribute("data-shell-jquery-gated", "1");
+                txSetStatic(ck, body);
+                // JEL-618: cache the transpiled JSI-channel body for the
+                // next-boot fast-path splice (mirrors the fast-path/drop paths).
+                if (isJsiChannelTag) jsiChannelCacheSet(body);
+                shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
+              });
             });
           })
           .catch(function (e) {
@@ -3645,22 +3843,34 @@
         counts.fastPath++;
         return null;
       }
-      // JEL-1034 (v53): slow path triggers lazy babel load.
-      counts.babelLazyTriggered++;
-      return ensureBabelReady().then(function (ready) {
-        if (!ready) {
-          try {
-            console.warn("shell: babel not available, skip inline transpile");
-          } catch (_) {}
+      // JEL-621: pre-lowered drop attempt before the Babel slow path —
+      // inline bodies hash the same way as fetched external sources.
+      return txDropResolve(content).then(function (droppedInline) {
+        if (droppedInline != null) {
+          s.textContent = droppedInline;
+          s.setAttribute("data-shell-transpiled-inline", "1");
+          s.setAttribute("data-shell-tx-drop", "1");
+          counts.txDropHits++;
+          shellLog("tx-drop inline script");
           return;
         }
-        counts.babel = true;
-        var transpiled = babelTranspile(content);
-        if (transpiled != null && transpiled !== content) {
-          s.textContent = transpiled;
-          s.setAttribute("data-shell-transpiled-inline", "1");
-          shellLog("transpiled inline script");
-        }
+        // JEL-1034 (v53): slow path triggers lazy babel load.
+        counts.babelLazyTriggered++;
+        return ensureBabelReady().then(function (ready) {
+          if (!ready) {
+            try {
+              console.warn("shell: babel not available, skip inline transpile");
+            } catch (_) {}
+            return;
+          }
+          counts.babel = true;
+          var transpiled = babelTranspile(content);
+          if (transpiled != null && transpiled !== content) {
+            s.textContent = transpiled;
+            s.setAttribute("data-shell-transpiled-inline", "1");
+            shellLog("transpiled inline script");
+          }
+        });
       });
     });
     return Promise.all(jobs);
@@ -4413,6 +4623,12 @@
   }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/";
+    // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
+    // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
+    // without a /shell/ drop and every consumer falls back to Babel.
+    try {
+      loadTxDropManifest(serverUrl);
+    } catch (_) {}
     // JEL-1034 (v53): speculative babel prime, flag-gated.
     // The lazy loader is call-site triggered (transpileLegacyScriptsInner
     // slow path), but if first transpile-needed plugin lands before

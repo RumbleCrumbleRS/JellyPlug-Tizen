@@ -49,7 +49,10 @@ function check(name, cond, detail) {
   }
 }
 
-// Brace-match a `function NAME(...) {...}` declaration, skipping string bodies.
+// Brace-match a `function NAME(...) {...}` declaration, skipping string
+// bodies AND comments (JEL-621: an apostrophe inside a `//` comment — e.g.
+// "isn't" — previously opened a phantom quote and the match ran past the
+// real close brace; it only ever worked by byte-layout luck).
 function extractFunction(src, name, file) {
   const start = src.indexOf("function " + name);
   if (start === -1) throw new Error(`no function ${name} in ${file}`);
@@ -64,6 +67,17 @@ function extractFunction(src, name, file) {
         continue;
       }
       if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      i = src.indexOf("\n", i);
+      if (i === -1) break;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i = src.indexOf("*/", i + 2);
+      if (i === -1) break;
+      i += 1;
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {

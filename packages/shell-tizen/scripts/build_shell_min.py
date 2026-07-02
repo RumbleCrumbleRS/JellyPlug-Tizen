@@ -89,6 +89,11 @@ SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
 # meaningful drift signal (pre-JEL-625 this floor applied to shell.min.js).
+#
+# JEL-621 (pre-lowered transpile drop: manifest loader + txDropResolve + seed
+# __txDropGet/__txResolve, mirrored in boot-shell) grew the minified base by
+# ~1 KB more; it fits comfortably under the JEL-625 cap, so no further raise
+# was needed — this ticket lands second and keeps the larger 147456 cap.
 MIN_JEL_LINES = 80
 
 # Prefer the lockfile-pinned workspace install (integrity-checked by pnpm)
