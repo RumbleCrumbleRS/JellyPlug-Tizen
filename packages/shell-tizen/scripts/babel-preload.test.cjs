@@ -355,6 +355,9 @@ console.log("\n--- D: M63 second boot, babelUnusedStreak>=2 (soft-skip) ---");
   bootHead(boot, 5);
   check("soft-skip: no preload link", !boot.preloadLink());
   check("soft-skip: __shellBabelPreload stays 0", boot.window.__shellBabelPreload === 0);
+  // JEL-620: the JEL-1973 step-3 eager kick honors the same soft-skip — a
+  // warm fully-tx-cached boot must not fetch babel.min.js at all.
+  check("soft-skip: no eager babel <script> kick either", !boot.babelScriptEl);
   // streak below threshold still preloads
   const boot1 = makeBoot({
     ua: UA_M63,
@@ -362,6 +365,7 @@ console.log("\n--- D: M63 second boot, babelUnusedStreak>=2 (soft-skip) ---");
   });
   bootHead(boot1, 5);
   check("streak=1 (<2): preload still fires", !!boot1.preloadLink());
+  check("streak=1 (<2): eager babel <script> kick still fires", !!boot1.babelScriptEl);
 }
 
 // =============================================================================

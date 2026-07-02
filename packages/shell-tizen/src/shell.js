@@ -2866,11 +2866,28 @@
       // snippets self-defer (window.onload / MutationObserver) for ApiClient
       // and rendered DOM, so document-order execution is safe.
       doc.body.appendChild(s);
-      // JEL-216: an active channel on a legacy engine guarantees a transpile is
-      // needed; kick the babel load now (idempotent cached promise) so it isn't
-      // started lazily inside the pre-write critical path where a cold parse can
-      // lose the give-up race and let raw `?.`/`??` reach the engine.
-      if (isLegacyChromium() && typeof window.__ensureBabel === "function")
+      // JEL-216: an active channel on a legacy engine used to GUARANTEE a
+      // transpile; kick the babel load now (idempotent cached promise) so it
+      // isn't started lazily inside the pre-write critical path where a cold
+      // parse can lose the give-up race and let raw `?.`/`??` reach the engine.
+      // JEL-620: since the channel body routes through the content-addressed
+      // tx-cache (JEL-178/JEL-618), a warm boot no longer needs Babel for it —
+      // honor the JEL-1984 unused-streak soft-skip here too. streak >= 2 means
+      // the last two full passes (channel included) were cache-covered; on a
+      // genuine miss the per-script ensureBabelReady path still loads Babel
+      // and the pass awaits it, and the miss resets the streak so the next
+      // boot kicks eagerly again.
+      var jsiStreakSkip = false;
+      try {
+        jsiStreakSkip =
+          (parseInt(localStorage.getItem(BABEL_UNUSED_STREAK_KEY) || "0", 10) ||
+            0) >= 2;
+      } catch (_) {}
+      if (
+        isLegacyChromium() &&
+        !jsiStreakSkip &&
+        typeof window.__ensureBabel === "function"
+      )
         try {
           window.__ensureBabel();
         } catch (_) {}

@@ -138,6 +138,14 @@ function loadChannel(file) {
     'var JSI_CHANNEL_DISABLED_KEY = "jellyfin.shell.jsiChannelDisabled";\n' +
     'var JSI_CHANNEL_PATH_KEY = "jellyfin.shell.jsiChannelPath";\n' +
     'var JSI_PUBLIC_PATH = "/JavaScriptInjector/public.js";\n' +
+    // JEL-620: the channel's eager babel kick (JEL-216) honours the JEL-1984
+    // unused-streak soft-skip. Stub the legacy probe true and spy on
+    // window.__ensureBabel so the gate is functionally testable.
+    'var BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak";\n' +
+    "function isLegacyChromium() { return true; }\n" +
+    "globalThis.__babelKicks = 0;\n" +
+    "globalThis.window = globalThis;\n" +
+    "globalThis.__ensureBabel = function () { globalThis.__babelKicks++; };\n" +
     "globalThis.__inject = injectJsInjectorChannel;\n" +
     "globalThis.__disabled = jsiChannelDisabled;\n" +
     "globalThis.__path = jsiChannelPath;\n";
@@ -159,6 +167,7 @@ function loadChannel(file) {
     disabled: sandbox.__disabled,
     path: sandbox.__path,
     store,
+    kicks: () => sandbox.__babelKicks,
   };
 }
 
@@ -273,6 +282,33 @@ for (const [label, file] of [
     m.path() === "/JavaScriptInjector/public.js",
   );
   delete m.store["jellyfin.shell.jsiChannelPath"];
+
+  // Case 6 (JEL-620): the JEL-216 eager babel kick honours the JEL-1984
+  // unused-streak soft-skip — a warm fully-tx-cached boot (streak >= 2) must
+  // not start the babel.min.js fetch just because the channel is active. The
+  // tag is still injected either way (a miss lazy-loads via ensureBabelReady).
+  m.store["jellyfin.shell.legacy.babelUnusedStreak"] = "2";
+  doc = makeDoc([]);
+  const kicksBefore = m.kicks();
+  m.inject(doc, SERVER);
+  check(
+    label + ": streak>=2 — channel tag still injected",
+    doc.__scripts.length === 1,
+  );
+  check(
+    label + ": streak>=2 — eager babel kick soft-skipped",
+    m.kicks() === kicksBefore,
+    "kicks went " + kicksBefore + " -> " + m.kicks(),
+  );
+  m.store["jellyfin.shell.legacy.babelUnusedStreak"] = "1";
+  doc = makeDoc([]);
+  m.inject(doc, SERVER);
+  check(
+    label + ": streak<2 — eager babel kick still fires",
+    m.kicks() === kicksBefore + 1,
+    "kicks went " + kicksBefore + " -> " + m.kicks(),
+  );
+  delete m.store["jellyfin.shell.legacy.babelUnusedStreak"];
 }
 
 // Source-level wiring assertions across both shells.
