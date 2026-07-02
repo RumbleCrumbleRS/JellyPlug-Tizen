@@ -34,7 +34,7 @@
     BABEL_OPTS_KEY =
       "presets:[[env,{targets:{chrome:56},modules:false,loose:true}]];sourceType:script;compact:true;comments:false",
     BABEL_FPR =
-      "2451554:2166756e6374696f6e2865297b696628766f696420303d3d3d652e70726f6365:6973262628676c6f62616c546869732e426162656c3d6a62292c6a627d28293b";
+      "2091715:2f2a20626162656c2e6d696e2e6a7320e28094204a454c2d36323020736c696d:303b4c39652e426162656c3d74493b766172206147653d74493b7d2928293b0a";
   function txFnv1a(s) {
     for (var h = 2166136261, i = 0; i < s.length; i++)
       ((h ^= s.charCodeAt(i)),
@@ -2418,13 +2418,30 @@
         (channelPath.indexOf("?") < 0 ? "?_jsi=1" : "&_jsi=1")),
         s.setAttribute("data-shell-jsi-channel", "1"),
         doc.body.appendChild(s));
-      // JEL-216: an active channel on a legacy engine GUARANTEES a transpile is
-      // needed (the channel body is the only place a user can introduce
+      // JEL-216: an active channel on a legacy engine used to GUARANTEE a
+      // transpile (the channel body is the only place a user can introduce
       // `?.`/`??`). Kick the babel load now (idempotent, cached promise) so it
       // is not lazily started inside the pre-write critical path where a cold
-      // 2.4 MB parse on a slow TV can lose the give-up race and let raw modern
+      // parse on a slow TV can lose the give-up race and let raw modern
       // syntax through. Fire-and-forget; transpileLegacyScripts still awaits it.
-      if (isLegacyChromium() && typeof window.__ensureBabel == "function")
+      // JEL-620: since the channel body routes through the content-addressed
+      // tx-cache (JEL-178/JEL-618), a warm boot no longer needs Babel for it —
+      // honor the JEL-1984 unused-streak soft-skip here too. streak >= 2 means
+      // the last two full passes (channel included) were cache-covered; on a
+      // genuine miss the per-script ensureBabelReady path still loads Babel
+      // and the pass awaits it, and the miss resets the streak so the next
+      // boot kicks eagerly again.
+      var jsiStreakSkip = false;
+      try {
+        jsiStreakSkip =
+          (parseInt(localStorage.getItem(BABEL_UNUSED_STREAK_KEY) || "0", 10) ||
+            0) >= 2;
+      } catch (_) {}
+      if (
+        isLegacyChromium() &&
+        !jsiStreakSkip &&
+        typeof window.__ensureBabel == "function"
+      )
         try {
           window.__ensureBabel();
         } catch (_) {}
