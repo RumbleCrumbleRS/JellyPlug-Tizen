@@ -4,5 +4,6 @@
   "filename": "JellyPlug.wgt",
   "sha256": "3409b3e4994a1d25353c715b03ec5f3b5a83e42569b4edb7a074ec93651e3c1f",
   "sizeBytes": 590261,
-  "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required. Retail build; the JellyPlug-Debug.wgt asset on the same release forces both diagnostic overlays on."
+  "notes": "Install via Samsung Device Manager GUI on a fresh TV; no sdb shell required. Retail build; the JellyPlug-Debug.wgt asset on the same release forces both diagnostic overlays on.",
+  "provenance": "sha256/sizeBytes describe the release-pipeline-emitted .wgt (bootstrap-sign.yml, bootstrap-v* tag); the binary ships as a GitHub Release asset and is never committed."
 }

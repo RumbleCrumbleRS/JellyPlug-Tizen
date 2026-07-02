@@ -44,7 +44,11 @@ Outputs:
   — the seed is a build-time transform.
 - `manifest.bootstrap.json` — sha256 + size of the **retail** WGT, for
   advertising in `${server}/shell/` bootstrap-install flows. The `--debug`
-  build never overwrites it.
+  build never overwrites it. The `.wgt` it references is **not committed**:
+  it is emitted by the release pipeline (`bootstrap-sign.yml`, `bootstrap-v*`
+  tag) and shipped only as a GitHub Release asset, so the committed manifest's
+  sha256 deliberately points at a binary that exists nowhere in the repo
+  (JEL-628).
 
 The release pipeline (`.github/workflows/bootstrap-sign.yml`, tag
 `bootstrap-v*`) signs **both** variants and attaches them to one GitHub

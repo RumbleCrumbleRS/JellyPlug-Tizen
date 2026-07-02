@@ -36,4 +36,26 @@ if matches=$(git grep -nIiE "$PATTERN" -- . ':(exclude)tooling/ci/check-no-perso
   exit 1
 fi
 
+# JEL-628 second check — no hardcoded RFC1918 endpoint URLs in SHIPPING source
+# (packages/*/src/**, which includes the deployed min blobs). The JEL-139 scope
+# note above still holds for the repo at large (LAN IPs in test fixtures and
+# docs reveal nothing routable), but a `http://192.168.x.x` DEFAULT baked into
+# shipping code is operator-environment residue in a public repo AND a footgun:
+# a fleet TV would silently POST telemetry at some stranger's LAN address.
+# Endpoints in shipping code must come from localStorage/config at runtime
+# (e.g. `jellyfin.qa.beaconUrl`, see qa-beacon.js). Test fixtures under
+# scripts/ stay exempt.
+LAN_URL_PATTERN='https?://(192\.168\.|10\.[0-9]+\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+
+if matches=$(git grep -nIiE "$LAN_URL_PATTERN" -- ':(glob)packages/*/src/**' 2>/dev/null); then
+  echo "ERROR: hardcoded LAN (RFC1918) endpoint URL found in shipping source:" >&2
+  echo "$matches" >&2
+  echo >&2
+  echo "Shipping code must read endpoints from localStorage/config at runtime" >&2
+  echo "(see qa-beacon.js + jellyfin.qa.beaconUrl, JEL-628). Test fixtures" >&2
+  echo "belong under a package's scripts/ dir, which this check exempts." >&2
+  exit 1
+fi
+
 echo "OK: no personal / dynamic-DNS endpoints in tracked files."
+echo "OK: no hardcoded LAN endpoint URLs in shipping source (packages/*/src)."

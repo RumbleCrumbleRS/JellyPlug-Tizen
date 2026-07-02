@@ -171,9 +171,9 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "qaBeaconBody",
     class: "hsb-feature",
-    why: "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body",
+    why: "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body (JEL-628: no baked-in default beacon URL; jellyfin.qa.beaconUrl required)",
     retail: "41eab6ce5e73ed72",
-    boot: "7d80607cd31d4d23",
+    boot: "c233fabfa8e7bfd1",
   },
   {
     name: "txKey",
