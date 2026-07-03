@@ -113,7 +113,15 @@ const EXPECTED_MIRRORED = [
   "injectBootProgress",
   "jsiChannelDisabled",
   "jsiChannelPath",
+  "jsiChannelMaxAge",
+  "jsiChannelCacheClear",
+  "jsiChannelCacheGet",
+  "jsiChannelCacheSet",
   "injectJsInjectorChannel",
+  "txKey",
+  "pluginFetchCacheDisabled",
+  "txQueryClass",
+  "txRecordQuerySlot",
   "txGetStatic",
   "txSetStatic",
   "txDropDisabled",
@@ -132,7 +140,7 @@ const EXPECTED_MIRRORED = [
   "showError",
   "injectConnectStylesheet",
   "attachConnectForm",
-  "bootstrap",
+  "bootstrap"
 ];
 
 // Functions that exist in both shells but legitimately differ. Every entry
@@ -144,110 +152,96 @@ const EXPECTED_MIRRORED = [
 // prove it, "drift" = KNOWN unreconciled divergence with a ticket.
 const INTENTIONAL_DIVERGENCES = [
   {
-    name: "writeWebIndexCache",
-    class: "cosmetic",
-    why: "retail `!(indexOf(...) >= 0)` vs boot `indexOf(...) < 0` — semantically equal (indexOf never NaN) but esbuild rightly won't rewrite `!(x>=0)` to `x<0`; align text when either side is next touched",
-    retail: "09ea8abe5fb3c8ff",
-    boot: "ebedff5fe1cedae0",
+    "name": "writeWebIndexCache",
+    "class": "cosmetic",
+    "why": "retail `!(indexOf(...) >= 0)` vs boot `indexOf(...) < 0` — semantically equal (indexOf never NaN) but esbuild rightly won't rewrite `!(x>=0)` to `x<0`; align text when either side is next touched",
+    "retail": "09ea8abe5fb3c8ff",
+    "boot": "ebedff5fe1cedae0"
   },
   {
-    name: "resolveDeviceName",
-    class: "cosmetic",
-    why: "retail wraps assignment in `(x = v, x)` sequence where boot returns the bare assignment expression — same value, different tokens; align text when either side is next touched",
-    retail: "96b484d0dddbb667",
-    boot: "e29de17205594eed",
+    "name": "resolveDeviceName",
+    "class": "cosmetic",
+    "why": "retail wraps assignment in `(x = v, x)` sequence where boot returns the bare assignment expression — same value, different tokens; align text when either side is next touched",
+    "retail": "96b484d0dddbb667",
+    "boot": "e29de17205594eed"
   },
   {
-    name: "buildSeedScript",
-    class: "hsb-feature",
-    why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    // Re-pinned JEL-621: tx-drop resolver (__txResolve/__txDropGet) seeded into
-    // both shells; divergence class unchanged (still hsb-feature).
-    retail: "d1502ef55fac7fee",
-    boot: "e85e83a832f7efcf",
+    "name": "buildSeedScript",
+    "class": "hsb-feature",
+    "why": "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
+    "retail": "8a51ddfae2783272",
+    "boot": "1a9ace47f1de296d"
   },
   {
-    name: "buildDiagSeedScript",
-    class: "hsb-feature",
-    why: "boot HUD adds VB:/CSS: rows + pbl counter for its vendors-bundle/stylesheet caches, which retail does not have",
-    retail: "47af3c01f68d0843",
-    boot: "0c874c1d71f7bece",
+    "name": "buildDiagSeedScript",
+    "class": "hsb-feature",
+    "why": "boot HUD adds VB:/CSS: rows + pbl counter for its vendors-bundle/stylesheet caches, which retail does not have",
+    "retail": "47af3c01f68d0843",
+    "boot": "0c874c1d71f7bece"
   },
   {
-    name: "qaBeaconBody",
-    class: "hsb-feature",
-    why: "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body (JEL-628: no baked-in default beacon URL; jellyfin.qa.beaconUrl required)",
-    retail: "41eab6ce5e73ed72",
-    boot: "c233fabfa8e7bfd1",
+    "name": "qaBeaconBody",
+    "class": "hsb-feature",
+    "why": "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body (JEL-628: no baked-in default beacon URL; jellyfin.qa.beaconUrl required)",
+    "retail": "41eab6ce5e73ed72",
+    "boot": "c233fabfa8e7bfd1"
   },
   {
-    name: "txKey",
-    class: "drift",
-    why: "KNOWN DRIFT (JEL-630): retail strips only timestamp-like cache-buster params (JEL-178 PR#5); boot truncates the whole query string — and diverges from its own seeded __txKey which HAS the retail logic. Reconcile, then move to EXPECTED_MIRRORED",
-    retail: "3bb0286276a6597e",
-    boot: "032334d85af6da6a",
+    "name": "transpileLegacyScripts",
+    "class": "hsb-feature",
+    "why": "fast-path stability check counts boot-only pluginBabelLazy vs retail babelLazyTriggered — entangled with HSB lazy-babel; unify in shell-core extraction",
+    "retail": "59a159693c71a78d",
+    "boot": "4331928eaf0e5289"
   },
   {
-    name: "transpileLegacyScripts",
-    class: "hsb-feature",
-    why: "fast-path stability check counts boot-only pluginBabelLazy vs retail babelLazyTriggered — entangled with HSB lazy-babel; unify in shell-core extraction",
-    retail: "59a159693c71a78d",
-    boot: "4331928eaf0e5289",
+    "name": "transpileLegacyScriptsInner",
+    "class": "hsb-feature",
+    "why": "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
+    "retail": "a54675d8d5761528",
+    "boot": "f61a753964cad2e7"
   },
   {
-    name: "transpileLegacyScriptsInner",
-    class: "hsb-feature",
-    why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    // Re-pinned JEL-618 (channel-cache walker skip + record hooks) and
-    // JEL-621 (tx-drop resolve path + drop-hit channel-cache seed) — both
-    // landed in BOTH shells; divergence class unchanged.
-    retail: "97128e7cd7493763",
-    boot: "24ac3385828aefc3",
+    "name": "patchPlaybackBundles",
+    "class": "hsb-feature",
+    "why": "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
+    "retail": "62a5ed8218434b0f",
+    "boot": "fda5e5504252e1c3"
   },
   {
-    name: "patchPlaybackBundles",
-    class: "hsb-feature",
-    why: "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
-    retail: "62a5ed8218434b0f",
-    boot: "fda5e5504252e1c3",
+    "name": "armDeferWatchdog",
+    "class": "drift",
+    "why": "KNOWN DRIFT (JEL-631): boot skips re-injection when alreadyRan() (__shellRegElCalls>0) — the JEL-137-era double-run guard; retail never got it. Port to retail, then move to EXPECTED_MIRRORED",
+    "retail": "a051c37dd3e70bd8",
+    "boot": "7f7b424c847affe3"
   },
   {
-    name: "armDeferWatchdog",
-    class: "drift",
-    why: "KNOWN DRIFT (JEL-631): boot skips re-injection when alreadyRan() (__shellRegElCalls>0) — the JEL-137-era double-run guard; retail never got it. Port to retail, then move to EXPECTED_MIRRORED",
-    retail: "a051c37dd3e70bd8",
-    boot: "7f7b424c847affe3",
+    "name": "reinject",
+    "class": "drift",
+    "why": "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
+    "retail": "33e76bf4c58cff25",
+    "boot": "840b717cc5375e5a"
   },
   {
-    name: "reinject",
-    class: "drift",
-    why: "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    retail: "33e76bf4c58cff25",
-    boot: "840b717cc5375e5a",
+    "name": "tick",
+    "class": "drift",
+    "why": "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
+    "retail": "94bdcdfcea25d776",
+    "boot": "00442a87a468161b"
   },
   {
-    name: "tick",
-    class: "drift",
-    why: "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    retail: "94bdcdfcea25d776",
-    boot: "00442a87a468161b",
+    "name": "maybeStringFastPath",
+    "class": "hsb-feature",
+    "why": "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
+    "retail": "bbd18216a03986be",
+    "boot": "4d4748d7ce7f7f5b"
   },
   {
-    name: "maybeStringFastPath",
-    class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
-    // Re-pinned JEL-618 (cached-channel-body splice landed in BOTH
-    // shells; divergence class unchanged).
-    retail: "bbd18216a03986be",
-    boot: "9323bb152876f6b2",
-  },
-  {
-    name: "loadRemoteWebClient",
-    class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
-    retail: "b2abcabb38fb60b0",
-    boot: "0e14ea9af3a9ce82",
-  },
+    "name": "loadRemoteWebClient",
+    "class": "hsb-feature",
+    "why": "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
+    "retail": "b2abcabb38fb60b0",
+    "boot": "0e14ea9af3a9ce82"
+  }
 ];
 
 // Transpiler-critical consts marked "lockstep" in source comments. Compared
