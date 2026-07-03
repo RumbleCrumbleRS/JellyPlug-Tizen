@@ -3,6 +3,60 @@
   try {
     window.__shellT0 || (window.__shellT0 = Date.now());
   } catch (_) {}
+  // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
+  // deltas (ms from __shellT0) to localStorage["jellyfin.shell.bootPhases"]
+  // (last 10 boots) so rehaul baselines are readable on-device. Record is
+  // created at IIFE entry so a boot that dies mid-way still leaves a partial
+  // entry; marks come from the shell body (connect) and the diag seed in the
+  // remote document (dcl/api/login/home/card) — window survives the
+  // document.write handoff. Kill switch:
+  // localStorage["jellyfin.shell.bootPhasesDisabled"]="1".
+  try {
+    (function () {
+      if (window.__shellPhase) return;
+      var t0 = window.__shellT0 || Date.now();
+      var RK = "jellyfin.shell.bootPhases";
+      var off = false;
+      try {
+        off = localStorage.getItem("jellyfin.shell.bootPhasesDisabled") === "1";
+      } catch (_) {}
+      var nav = 0;
+      try {
+        var ns =
+          window.performance &&
+          performance.timing &&
+          performance.timing.navigationStart;
+        if (ns && ns > 0 && ns <= t0) nav = t0 - ns;
+      } catch (_) {}
+      var rec = { ts: t0, nav: nav, ver: "2.0.18" };
+      window.__shellPhases = rec;
+      function save() {
+        if (off) return;
+        try {
+          var r;
+          try {
+            r = JSON.parse(localStorage.getItem(RK) || "[]");
+          } catch (_) {
+            r = null;
+          }
+          if (!r || !r.push) r = [];
+          if (r.length && r[r.length - 1] && r[r.length - 1].ts === rec.ts) {
+            r[r.length - 1] = rec;
+          } else {
+            r.push(rec);
+          }
+          while (r.length > 10) r.shift();
+          localStorage.setItem(RK, JSON.stringify(r));
+        } catch (_) {}
+      }
+      window.__shellPhase = function (k) {
+        if (rec[k]) return;
+        rec[k] = Date.now() - t0;
+        save();
+      };
+      save();
+    })();
+  } catch (_) {}
   var SERVER_URL_KEY = "jellyfin.shell.serverUrl",
     hasTizen = typeof window.tizen != "undefined",
     hasWebapis = typeof window.webapis != "undefined",
@@ -2040,13 +2094,18 @@
       "if(window.__shellDiag)return;",
       "var MAX=30;",
       'window.__shellDiag={errors:[],warns:[],stats:{ua:(navigator.userAgent||"").slice(0,80),scriptsFound:0,transpiled:0,transpileFailed:0,skipped:0}};',
-      "window.__shellT={t0:(window.__shellT0||Date.now()),dcl:0,api:0,card:0};",
-      "function __tm(k){if(!window.__shellT[k])window.__shellT[k]=Date.now()-window.__shellT.t0;}",
+      // JEL-617: connect/login/home phase marks; __tm() forwards into the
+      // boot-phase ring recorder (window.__shellPhase) from IIFE entry.
+      "window.__shellT={t0:(window.__shellT0||Date.now()),dcl:0,api:0,card:0,connect:(window.__shellPhases&&window.__shellPhases.connect)||0,login:0,home:0};",
+      "function __tm(k){if(!window.__shellT[k]){window.__shellT[k]=Date.now()-window.__shellT.t0;try{if(window.__shellPhase)window.__shellPhase(k);}catch(_){}}}",
       'document.addEventListener("DOMContentLoaded",function(){__tm("dcl");});',
       'var __apiPoll=setInterval(function(){if(window.ApiClient){__tm("api");clearInterval(__apiPoll);}},100);',
       "setTimeout(function(){clearInterval(__apiPoll);},30000);",
       'var __cardPoll=setInterval(function(){try{if(document.querySelector(".card")){__tm("card");clearInterval(__cardPoll);}}catch(_){}},200);',
       "setTimeout(function(){clearInterval(__cardPoll);},60000);",
+      // JEL-617: hash-route phase poll (login/home; selectserver=connect).
+      'var __phPoll=setInterval(function(){try{var h=String(location.hash||""),T=window.__shellT;if(!T.connect&&h.indexOf("selectserver")!==-1)__tm("connect");if(!T.login&&h.indexOf("login")!==-1)__tm("login");if(!T.home&&h.indexOf("home")!==-1)__tm("home");if(T.home&&T.card)clearInterval(__phPoll);}catch(_){}},200);',
+      "setTimeout(function(){clearInterval(__phPoll);},180000);",
       'function trimUrl(u){u=String(u||"");var m=/\\/([^\\/?#]+)(\\?|#|$)/.exec(u);return m?m[1]:u.slice(-30);}',
       "function fmt(s){",
       '  if(s==null)return"";',
@@ -2106,7 +2165,9 @@
       '    "BUS:"+(window.__shellBabelUnusedStreak||0)+" bp="+(window.__shellBabelPreload==null?"-":window.__shellBabelPreload)+" be="+(window.__shellBabelEager==null?"-":window.__shellBabelEager)+" sk="+(window.__shellBabelPrimeSkipped||0)+" df="+(window.__shellBabelDeferAppend==null?"-":window.__shellBabelDeferAppend)+" pbl="+((init.pluginBabelLazy)||0)+" bl="+((init.babelLazyTriggered)||0),',
       '    "FP:"+(window.__shellFastPathHits||0)+"/"+(window.__shellFastPathFallbacks||0)+" tx="+(window.__shellFastPathTxInlines||0)+" lb="+(window.__shellFastPathLastBail||"-"),',
       '    "ic="+(window.__shellInterceptCount||0)+" a="+(window.__icAppend||0)+" s="+(window.__icSetter||0)+" sa="+(window.__icSetAttr||0),',
-      '    "t dcl="+(T.dcl||0)+" api="+(T.api||0)+" card="+(T.card||0)+" now="+nowMs,',
+      // JEL-617: cn/lg/hm phase marks + previous boot's ring record.
+      '    "t cn="+(T.connect||0)+" dcl="+(T.dcl||0)+" api="+(T.api||0)+" lg="+(T.login||0)+" hm="+(T.home||0)+" card="+(T.card||0)+" now="+nowMs,',
+      '    (function(){try{var r=JSON.parse(localStorage.getItem("jellyfin.shell.bootPhases")||"[]");var p=r.length>1?r[r.length-2]:null;return p?("prev cn="+(p.connect||0)+" dcl="+(p.dcl||0)+" api="+(p.api||0)+" lg="+(p.login||0)+" hm="+(p.home||0)+" card="+(p.card||0)+" nav="+(p.nav||0)):"prev -";}catch(_){return "prev ?";}})(),',
       '    (function(){var dpm=(window.__shellDiag&&window.__shellDiag.pm)||{};var r=dpm.roster||{};var first=(r.names&&r.names[0])||"?";return "pm p="+(window.__shellPMPatched||0)+" c="+(window.__shellCMPatched||0)+" r="+(r.count||0)+"/"+(r.video||0)+" mt="+(window.__shellMTDerived||0)+" gs="+(window.__shellGACAuthSwap||0)+" gf="+(window.__shellGACFallback||0)+" pm="+(window.__shellPluginManager?1:0)+" flv="+(window.__shellForceLoadVideoCount||0)+"/"+(window.__shellForceLoadVideoOK||0)+"/"+(window.__shellForceLoadVideoErr?1:0)+" p0="+first;})(),',
       '    "err="+d.errors.length+" warn="+d.warns.length+" ua="+s.ua.slice(0,40)];',
       "  var es=d.errors.slice(-8);",
@@ -4258,6 +4319,10 @@
     injectConnectStylesheet();
     var rootEl = document.getElementById("boot-root");
     rootEl && (rootEl.style.display = "block");
+    // JEL-617: boot-phase mark — connect form is on-screen.
+    try {
+      window.__shellPhase && window.__shellPhase("connect");
+    } catch (_) {}
     var form = document.getElementById("server-form"),
       input = document.getElementById("server-input");
     if (!form || !input) return;

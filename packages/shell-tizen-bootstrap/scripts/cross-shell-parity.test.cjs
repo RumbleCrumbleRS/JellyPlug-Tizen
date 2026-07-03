@@ -176,8 +176,8 @@ const INTENTIONAL_DIVERGENCES = [
     "name": "buildDiagSeedScript",
     "class": "hsb-feature",
     "why": "boot HUD adds VB:/CSS: rows + pbl counter for its vendors-bundle/stylesheet caches, which retail does not have",
-    "retail": "47af3c01f68d0843",
-    "boot": "0c874c1d71f7bece"
+    "retail": "9f95f0336dd725b3",
+    "boot": "65648377ffff16f9"
   },
   {
     "name": "qaBeaconBody",
