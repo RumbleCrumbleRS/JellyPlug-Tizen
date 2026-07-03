@@ -131,6 +131,10 @@ const EXPECTED_MIRRORED = [
   "neutralizeUntranspiled",
   "ensureBabelReady",
   "buildBundleSourcePatcher",
+  "armDeferWatchdog",
+  "alreadyRan",
+  "reinject",
+  "tick",
   "escAttr",
   "bail",
   "markDocumentWrite",
@@ -206,27 +210,6 @@ const INTENTIONAL_DIVERGENCES = [
     "why": "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
     "retail": "62a5ed8218434b0f",
     "boot": "fda5e5504252e1c3"
-  },
-  {
-    "name": "armDeferWatchdog",
-    "class": "drift",
-    "why": "KNOWN DRIFT (JEL-631): boot skips re-injection when alreadyRan() (__shellRegElCalls>0) — the JEL-137-era double-run guard; retail never got it. Port to retail, then move to EXPECTED_MIRRORED",
-    "retail": "a051c37dd3e70bd8",
-    "boot": "7f7b424c847affe3"
-  },
-  {
-    "name": "reinject",
-    "class": "drift",
-    "why": "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    "retail": "33e76bf4c58cff25",
-    "boot": "840b717cc5375e5a"
-  },
-  {
-    "name": "tick",
-    "class": "drift",
-    "why": "nested in armDeferWatchdog — same JEL-631 alreadyRan() drift",
-    "retail": "94bdcdfcea25d776",
-    "boot": "00442a87a468161b"
   },
   {
     "name": "maybeStringFastPath",
