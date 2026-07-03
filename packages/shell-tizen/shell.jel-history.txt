@@ -258,6 +258,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 JEL-1832 v32) defer-script watchdog. Extracted so both the
 *JEL-723 See history above for poll vs blind-timer rationale.
 *JEL-101 JEL-99 ports : raised from 5500. On the failing Tizen 5.0
+*JEL-631 JEL-137 ports guard, lockstep with boot-shell.src.js
 *JEL-137 JEL-99 a partially-executed defer sequence is NOT the
 *JEL-101 JEL-99 ports : drop the original (still-unrun) defer node
 *JEL-101 JEL-99 ports : do NOT treat document.readyState ===

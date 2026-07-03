@@ -237,7 +237,31 @@ check("fast healthy boot is a no-op", () => {
   assert.strictEqual(r.injected.length, 0);
 });
 
-// 5) Regression guard on the SOURCE itself: the bogus readyState trigger must be
+// 5) JEL-631 (JEL-137-era guard): registerElement already ran but ApiClient /
+//    __webpack_require__ never install before the cap (slow boot where the
+//    bundle executed but the late globals are still pending). Re-injecting
+//    would double-run the webpack runtime (black login page) — alreadyRan()
+//    must suppress the rescue entirely.
+check("registerElement-ran boot never re-injects (alreadyRan guard)", () => {
+  const r = runScenario({
+    deferCount: 28,
+    readyState: () => "complete",
+    events: [{ at: 1000, fn: (w) => (w.__shellRegElCalls = 3) }],
+  });
+  assert.strictEqual(
+    r.fired,
+    undefined,
+    "watchdog re-injected despite registerElement having run; reason=" +
+      r.reason,
+  );
+  assert.strictEqual(r.injected.length, 0, "no scripts may be re-injected");
+  assert.ok(
+    r.originals.every((n) => !n._removed),
+    "original defer nodes must be left alone when the bundle already ran",
+  );
+});
+
+// 6) Regression guard on the SOURCE itself: the bogus readyState trigger must be
 //    gone and the cap raised to 20000.
 check("source no longer fires on readyState-complete and cap is 20000", () => {
   assert.ok(
