@@ -6,6 +6,7 @@
   "license": "GPL-2.0-only",
   "scripts": {
     "emit-manifest": "python3 scripts/emit_manifest.py",
-    "test": "node scripts/jsi-minify.test.cjs"
+    "build-tx-drop": "node scripts/build-tx-drop.mjs",
+    "test": "node scripts/tx-drop-build.test.cjs && node scripts/jsi-minify.test.cjs"
   }
 }

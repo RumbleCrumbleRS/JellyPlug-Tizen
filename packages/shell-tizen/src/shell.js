@@ -297,9 +297,9 @@
   //   - 256 KB cap per body (LS quota; current index.html ~50 KB, config
   //     ~5 KB, well within)
   //
-  // Gated by `jellyfin.shell.indexCache` localStorage flag: defaults '0'
-  // (off) so initial QA is opt-in. Set to '1' post-QA parity smoke to
-  // turn on stale-while-revalidate boot.
+  // Gated by `jellyfin.shell.indexCache` localStorage flag: ON by default
+  // (JEL-622 — SWR passed its QA parity soak, so every boot now skips the
+  // pre-document.write /web/ RTT pair). Set '0' to opt out.
   var WEB_INDEX_CACHE_KEY = "jellyfin.shell.webIndexHtml";
   var WEB_CONFIG_CACHE_KEY = "jellyfin.shell.webConfig";
   var WEB_CACHE_VER = "__SHELL_VER__";
@@ -308,7 +308,7 @@
 
   function webCacheEnabled() {
     try {
-      return localStorage.getItem(WEB_CACHE_GATE_KEY) === "1";
+      return localStorage.getItem(WEB_CACHE_GATE_KEY) !== "0";
     } catch (_) {
       return false;
     }
@@ -789,6 +789,33 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JEL-623: boot paint-gate. The cosmetic sweeps this seed installs
+      // (auto-focus 600ms poll, remember-me 300ms poll, YT-iframe cap
+      // sweep + whole-tree MutationObserver, webpack CM/PM walker) used
+      // to arm at document.write handoff and then tick through the whole
+      // 20-40s legacy bundle fetch/parse blackout, competing for the
+      // main thread on Chromium 56 while having nothing to act on (no
+      // jellyfin-web DOM exists yet). This gate is the ONE timer allowed
+      // to run during the blackout: a 500ms setTimeout chain whose
+      // pre-boot tick is a single `typeof window.ApiClient` property
+      // check (no DOM access). Two stages:
+      //   onApi(cb)   — webpack entry completed (window.ApiClient set).
+      //                 Arms the YT-iframe crash-guard sweep: plugins
+      //                 cannot build media-bar DOM before app init, so
+      //                 this loses zero crash coverage (the passive
+      //                 iframe src setter/setAttribute intercepts are
+      //                 armed from t0 regardless).
+      //   onPaint(cb) — first view painted (.card / login form / user
+      //                 picker / quick-connect), or 60 post-api ticks
+      //                 (30s) as a fallback. Arms the cosmetic sweeps
+      //                 and the webpack walker.
+      // Absolute backstop: 240 total ticks (120s, matches the walker's
+      // old noApiClient give-up budget) fires BOTH stages so no feature
+      // can stay dead on a wedged boot. Registration sites fall back to
+      // arming immediately when the gate is absent (defensive, and lets
+      // the per-feature tests lift their IIFEs into bare sandboxes).
+      // Diag: window.__shellPaintGate = {api,fired,why,t,ta}.
+      '  try{(function(){var g={api:0,fired:0,why:"",t:0,ta:0,cbs:[],acbs:[]};window.__shellPaintGate=g;function run(l){var c=l.slice();l.length=0;for(var i=0;i<c.length;i++){try{c[i]();}catch(_){}}}g.onApi=function(cb){if(g.api){try{cb();}catch(_){}}else g.acbs.push(cb);};g.onPaint=function(cb){if(g.fired){try{cb();}catch(_){}}else g.cbs.push(cb);};g.fireApi=function(){if(g.api)return;g.api=1;g.ta=Date.now();run(g.acbs);};g.fire=function(why){g.fireApi();if(g.fired)return;g.fired=1;g.why=why;g.t=Date.now();run(g.cbs);};var ticks=0,dticks=0;function poll(){if(g.fired)return;ticks++;if(ticks>=240){g.fire("giveup");return;}if(!g.api){if(typeof window.ApiClient==="undefined"){setTimeout(poll,500);return;}g.fireApi();}try{if(document.querySelector(".card,.manualLoginForm,.userItemContainer,.btnUseQuickConnect")){g.fire("paint");return;}}catch(_){}dticks++;if(dticks>=60){g.fire("timeout");return;}setTimeout(poll,500);}setTimeout(poll,500);})();}catch(_){}',
       // JEL-132: creds-guard. jellyfin-web 10.11's connection manager
       // (validateAuthentication) nulls UserId/AccessToken on ANY failure of
       // the authenticated GET /System/Info it issues at boot — network blip,
@@ -901,8 +928,14 @@
       //   __shellLastScopeHit (index into scopes() that returned a
       //     target, -1 if none) / __shellLastScopeN (total scopes)
       // HUD row "AF:a/s sc=h/N" added alongside the v58 RS row.
+      // JEL-623: the 600ms proactive poll now arms via
+      // __shellPaintGate.onPaint (first view painted) instead of at seed
+      // time — during the bundle blackout there is nothing to focus and
+      // on warm boots the poll was burning its 24-tick budget against
+      // the splash screen. The keydown rescue listener and the
+      // hashchange/popstate budget bumps stay armed from t0 (passive).
       '  try{localStorage.setItem("layout","tv");}catch(_){}',
-      '  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S=\'a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])\';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;setInterval(function(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;},600);})();}catch(_){}',
+      '  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S=\'a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])\';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;function __afTick(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;}function __armAF(){try{setInterval(__afTick,600);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armAF);}else{__armAF();}})();}catch(_){}',
       // JEL-138: default the login "Remember Me" checkbox to CHECKED.
       // Field report + browser-verified root cause (results-JEL-138.md):
       // jellyfin-web's `enableAutoLogin` localStorage flag is sticky — one
@@ -929,7 +962,11 @@
       // a fresh login form (new document) re-defaults checked = no carryover.
       // Kill switch: localStorage["jellyfin.shell.rememberMeDefaultDisabled"]="1".
       // Diag: window.__shellRememberMeChecks (count of corrective flips).
-      '  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}try{setInterval(nudge,300);}catch(_){}try{document.addEventListener("DOMContentLoaded",nudge,false);}catch(_){}nudge();})();}catch(_){}',
+      // JEL-623: the 300ms nudge poll arms via __shellPaintGate.onPaint
+      // — the paint selector includes .manualLoginForm, so the poll
+      // starts within ~500ms of the login form appearing instead of
+      // ticking through the bundle blackout with no form to nudge.
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}function __armRM(){nudge();try{setInterval(nudge,300);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armRM);}else{__armRM();}})();}catch(_){}',
       // JEL-238 (defense-in-depth for JEL-237): media-bar YouTube-iframe crash
       // guard, baked natively into the shell so it ships in the signed .wgt and
       // survives any JS-Injector config wipe/re-import. The home media-bar
@@ -959,7 +996,14 @@
       // name ships in the .wgt.
       // Kill switch: localStorage["jellyfin.shell.ytIframeCapDisabled"]="1".
       // Diag: window.__shellYtCaps (count of youtube iframes removed).
-      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}})();}catch(_){}',
+      // JEL-623: the sweep (MutationObserver + 400ms interval) arms via
+      // __shellPaintGate.onApi (webpack entry completed) instead of at
+      // seed time; plugins cannot build media-bar DOM before app init,
+      // so crash coverage is unchanged while the whole-tree observer no
+      // longer fires on every splash/boot DOM mutation. The passive
+      // iframe src setter/setAttribute intercepts and the one-shot
+      // cap() stay armed from t0 (essential guard).
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}',
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
@@ -985,6 +1029,10 @@
       "      try{document.body&&document.body.focus&&document.body.focus();}catch(_){}",
       "    }",
       "    function go(){",
+      // JEL-623: the self-test depends on the now-gated 600ms auto-
+      // focus poll; force-fire the paint gate so the harness still
+      // runs on splash / user-picker pages where no card ever paints.
+      '      try{window.__shellPaintGate&&window.__shellPaintGate.fire("selftest");}catch(_){}',
       "      inject();",
       "      window.__shellSelfTestStart=Date.now();",
       '      window.__shellSelfTest={r:"wait",t:0,af:0,sc:-1};',
@@ -1162,6 +1210,34 @@
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
+      // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
+      // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
+      // window.__shellTxDrop (window survives the document.write handoff);
+      // on a hash hit the pre-lowered ES5 body is fetched from the server's
+      // /shell/ drop and Babel is never invoked for that script. Misses and
+      // failures fall back to maybeTranspile unchanged. __txFnv must stay
+      // byte-lockstep with the widget-side txFnv1a (same fnv1a the JEL-178
+      // `txc:` key uses), and __oracleRe with MODERN_SYNTAX_RE_SRC — the
+      // STRICT post-transpile oracle, NOT the broader __modernRe pre-check
+      // above, which would false-positive on legal ES2015 `, ...x` array/
+      // call spread that preset-env legitimately leaves in lowered output.
+      "    var __oracleRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      "    function __txFnv(s){var h=0x811c9dc5;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;}return h.toString(36);}",
+      "    function __txDropGet(code){",
+      '      try{if(localStorage.getItem("jellyfin.shell.txDropDisabled")==="1")return Promise.resolve(null);}catch(_){}',
+      "      var d=window.__shellTxDrop;",
+      "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
+      '      var rel=d.entries[__txFnv(String(code||""))];',
+      '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      "    }",
+      // Async drop-in for the synchronous maybeTranspile at both dynamic
+      // call sites (rewrite + srcPipeline): resolves to the same
+      // lowered-body-or-null contract, trying the server drop first.
+      "    function __txResolve(code){",
+      "      if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return Promise.resolve(code);}",
+      "      return __txDropGet(code).then(function(b){if(b!=null)return b;return maybeTranspile(code);});",
+      "    }",
       // JEL-557: cache transpiled plugin bodies in localStorage so warm cold
       // boots skip the fetch+Babel cycle on every dynamic <script src> the
       // server plugins inject. Browser uses a ServiceWorker on server origin;
@@ -1229,11 +1305,13 @@
       "      }",
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
-      "        .then(function(code){",
       // JEL-554 (v32): only call babel.transform when the body actually
       // contains ES2020+ syntax. Most plugin scripts parse fine on
       // Chromium 56 as-is and don\'t need the ~50–200 ms transpile pass.
-      "          var out=maybeTranspile(code);",
+      // JEL-621: __txResolve tries the server's pre-lowered drop first,
+      // then falls back to the same maybeTranspile contract.
+      "        .then(function(code){return __txResolve(code);})",
+      "        .then(function(out){",
       "          if(out==null){",
       "            try{parent.removeChild(stub);}catch(_){}",
       '            try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -1316,9 +1394,10 @@
       "      }",
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
-      "        .then(function(code){",
       // JEL-554 (v32): fast path for plugin bodies that parse on Chromium 56.
-      "          var out=maybeTranspile(code);",
+      // JEL-621: server pre-lowered drop attempt first (see __txResolve).
+      "        .then(function(code){return __txResolve(code);})",
+      "        .then(function(out){",
       '          if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '          var ns=document.createElement("script");',
       "          var gated=needsJq(out);",
@@ -1446,14 +1525,19 @@
       "        busy=true;",
       "        setTimeout(function(){",
       "          if(authed()){stopAuth();busy=false;return;}",
-      '          var __p=needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
-      "          __p.then(function(){",
-      "            try{",
-      "              var out=maybeTranspile(it.c);",
-      "              if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
-      "            }catch(_){P.e++;}",
-      "            busy=false;",
-      "            drain();",
+      // JEL-621: try the pre-lowered drop before priming Babel — on a drop
+      // hit the primer caches the server-lowered body and Babel stays cold.
+      "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
+      "          __dp.then(function(pre){",
+      '            var __p=pre==null&&needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "            __p.then(function(){",
+      "              try{",
+      "                var out=pre!=null?pre:maybeTranspile(it.c);",
+      "                if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
+      "              }catch(_){P.e++;}",
+      "              busy=false;",
+      "              drain();",
+      "            });",
       "          });",
       "        },120);",
       "      }",
@@ -2287,7 +2371,14 @@
       "        if((!window.__shellCMPatched||!window.__shellPMPatched||!window.__shellPluginManager)&&window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
       '      }catch(e){window.__shellCMErr="walk:"+String(e.message).slice(0,40);setTimeout(__shellWalkWebpack,500);}',
       "    }",
-      "    setTimeout(__shellWalkWebpack,200);",
+      // JEL-623: kick the walker on first paint instead of at seed time.
+      // Pre-paint it was just a 500ms ApiClient wait loop (the paint
+      // gate now owns that wait with a cheaper property check), and
+      // kicking at entry-completion made the expensive wr.m factory-
+      // registry scan compete with the first home render. The CM/PM/
+      // pluginManager patches it installs are playback-path only, so
+      // first-paint is early enough by seconds.
+      "    (function(){function kick(){setTimeout(__shellWalkWebpack,200);}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(kick);}else{kick();}})();",
       "  }catch(_){}",
       "})();",
     ].join("\n");
@@ -2838,6 +2929,105 @@
     } catch (_) {}
     return JSI_PUBLIC_PATH;
   }
+  // JEL-618: channel body cache. The channel is the aggregate of EVERY
+  // enabled JS-Injector snippet (~1.2 MB live), and txSetStatic refuses
+  // bodies > 256 KiB — so pre-JEL-618 the TV re-downloaded AND re-babeled
+  // the whole channel on every boot (the txc: content key deduped nothing
+  // for it), and its presence alone forced the slow DOMParser boot path.
+  // The FINAL executable body (post-transpile, post-jQuery-gate) is
+  // persisted in its own chunked localStorage record: one key per 128 KiB
+  // slice + a meta record carrying {v: TX_VER, t: writtenAt, n: chunks,
+  // l: length, h: fnv1a}. The record deliberately bypasses the shared tx
+  // cache (whose 256 KiB ceiling guards it against exactly this payload).
+  // Freshness contract: a cached body is served for at most
+  // JSI_CHANNEL_MAXAGE_DEFAULT (6 h; override via
+  // localStorage['jellyfin.shell.jsiChannelMaxAgeMs'], '0' disables the
+  // cache = pre-JEL-618 refetch-every-boot behaviour) and only while
+  // TX_VER matches (a transpiler/epoch change re-derives it, same rule as
+  // the tx cache). Within the window a snippet-config edit is NOT picked
+  // up: the JEL-178 one-boot-lag contract widens to a bounded TTL for
+  // this one aggregate — a deliberate trade, since only JellyPlug deploys
+  // (not the user) edit snippet config, and a deploy needing immediate
+  // effect can clear the record on-device or wait out the window.
+  // Chunks are written first and meta last, so a mid-write quota failure
+  // can never leave a meta adopting missing/foreign chunks; the joined
+  // body is length- and hash-checked on read regardless. Plugin-agnostic:
+  // keyed on our own record keys, never on a plugin name or route.
+  var JSI_CHANNEL_META_KEY = "jellyfin.shell.jsiChannel.meta";
+  var JSI_CHANNEL_CHUNK_PFX = "jellyfin.shell.jsiChannel.c";
+  var JSI_CHANNEL_MAXAGE_KEY = "jellyfin.shell.jsiChannelMaxAgeMs";
+  var JSI_CHANNEL_MAXAGE_DEFAULT = 21600000;
+  var JSI_CHANNEL_CHUNK_LEN = 131072;
+  var JSI_CHANNEL_MAX_CHUNKS = 32;
+  function jsiChannelMaxAge() {
+    try {
+      var v = localStorage.getItem(JSI_CHANNEL_MAXAGE_KEY);
+      if (v != null && /^[0-9]+$/.test(v)) return parseInt(v, 10);
+    } catch (_) {}
+    return JSI_CHANNEL_MAXAGE_DEFAULT;
+  }
+  function jsiChannelCacheClear() {
+    try {
+      localStorage.removeItem(JSI_CHANNEL_META_KEY);
+      for (var i = 0; i < JSI_CHANNEL_MAX_CHUNKS; i++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + i);
+    } catch (_) {}
+  }
+  function jsiChannelCacheGet() {
+    try {
+      var maxAge = jsiChannelMaxAge();
+      if (maxAge <= 0) return null;
+      var meta = JSON.parse(localStorage.getItem(JSI_CHANNEL_META_KEY));
+      if (!meta || meta.v !== TX_VER) return null;
+      // Math.abs: a TV clock jump in EITHER direction bounds staleness
+      // instead of making a backdated record immortal.
+      if (!(meta.t > 0) || Math.abs(Date.now() - meta.t) > maxAge) return null;
+      if (!(meta.n >= 1) || meta.n > JSI_CHANNEL_MAX_CHUNKS) return null;
+      var parts = [];
+      for (var i = 0; i < meta.n; i++) {
+        var c = localStorage.getItem(JSI_CHANNEL_CHUNK_PFX + i);
+        if (c == null) return null;
+        parts.push(c);
+      }
+      var body = parts.join("");
+      if (body.length !== meta.l || txFnv1a(body) !== meta.h) return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+  function jsiChannelCacheSet(body) {
+    try {
+      if (typeof body !== "string" || !body) return;
+      if (body.length > JSI_CHANNEL_CHUNK_LEN * JSI_CHANNEL_MAX_CHUNKS) return;
+      if (jsiChannelMaxAge() <= 0) return;
+      var n = Math.ceil(body.length / JSI_CHANNEL_CHUNK_LEN);
+      for (var i = 0; i < n; i++)
+        localStorage.setItem(
+          JSI_CHANNEL_CHUNK_PFX + i,
+          body.slice(
+            i * JSI_CHANNEL_CHUNK_LEN,
+            (i + 1) * JSI_CHANNEL_CHUNK_LEN,
+          ),
+        );
+      for (var j = n; j < JSI_CHANNEL_MAX_CHUNKS; j++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + j);
+      localStorage.setItem(
+        JSI_CHANNEL_META_KEY,
+        JSON.stringify({
+          v: TX_VER,
+          t: Date.now(),
+          n: n,
+          l: body.length,
+          h: txFnv1a(body),
+        }),
+      );
+    } catch (_) {
+      // Quota mid-write: drop the whole record so a later boot can never
+      // pair a surviving meta with half-written chunks.
+      jsiChannelCacheClear();
+    }
+  }
   function injectJsInjectorChannel(doc, serverUrl) {
     try {
       if (jsiChannelDisabled()) return;
@@ -2847,6 +3037,22 @@
       // carries one (server- or plugin-injected). The existing copy is
       // fetched, transpiled and run by transpileLegacyScripts.
       if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
+      // JEL-618: a fresh cached channel body (already transpiled + gated on
+      // a prior boot) is inlined directly — no <script src>, no download,
+      // no babel. transpileLegacyScripts skips it via data-shell-jsi-cached,
+      // and a body that is already lowered needs no babel eager-kick.
+      var cachedBody = jsiChannelCacheGet();
+      try {
+        window.__shellJsiChannelCache = cachedBody != null ? "hit" : "miss";
+      } catch (_) {}
+      if (cachedBody != null) {
+        var sc = doc.createElement("script");
+        sc.textContent = cachedBody;
+        sc.setAttribute("data-shell-jsi-channel", "1");
+        sc.setAttribute("data-shell-jsi-cached", "1");
+        doc.body.appendChild(sc);
+        return;
+      }
       var s = doc.createElement("script");
       // JEL-216: the channel aggregates arbitrary user JS-Injector snippets, so
       // its body is config-mutable AND may carry modern syntax the M63 firewall
@@ -2866,11 +3072,33 @@
       // snippets self-defer (window.onload / MutationObserver) for ApiClient
       // and rendered DOM, so document-order execution is safe.
       doc.body.appendChild(s);
-      // JEL-216: an active channel on a legacy engine guarantees a transpile is
-      // needed; kick the babel load now (idempotent cached promise) so it isn't
-      // started lazily inside the pre-write critical path where a cold parse can
-      // lose the give-up race and let raw `?.`/`??` reach the engine.
-      if (isLegacyChromium() && typeof window.__ensureBabel === "function")
+      // JEL-216: an active channel on a legacy engine used to GUARANTEE a
+      // transpile; kick the babel load now (idempotent cached promise) so it
+      // isn't started lazily inside the pre-write critical path where a cold
+      // parse can lose the give-up race and let raw `?.`/`??` reach the engine.
+      // Two independent reasons now let us skip that eager kick on the happy
+      // path (either one suffices — a genuine per-script miss still lazy-loads
+      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
+      //   JEL-620: the channel body routes through the content-addressed
+      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      //   soft-skip — streak >= 2 means the last two full passes (channel
+      //   included) were cache-covered; a miss resets the streak so the next
+      //   boot kicks eagerly again.
+      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
+      //   a drop-covered channel body never touches Babel, so the eager kick
+      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
+      var jsiStreakSkip = false;
+      try {
+        jsiStreakSkip =
+          (parseInt(localStorage.getItem(BABEL_UNUSED_STREAK_KEY) || "0", 10) ||
+            0) >= 2;
+      } catch (_) {}
+      if (
+        isLegacyChromium() &&
+        !jsiStreakSkip &&
+        typeof window.__ensureBabel === "function" &&
+        !(window.__shellTxDrop && window.__shellTxDrop.ok)
+      )
         try {
           window.__ensureBabel();
         } catch (_) {}
@@ -2976,6 +3204,130 @@
     }
   }
 
+  // ---- Pre-lowered transpile drop (JEL-621) ------------------------------
+  //
+  // THE dominant cold-boot cost on Tizen 5.0 is Babel itself: the shell
+  // serially transforms ~1.9 MB of plugin JS on the TV main thread (21-42 s
+  // measured — see the JEL-131 primer comment in buildSeedScript). The
+  // server can do that work ONCE, offline: the /shell/ drop
+  // (packages/server-shell-drop, build-tx-drop.mjs) may publish pre-lowered
+  // ES5 bodies keyed by the fnv1a hash of the ORIGINAL source text — the
+  // same txFnv1a the JEL-178 `txc:` cache key already uses. At boot the
+  // shell fetches ${server}/shell/tx-manifest.json in parallel with the
+  // /web/ RTT; each slow-path script then hashes its fetched source and, on
+  // a manifest hit, downloads the pre-lowered body instead of loading Babel
+  // at all. localStorage caching downstream is unchanged, so bodies within
+  // the 256 KB cap short-circuit before even the drop fetch on later boots.
+  //   Safety: a drop body is accepted ONLY if the STRICT post-transpile
+  //   oracle (MODERN_SYNTAX_RE) finds no modern token, so an incompatible
+  //   or corrupt drop entry falls back to the on-device Babel path — never
+  //   to raw modern source reaching the M56 parser. The manifest must also
+  //   carry this shell's exact BABEL_OPTS_KEY so transform semantics (loose
+  //   iterables, JEL-26 assumptions) match what the TV would produce.
+  //   Kill switch: localStorage["jellyfin.shell.txDropDisabled"]="1".
+  //   Counters (QA): window.__shellTxDrop {h:hits, m:manifest-misses,
+  //   r:oracle-rejects, f:drop-fetch-fails}.
+  var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
+  function txDropDisabled() {
+    try {
+      return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function loadTxDropManifest(serverUrl) {
+    // Parks a never-rejecting promise on window.__shellTxDropReady and the
+    // resolved {ok,base,entries,...} state on window.__shellTxDrop (read by
+    // the in-document seed pipelines — window survives document.write).
+    // Non-legacy engines and disabled boots resolve null immediately; a
+    // missing/invalid manifest (today's servers: /shell/ 404) resolves null
+    // after one small bounded fetch, and every consumer falls back to the
+    // on-device transpile path unchanged.
+    if (!isLegacyChromium() || txDropDisabled()) {
+      window.__shellTxDropReady = Promise.resolve(null);
+      return window.__shellTxDropReady;
+    }
+    var p = withBootTimeout(
+      fetch(
+        // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
+        // reliably; a per-fetch unique token forces a real network read so
+        // a freshly regenerated drop is picked up on the next boot.
+        serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
+        { credentials: "omit", cache: "no-store" },
+      ),
+      "tx drop manifest",
+      4000,
+    )
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (mf) {
+        if (!mf || typeof mf !== "object" || !mf.entries) return null;
+        // Different transform semantics (target/loose/assumptions drift
+        // between the drop builder and this shell) could pass the syntax
+        // oracle yet behave differently at runtime; require an exact match.
+        if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
+        var d = {
+          ok: true,
+          base: serverUrl + "/shell/",
+          entries: mf.entries,
+          h: 0,
+          m: 0,
+          r: 0,
+          f: 0,
+        };
+        window.__shellTxDrop = d;
+        return d;
+      })
+      .catch(function () {
+        return null;
+      });
+    window.__shellTxDropReady = p;
+    return p;
+  }
+  function txDropResolve(code) {
+    // Promise<loweredBody|null>. null means "no usable drop body" — the
+    // caller falls back to the Babel slow path. Never rejects.
+    var ready = window.__shellTxDropReady;
+    if (!ready || typeof ready.then !== "function")
+      return Promise.resolve(null);
+    return ready
+      .then(function (d) {
+        if (!d || !d.ok || !d.entries) return null;
+        var rel = d.entries[txFnv1a(String(code || ""))];
+        if (typeof rel !== "string" || !rel) {
+          d.m++;
+          return null;
+        }
+        return fetch(d.base + rel, { credentials: "omit" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (body) {
+            if (
+              typeof body !== "string" ||
+              !body.length ||
+              MODERN_SYNTAX_RE.test(body)
+            ) {
+              d.r++;
+              return null;
+            }
+            d.h++;
+            return body;
+          })
+          .catch(function () {
+            d.f++;
+            return null;
+          });
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
   // JEL-554 (v32): fast pre-check for syntax that Chromium 56 can't parse.
   // babel.transform() takes ~50–200 ms per plugin on a 2019 Q60R panel; with
   // 30–50 plugins that's the bulk of the 25 s post-shellBoot gap. Many
@@ -3042,9 +3394,12 @@
           } catch (_) {}
           var next = prev;
           if ((c.scriptsFound || 0) > 0) {
+            // JEL-621: a script served by the pre-lowered drop needed no
+            // Babel either — count it toward full coverage so drop-covered
+            // servers reach streak>=2 and stop the eager babel preload.
             if (
               (c.babelLazyTriggered || 0) === 0 &&
-              (c.cachedHits || 0) === c.scriptsFound
+              (c.cachedHits || 0) + (c.txDropHits || 0) === c.scriptsFound
             ) {
               next = prev + 1;
             } else {
@@ -3122,6 +3477,7 @@
     counts.fastPath = 0;
     counts.babelLazyTriggered = 0;
     counts.pluginPrefetchAdopted = 0;
+    counts.txDropHits = 0;
     // JEL-1654: record plugin <script src> URLs for next-boot prefetch.
     // Mirrors the JEL-1289 bundle-URL pattern: index.html head IIFE will
     // kick off these fetches in parallel with shell.min.js parse + babel
@@ -3263,6 +3619,14 @@
       // anything else by design.
       if (s.getAttribute("data-shell-seed") === "1") return null;
       if (s.getAttribute("data-shell-diag") === "1") return null;
+      // JEL-618: an inlined cached channel body is FINAL executable output
+      // (transpiled + jQuery-gated on a prior boot). Running the modern-
+      // syntax pre-check over ~1 MB — or worse, a string-literal false
+      // positive re-babeling it — would refund the entire caching win.
+      if (s.getAttribute("data-shell-jsi-cached") === "1") {
+        counts.skipped++;
+        return null;
+      }
       if (s.getAttribute("data-shell-bundle-patched")) {
         counts.skipped++;
         return null;
@@ -3274,6 +3638,10 @@
           return null;
         }
         counts.scriptsFound++;
+        // JEL-618: adopt the finished channel body into the channel cache.
+        // Attribute-matched (our own injected tag), never URL-matched, so a
+        // server-injected public.js is never recorded. Plugin-agnostic.
+        var isJsiChannelTag = s.getAttribute("data-shell-jsi-channel") === "1";
         var url;
         try {
           url = new URL(src, baseUrl).href;
@@ -3351,6 +3719,7 @@
               s.setAttribute("data-shell-tx-cached", "1");
               counts.transpiled++;
               counts.cachedHits++;
+              if (isJsiChannelTag) jsiChannelCacheSet(pre);
               return;
             }
             // JEL-554 (v32): fast path for plugins that don't use
@@ -3367,66 +3736,97 @@
               s.setAttribute("data-shell-fast-path", "1");
               if (gatedRaw) s.setAttribute("data-shell-jquery-gated", "1");
               txSetStatic(ck, bodyRaw);
+              if (isJsiChannelTag) jsiChannelCacheSet(bodyRaw);
               counts.transpiled++;
               counts.fastPath++;
               shellLog("fast-path+inlined", url, gatedRaw ? "(jq-gated)" : "");
               return;
             }
-            // JEL-1034 (v53): slow path triggers lazy babel load.
-            counts.babelLazyTriggered++;
-            return ensureBabelReady().then(function (ready) {
-              if (!ready) {
-                counts.transpileFailed++;
-                // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
-                // leaving the raw external <script src> would let un-transpiled
-                // `?.`/`??` reach the M63 engine — a SyntaxError that kills the
-                // ENTIRE script (e.g. the whole concatenated JS-Injector
-                // public.js). Drop the src so it can't execute raw;
-                // markBabelNeeded primes babel for the next boot.
-                neutralizeUntranspiled(s, url);
-                try {
-                  console.warn(
-                    "shell: babel not available, dropped untranspiled",
-                    url,
-                  );
-                } catch (_) {}
+            // JEL-621: pre-lowered drop attempt before the Babel slow path.
+            // On a manifest hit the server already ran this exact transform
+            // offline — inline the drop body (same jq gate + tx-cache write
+            // as the Babel path) and never touch Babel for this script.
+            return txDropResolve(code).then(function (dropped) {
+              if (dropped != null) {
+                s.removeAttribute("src");
+                s.removeAttribute("defer");
+                s.removeAttribute("async");
+                s.removeAttribute("type");
+                var gatedD = needsJQueryGate(dropped);
+                var bodyD = gatedD ? wrapForJQuery(dropped) : dropped;
+                s.textContent = bodyD;
+                s.setAttribute("data-shell-transpiled-from", url);
+                s.setAttribute("data-shell-tx-drop", "1");
+                if (gatedD) s.setAttribute("data-shell-jquery-gated", "1");
+                txSetStatic(ck, bodyD);
+                // JEL-618 x JEL-621: the drop already carries the transpiled
+                // JSI-channel body, so seed the channel-body cache here too —
+                // otherwise a drop hit would bypass the next-boot fast splice.
+                if (isJsiChannelTag) jsiChannelCacheSet(bodyD);
+                counts.transpiled++;
+                counts.txDropHits++;
+                shellLog("tx-drop+inlined", url, gatedD ? "(jq-gated)" : "");
                 return;
               }
-              counts.babel = true;
-              var out = babelTranspile(code);
-              if (out == null) {
-                counts.transpileFailed++;
-                // JEL-216: same fail-safe for a transform that threw.
-                neutralizeUntranspiled(s, url);
-                return;
-              }
-              counts.transpiled++;
-              // Inline the transpiled code instead of swapping `src`
-              // to a blob: URL. Two reasons (JEL-401 follow-up):
-              //   1. Chromium 56's document.open()/document.write()
-              //      handoff can invalidate Blob URL bindings created
-              //      on the prior document, so <script src="blob:...">
-              //      resolves to about:blank and the plugin silently
-              //      never executes.
-              //   2. The default Tizen widget CSP (`default-src 'self'`)
-              //      blocks `blob:` and `data:` script sources unless
-              //      the widget opts in, which we don't.
-              // Inline scripts execute at parse time; defer/async on
-              // the original tag are dropped, but server plugins are
-              // typically self-contained DOM/CSS injectors and
-              // tolerate earlier execution. Original src is preserved
-              // on a data attribute for diagnostics.
-              s.removeAttribute("src");
-              s.removeAttribute("defer");
-              s.removeAttribute("async");
-              s.removeAttribute("type");
-              var gated = needsJQueryGate(out);
-              var body = gated ? wrapForJQuery(out) : out;
-              s.textContent = body;
-              s.setAttribute("data-shell-transpiled-from", url);
-              if (gated) s.setAttribute("data-shell-jquery-gated", "1");
-              txSetStatic(ck, body);
-              shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
+              // JEL-1034 (v53): slow path triggers lazy babel load.
+              counts.babelLazyTriggered++;
+              return ensureBabelReady().then(function (ready) {
+                if (!ready) {
+                  counts.transpileFailed++;
+                  // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+                  // leaving the raw external <script src> would let un-transpiled
+                  // `?.`/`??` reach the M63 engine — a SyntaxError that kills the
+                  // ENTIRE script (e.g. the whole concatenated JS-Injector
+                  // public.js). Drop the src so it can't execute raw;
+                  // markBabelNeeded primes babel for the next boot.
+                  neutralizeUntranspiled(s, url);
+                  try {
+                    console.warn(
+                      "shell: babel not available, dropped untranspiled",
+                      url,
+                    );
+                  } catch (_) {}
+                  return;
+                }
+                counts.babel = true;
+                var out = babelTranspile(code);
+                if (out == null) {
+                  counts.transpileFailed++;
+                  // JEL-216: same fail-safe for a transform that threw.
+                  neutralizeUntranspiled(s, url);
+                  return;
+                }
+                counts.transpiled++;
+                // Inline the transpiled code instead of swapping `src`
+                // to a blob: URL. Two reasons (JEL-401 follow-up):
+                //   1. Chromium 56's document.open()/document.write()
+                //      handoff can invalidate Blob URL bindings created
+                //      on the prior document, so <script src="blob:...">
+                //      resolves to about:blank and the plugin silently
+                //      never executes.
+                //   2. The default Tizen widget CSP (`default-src 'self'`)
+                //      blocks `blob:` and `data:` script sources unless
+                //      the widget opts in, which we don't.
+                // Inline scripts execute at parse time; defer/async on
+                // the original tag are dropped, but server plugins are
+                // typically self-contained DOM/CSS injectors and
+                // tolerate earlier execution. Original src is preserved
+                // on a data attribute for diagnostics.
+                s.removeAttribute("src");
+                s.removeAttribute("defer");
+                s.removeAttribute("async");
+                s.removeAttribute("type");
+                var gated = needsJQueryGate(out);
+                var body = gated ? wrapForJQuery(out) : out;
+                s.textContent = body;
+                s.setAttribute("data-shell-transpiled-from", url);
+                if (gated) s.setAttribute("data-shell-jquery-gated", "1");
+                txSetStatic(ck, body);
+                // JEL-618: cache the transpiled JSI-channel body for the
+                // next-boot fast-path splice (mirrors the fast-path/drop paths).
+                if (isJsiChannelTag) jsiChannelCacheSet(body);
+                shellLog("transpiled+inlined", url, gated ? "(jq-gated)" : "");
+              });
             });
           })
           .catch(function (e) {
@@ -3443,22 +3843,34 @@
         counts.fastPath++;
         return null;
       }
-      // JEL-1034 (v53): slow path triggers lazy babel load.
-      counts.babelLazyTriggered++;
-      return ensureBabelReady().then(function (ready) {
-        if (!ready) {
-          try {
-            console.warn("shell: babel not available, skip inline transpile");
-          } catch (_) {}
+      // JEL-621: pre-lowered drop attempt before the Babel slow path —
+      // inline bodies hash the same way as fetched external sources.
+      return txDropResolve(content).then(function (droppedInline) {
+        if (droppedInline != null) {
+          s.textContent = droppedInline;
+          s.setAttribute("data-shell-transpiled-inline", "1");
+          s.setAttribute("data-shell-tx-drop", "1");
+          counts.txDropHits++;
+          shellLog("tx-drop inline script");
           return;
         }
-        counts.babel = true;
-        var transpiled = babelTranspile(content);
-        if (transpiled != null && transpiled !== content) {
-          s.textContent = transpiled;
-          s.setAttribute("data-shell-transpiled-inline", "1");
-          shellLog("transpiled inline script");
-        }
+        // JEL-1034 (v53): slow path triggers lazy babel load.
+        counts.babelLazyTriggered++;
+        return ensureBabelReady().then(function (ready) {
+          if (!ready) {
+            try {
+              console.warn("shell: babel not available, skip inline transpile");
+            } catch (_) {}
+            return;
+          }
+          counts.babel = true;
+          var transpiled = babelTranspile(content);
+          if (transpiled != null && transpiled !== content) {
+            s.textContent = transpiled;
+            s.setAttribute("data-shell-transpiled-inline", "1");
+            shellLog("transpiled inline script");
+          }
+        });
       });
     });
     return Promise.all(jobs);
@@ -3898,12 +4310,31 @@
     } catch (_) {}
     if (babelNeeded) return bail("babelNeeded");
     // JEL-197: the JS-Injector snippet channel must inject + transpile
-    // public.js, which only the DOMParser path can do. If the channel is on
-    // and the document doesn't already carry a public.js tag, take the slow
-    // path so injectJsInjectorChannel + transpileLegacyScripts run it through
-    // the firewall. Killswitch (jsiChannelDisabled) restores the fast path.
-    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0)
-      return bail("jsiChannel");
+    // public.js, which only the DOMParser path can do. JEL-618: unless a
+    // fresh cached channel body exists — then the fast path splices it
+    // inline before </body> (the same position the DOM path appends it)
+    // and the slow walk isn't needed for the channel at all. A stale or
+    // absent cache still bails so injectJsInjectorChannel + the walk
+    // refresh it. Killswitch (jsiChannelDisabled) keeps the fast path on
+    // with no channel at all.
+    var jsiInlineTag = null;
+    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0) {
+      var jsiBody = jsiChannelCacheGet();
+      if (jsiBody == null) return bail("jsiChannel");
+      // A "</script" literal inside a snippet body would terminate the
+      // spliced inline tag and corrupt the document (same guard as the
+      // bundle path). The DOM path tolerates such a body via textContent;
+      // only the string splice can't.
+      if (jsiBody.indexOf("</script") >= 0)
+        return bail("jsiChannelScriptClose");
+      jsiInlineTag =
+        '<script data-shell-jsi-channel="1" data-shell-jsi-cached="1">' +
+        jsiBody +
+        "</script>";
+      try {
+        window.__shellJsiChannelCache = "hit";
+      } catch (_) {}
+    }
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
     // Bundle precheck: only legal fast-path verdicts are
@@ -4027,6 +4458,14 @@
       // browser fetches via <script src> from HTTP cache, same as
       // patchPlaybackBundles' window.__shellBundleCacheHit branch.
       window.__shellBundleCacheHit++;
+    }
+    // JEL-618: splice the cached channel body in last, immediately before
+    // </body> — after the bundle replace so its position mirrors the DOM
+    // path's body.appendChild ordering (channel executes after bundles).
+    if (jsiInlineTag) {
+      var jsiAt = patched.lastIndexOf("</body>");
+      if (jsiAt < 0) return bail("jsiChannelNoBody");
+      patched = patched.slice(0, jsiAt) + jsiInlineTag + patched.slice(jsiAt);
     }
     window.__shellFastPathHits++;
     return patched;
@@ -4184,6 +4623,12 @@
   }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/";
+    // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
+    // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
+    // without a /shell/ drop and every consumer falls back to Babel.
+    try {
+      loadTxDropManifest(serverUrl);
+    } catch (_) {}
     // JEL-1034 (v53): speculative babel prime, flag-gated.
     // The lazy loader is call-site triggered (transpileLegacyScriptsInner
     // slow path), but if first transpile-needed plugin lands before
@@ -4255,8 +4700,8 @@
     // immediately from cache and treat the in-flight fetch as background
     // revalidation that updates LS for the next boot. Eliminates the
     // /web/ RTT pair (200–500 ms on cold HTTP cache) from the pre-
-    // document.write critical path. Off by default — set
-    // `jellyfin.shell.indexCache='1'` post-QA parity smoke.
+    // document.write critical path. On by default (JEL-622) — set
+    // `jellyfin.shell.indexCache='0'` to opt out.
     window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0;
     window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0;
     window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0;

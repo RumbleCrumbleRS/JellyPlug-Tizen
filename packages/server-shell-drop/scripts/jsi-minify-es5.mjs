@@ -13,14 +13,21 @@
  *
  * The output contract is therefore stricter than "valid ES5": every emitted
  * body must NOT match MODERN_PRECHECK_RE (the shell's transpile trigger,
- * JEL-417). The shell's own chrome:56 transform is not enough for that —
- * preset-env keeps ES2015 array/call spread and rest params (Chrome 56
- * parses them), and `f(a, ...b)` / `(a, ...r)` match the precheck's
- * `,\s*\.\.\.` alternative, which would re-trigger on-TV Babel and forfeit
- * the payoff. So the deploy transform runs the lockstep chrome:56 options
- * PLUS transform-spread/transform-parameters to clear every `...` form the
- * precheck can see. Correctness gate: any output that still trips the
- * precheck fails the whole run loudly.
+ * JEL-417). The lowering runs the SAME slim chrome:56 @babel/standalone the
+ * TV ships (JEL-620), so it clears every feature Chrome 56 actually LACKS
+ * (optional chaining, nullish, logical assignment, object rest/spread,
+ * numeric separators, optional catch, private methods, async generators).
+ *
+ * It does NOT lower Chrome-56-NATIVE comma-spread / rest params
+ * (`f(a, ...b)`, `[a, ...b]`, `(a, ...r)`): JEL-620 stubbed transform-spread
+ * and transform-parameters out of the slim build, so there is no plugin to
+ * strip them and re-adding a full babel would undo that lean-footprint work.
+ * Those forms still match the precheck's `,\s*\.\.\.` alternative, so the
+ * deploy gate FAIL-CLOSES on them with a precise diagnostic: a channel
+ * snippet must be authored without comma-preceded spread (leading spread /
+ * .concat / .apply) or it would forfeit the JEL-618 raw fast path for the
+ * whole concatenated channel. Correctness gate: any output that still trips
+ * the precheck fails the whole run loudly.
  *
  * Minification is esbuild (target chrome56) in transform mode, which keeps
  * TOP-LEVEL names intact — snippets share globals across entries (one
@@ -53,10 +60,11 @@
  */
 
 import { createRequire } from "node:module";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 // ---- Lockstep constants (guarded by jsi-minify.test.cjs) ------------------
 // STRICT post-transpile oracle — must equal MODERN_SYNTAX_RE_SRC in
@@ -68,15 +76,25 @@ export const ORACLE_SRC =
 // gate here: precheck-clean output is what buys the raw fast path.
 export const PRECHECK_SRC = ORACLE_SRC + "|,\\s*\\.\\.\\.[\\w$]";
 // Lockstep transform base — must stay byte-lockstep with the shells'
-// transform options (assumptions carry the JEL-26 iterator fix). The extra
-// plugins below are a DEPLOY-ONLY superset: they only lower ES2015 spread /
-// rest forms Chrome 56 could run natively, so device behavior is unchanged;
-// they exist purely to clear the precheck's `...` alternatives.
+// transpile() literal (assumptions carry the JEL-26 iterator fix). This runs
+// the SAME slim chrome:56 @babel/standalone the TV ships (JEL-620), so the
+// deploy-side lowering is byte-faithful to what the device would have done.
+//
+// It lowers every feature Chrome 56 actually LACKS — optional chaining,
+// nullish coalescing, logical assignment, object rest/spread, numeric
+// separators, optional catch binding, private methods, async generators.
+// It deliberately does NOT lower Chrome-56-NATIVE comma-spread / rest params
+// (`f(a, ...b)`, `[a, ...b]`, `(a, ...b)`): JEL-620 stubbed transform-spread
+// and transform-parameters out of the slim build (Chrome 56 runs them
+// natively), so no plugin to strip them exists here. Those forms still trip
+// the shell precheck's `,\s*\.\.\.` alternative, so the deploy gate below
+// fail-closes on them — a snippet that reaches the channel with comma-spread
+// would forfeit the JEL-618 raw fast path for the WHOLE concatenated channel,
+// and must be authored without it (use a leading spread / .concat / .apply).
 export const BABEL_LOWER_OPTS = {
   presets: [
     ["env", { targets: { chrome: "56" }, modules: false, loose: true }],
   ],
-  plugins: [["transform-spread", { loose: true }], "transform-parameters"],
   assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },
   sourceType: "script",
   compact: true,
@@ -150,9 +168,27 @@ async function listJsFiles(dir) {
   return out;
 }
 
-function loadBabel(babelPath) {
-  const require = createRequire(import.meta.url);
-  const Babel = require(path.resolve(babelPath));
+// Load the repo's vendored babel and return its { transform } object. Two
+// shapes are supported so this gate tracks whatever babel.min.js the shells
+// actually ship (mirrors build-tx-drop.mjs loadBabel):
+//   1. A UMD @babel/standalone (pre-JEL-620): CommonJS require() yields it.
+//   2. The JEL-620 slim chrome56 build: an esbuild IIFE that assigns
+//      (window||self||globalThis).Babel — the same bytes the TV runs from a
+//      <script> tag. Execute it in an isolated realm and read the global back.
+export function loadBabel(babelPath) {
+  const resolved = path.resolve(babelPath);
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require(resolved);
+    if (mod && typeof mod.transform === "function") return mod;
+  } catch (_) {
+    // Not a CommonJS module (the slim build is a browser IIFE) — fall through.
+  }
+  const code = readFileSync(resolved, "utf8");
+  const sandbox = { console };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox, { filename: resolved });
+  const Babel = sandbox.Babel;
   if (!Babel || typeof Babel.transform !== "function")
     usageDie("could not load a usable @babel/standalone from " + babelPath);
   return Babel;
@@ -184,10 +220,7 @@ export function transformSnippet(text, { Babel, esbuild, minify }) {
     // syntax to runtime calls (10n -> BigInt(10)) that parse as ES5 but
     // throw ReferenceError on the panels — a silent deploy of broken code.
     if (PRECHECK_RE.test(body))
-      throw new Error(
-        "lowered output still trips the shell precheck — " +
-          "un-lowerable at the chrome:56 floor",
-      );
+      throw new Error(precheckRejection(body));
   }
   if (minify) {
     body = esbuild.transformSync(body, {
@@ -206,8 +239,27 @@ export function transformSnippet(text, { Babel, esbuild, minify }) {
   // TV, no babelTranspile). ORACLE_RE ⊂ PRECHECK_RE, so this covers the
   // device's post-transpile oracle too; both are asserted for clarity.
   if (PRECHECK_RE.test(body) || ORACLE_RE.test(body))
-    throw new Error("output still trips the shell transpile precheck");
+    throw new Error(precheckRejection(body));
   return body;
+}
+
+// Build a precise deploy-gate error naming why the body still trips the
+// shell's needsTranspile precheck, so a pipeline operator can fix the source.
+function precheckRejection(body) {
+  const m = body.match(/,\s*\.\.\.[\w$]/);
+  if (m && !ORACLE_RE.test(body))
+    return (
+      "snippet keeps Chrome-56-native comma-spread/rest (" +
+      JSON.stringify(m[0]) +
+      ") which the slim chrome:56 babel does not lower (JEL-620 stubs " +
+      "transform-spread/transform-parameters) — it would forfeit the " +
+      "JEL-618 raw fast path for the whole channel. Rewrite the source " +
+      "without comma-preceded spread (leading spread / .concat / .apply)."
+    );
+  return (
+    "lowered output still trips the shell precheck — un-lowerable at the " +
+    "chrome:56 floor (e.g. a BigInt literal, which has no ES5 equivalent)"
+  );
 }
 
 async function readStdin() {

@@ -13,8 +13,10 @@
  *   - off unless localStorage['jellyfin.qa.overlay'] === '1' (same flag as
  *     the QA HUD overlay). Production builds never trip the gate because
  *     index.html sets it only on QA-flavored WGTs.
- *   - beacon URL overridable via localStorage['jellyfin.qa.beaconUrl'];
- *     default `http://192.168.0.20:8731/qa-beacon`.
+ *   - beacon URL comes ONLY from localStorage['jellyfin.qa.beaconUrl'];
+ *     unset means the beacon stays OFF. No baked-in default endpoint —
+ *     a hardcoded operator-LAN URL is public-repo residue (JEL-628); QA
+ *     builds / JSI snippets must seed the key alongside the overlay flag.
  *   - tick paused when document.hidden (no telemetry while app backgrounded).
  *   - deferred 5 s post-DOMContentLoaded so cold-boot critical path stays
  *     untouched.
@@ -26,18 +28,18 @@
     return;
   }
 
-  var DEFAULT_URL = "http://192.168.0.20:8731/qa-beacon";
   var TICK_MS = 4000;
   var START_DELAY_MS = 5000;
   var MAX_TEXT_LEN = 120;
   var MAX_ERRORS = 20;
 
-  var beaconUrl;
+  var beaconUrl = null;
   try {
-    beaconUrl = localStorage.getItem("jellyfin.qa.beaconUrl") || DEFAULT_URL;
+    beaconUrl = localStorage.getItem("jellyfin.qa.beaconUrl");
   } catch (e) {
-    beaconUrl = DEFAULT_URL;
+    return;
   }
+  if (!beaconUrl) return;
 
   var serial = null;
   try {

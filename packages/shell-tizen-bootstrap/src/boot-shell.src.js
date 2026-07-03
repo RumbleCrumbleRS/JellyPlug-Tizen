@@ -34,7 +34,7 @@
     BABEL_OPTS_KEY =
       "presets:[[env,{targets:{chrome:56},modules:false,loose:true}]];sourceType:script;compact:true;comments:false",
     BABEL_FPR =
-      "2451554:2166756e6374696f6e2865297b696628766f696420303d3d3d652e70726f6365:6973262628676c6f62616c546869732e426162656c3d6a62292c6a627d28293b";
+      "2091715:2f2a20626162656c2e6d696e2e6a7320e28094204a454c2d36323020736c696d:303b4c39652e426162656c3d74493b766172206147653d74493b7d2928293b0a";
   function txFnv1a(s) {
     for (var h = 2166136261, i = 0; i < s.length; i++)
       ((h ^= s.charCodeAt(i)),
@@ -161,9 +161,10 @@
     WEB_CACHE_VER = "1.0.88",
     WEB_CACHE_MAX = 262144,
     WEB_CACHE_GATE_KEY = "jellyfin.shell.indexCache";
+  // JEL-622: ON by default (SWR passed its QA parity soak); '0' opts out.
   function webCacheEnabled() {
     try {
-      return localStorage.getItem(WEB_CACHE_GATE_KEY) === "1";
+      return localStorage.getItem(WEB_CACHE_GATE_KEY) !== "0";
     } catch (_) {
       return !1;
     }
@@ -697,6 +698,33 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JEL-623: boot paint-gate. The cosmetic sweeps this seed installs
+      // (auto-focus 600ms poll, remember-me 300ms poll, YT-iframe cap
+      // sweep + whole-tree MutationObserver, webpack CM/PM walker) used
+      // to arm at document.write handoff and then tick through the whole
+      // 20-40s legacy bundle fetch/parse blackout, competing for the
+      // main thread on Chromium 56 while having nothing to act on (no
+      // jellyfin-web DOM exists yet). This gate is the ONE timer allowed
+      // to run during the blackout: a 500ms setTimeout chain whose
+      // pre-boot tick is a single `typeof window.ApiClient` property
+      // check (no DOM access). Two stages:
+      //   onApi(cb)   — webpack entry completed (window.ApiClient set).
+      //                 Arms the YT-iframe crash-guard sweep: plugins
+      //                 cannot build media-bar DOM before app init, so
+      //                 this loses zero crash coverage (the passive
+      //                 iframe src setter/setAttribute intercepts are
+      //                 armed from t0 regardless).
+      //   onPaint(cb) — first view painted (.card / login form / user
+      //                 picker / quick-connect), or 60 post-api ticks
+      //                 (30s) as a fallback. Arms the cosmetic sweeps
+      //                 and the webpack walker.
+      // Absolute backstop: 240 total ticks (120s, matches the walker's
+      // old noApiClient give-up budget) fires BOTH stages so no feature
+      // can stay dead on a wedged boot. Registration sites fall back to
+      // arming immediately when the gate is absent (defensive, and lets
+      // the per-feature tests lift their IIFEs into bare sandboxes).
+      // Diag: window.__shellPaintGate = {api,fired,why,t,ta}.
+      '  try{(function(){var g={api:0,fired:0,why:"",t:0,ta:0,cbs:[],acbs:[]};window.__shellPaintGate=g;function run(l){var c=l.slice();l.length=0;for(var i=0;i<c.length;i++){try{c[i]();}catch(_){}}}g.onApi=function(cb){if(g.api){try{cb();}catch(_){}}else g.acbs.push(cb);};g.onPaint=function(cb){if(g.fired){try{cb();}catch(_){}}else g.cbs.push(cb);};g.fireApi=function(){if(g.api)return;g.api=1;g.ta=Date.now();run(g.acbs);};g.fire=function(why){g.fireApi();if(g.fired)return;g.fired=1;g.why=why;g.t=Date.now();run(g.cbs);};var ticks=0,dticks=0;function poll(){if(g.fired)return;ticks++;if(ticks>=240){g.fire("giveup");return;}if(!g.api){if(typeof window.ApiClient==="undefined"){setTimeout(poll,500);return;}g.fireApi();}try{if(document.querySelector(".card,.manualLoginForm,.userItemContainer,.btnUseQuickConnect")){g.fire("paint");return;}}catch(_){}dticks++;if(dticks>=60){g.fire("timeout");return;}setTimeout(poll,500);}setTimeout(poll,500);})();}catch(_){}',
       // JEL-132: creds-guard. jellyfin-web 10.11's connection manager
       // (validateAuthentication) nulls UserId/AccessToken on ANY failure of
       // the authenticated GET /System/Info it issues at boot — network blip,
@@ -770,7 +798,13 @@
       '    try{var SP=(window.Storage&&Storage.prototype&&Storage.prototype.setItem)?Storage.prototype:null;var tgt=SP||window.localStorage;var oSet=tgt.setItem;tgt.setItem=function(k,v){if(k===CK&&(!SP||this===window.localStorage)){try{var mg=merge(localStorage.getItem(CK),v);if(mg!=null){G.strips++;if(vetoOk()){G.vetoes++;trail({e:"veto",ts:Date.now(),s:G.lastVal.s});vault(mg);return oSet.call(this,k,mg);}trail({e:"strip",ts:Date.now(),s:G.lastVal?G.lastVal.s:-1,lo:G.lo?1:0});}vault(v);}catch(_){}}return oSet.apply(this,arguments);};}catch(_){}',
       "  })();}catch(_){}",
       '  try{localStorage.setItem("layout","tv");}catch(_){}',
-      `  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S='a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;setInterval(function(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;},600);})();}catch(_){}`,
+      // JEL-623: the 600ms proactive poll now arms via
+      // __shellPaintGate.onPaint (first view painted) instead of at seed
+      // time — during the bundle blackout there is nothing to focus and
+      // on warm boots the poll was burning its 24-tick budget against
+      // the splash screen. The keydown rescue listener and the
+      // hashchange/popstate budget bumps stay armed from t0 (passive).
+      `  try{(function(){var K={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Up:1,Down:1,Left:1,Right:1,Tab:1},C={9:1,37:1,38:1,39:1,40:1,29460:1,29461:1,29462:1,29463:1},S='a[href]:not([tabindex="-1"]),button:not(:disabled):not([tabindex="-1"]),input:not([type=range]):not([type=file]):not([tabindex="-1"]):not(:disabled),select:not([tabindex="-1"]):not(:disabled),textarea:not([tabindex="-1"]):not(:disabled),.focusable:not([tabindex="-1"])';function vis(n){if(!n)return false;if(n.offsetParent===null&&n.tagName!=="BODY")return false;var r=n.getBoundingClientRect&&n.getBoundingClientRect();return !!(r&&r.width>0&&r.height>0);}function fst(s){if(!s||!s.querySelectorAll)return null;try{var n=s.querySelectorAll(S);for(var i=0;i<n.length;i++)if(vis(n[i]))return n[i];}catch(_){}return null;}function scopes(){var out=[];try{var d=document.querySelectorAll(".dialogContainer .dialog.opened");if(d.length)out.push(d[d.length-1]);}catch(_){}try{var p=document.querySelectorAll(".page:not(.hide)");for(var i=p.length-1;i>=0;i--)if(p[i]&&p[i].offsetParent!==null)out.push(p[i]);}catch(_){}try{var hsel=[".skinHeader",".headerTop",".mainAnimatedPages",".pageContainer","#reactRoot","#appLayer"];for(var hi=0;hi<hsel.length;hi++){var h=document.querySelector(hsel[hi]);if(h)out.push(h);}}catch(_){}out.push(document.body);return out;}function findT(){try{var st=document.getElementById("__shellST");if(st){var r=st.getBoundingClientRect&&st.getBoundingClientRect();if(r&&r.width>0&&r.height>0){window.__shellLastScopeHit=99;return st;}}}catch(_){}var sc=scopes();window.__shellLastScopeN=sc.length;for(var i=0;i<sc.length;i++){var t=fst(sc[i]);if(t){window.__shellLastScopeHit=i;return t;}}window.__shellLastScopeHit=-1;return null;}function isBodyF(){var a=document.activeElement;return !a||a===document.body||a.tagName==="HTML";}function isAuthed(){if(window.__shellAFForceAuth===1)return true;try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return false;var p=JSON.parse(c);return !!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken);}catch(_){return false;}}window.addEventListener("keydown",function(e){if(!e||!(K[e.key]||C[e.keyCode]||C[e.which]))return;if(!isBodyF())return;window.__shellBodyFocusRescueAttempts=(window.__shellBodyFocusRescueAttempts||0)+1;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellBodyFocusRescues=(window.__shellBodyFocusRescues||0)+1;e.preventDefault();e.stopPropagation();}}}catch(_){}},true);window.__shellBodyFocusRescueBound=1;window.__shellAutoFocusAttempts=0;window.__shellAutoFocusSuccesses=0;window.__shellAutoFocusBudget=24;function bumpAF(){window.__shellAutoFocusBudget=24;}try{window.addEventListener("hashchange",bumpAF,false);}catch(_){}try{window.addEventListener("popstate",bumpAF,false);}catch(_){}var lastBody=true;function __afTick(){var nowBody=isBodyF();if(nowBody&&!lastBody)bumpAF();lastBody=nowBody;try{var st=document.getElementById("__shellST");if(st){if(document.activeElement!==st){window.__shellAutoFocusAttempts++;try{st.focus();}catch(_){}if(document.activeElement===st){window.__shellAutoFocusSuccesses++;window.__shellLastScopeHit=99;}}return;}}catch(_){}if(!nowBody)return;if((window.__shellAutoFocusBudget||0)<=0)return;if(!isAuthed())return;window.__shellAutoFocusAttempts++;try{var t=findT();if(t){t.focus();if(document.activeElement===t){window.__shellAutoFocusSuccesses++;window.__shellAutoFocusBudget=0;return;}}}catch(_){}window.__shellAutoFocusBudget--;}function __armAF(){try{setInterval(__afTick,600);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armAF);}else{__armAF();}})();}catch(_){}`,
       // JEL-138: default the login "Remember Me" checkbox to CHECKED.
       // jellyfin-web's `enableAutoLogin` flag is sticky — one unchecked login
       // flips it to "false" and every later login form renders the box
@@ -788,7 +822,11 @@
       // sets don't fire change) reveals a deliberate uncheck, then back off.
       // Kill switch: localStorage["jellyfin.shell.rememberMeDefaultDisabled"]="1".
       // Diag: window.__shellRememberMeChecks.
-      `  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}try{setInterval(nudge,300);}catch(_){}try{document.addEventListener("DOMContentLoaded",nudge,false);}catch(_){}nudge();})();}catch(_){}`,
+      // JEL-623: the 300ms nudge poll arms via __shellPaintGate.onPaint
+      // — the paint selector includes .manualLoginForm, so the poll
+      // starts within ~500ms of the login form appearing instead of
+      // ticking through the bundle blackout with no form to nudge.
+      `  try{(function(){if(localStorage.getItem("jellyfin.shell.rememberMeDefaultDisabled")==="1")return;window.__shellRememberMeChecks=0;var bound=new WeakSet(),userOff=new WeakSet();function nudge(){try{var c=document.querySelector(".manualLoginForm .chkRememberLogin")||document.querySelector(".chkRememberLogin");if(!c)return;if(!bound.has(c)){bound.add(c);c.addEventListener("change",function(){if(!c.checked){userOff.add(c);}else{userOff["delete"](c);}},false);}if(userOff.has(c))return;if(!c.checked){c.checked=true;window.__shellRememberMeChecks++;}}catch(_){}}function __armRM(){nudge();try{setInterval(nudge,300);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(__armRM);}else{__armRM();}})();}catch(_){}`,
       // JEL-238 (defense-in-depth for JEL-237): media-bar YouTube-iframe crash
       // guard, baked natively into the shell so it ships in the signed .wgt and
       // survives any JS-Injector config wipe/re-import. The home media-bar
@@ -818,7 +856,14 @@
       // name ships in the .wgt.
       // Kill switch: localStorage["jellyfin.shell.ytIframeCapDisabled"]="1".
       // Diag: window.__shellYtCaps (count of youtube iframes removed).
-      `  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}})();}catch(_){}`,
+      // JEL-623: the sweep (MutationObserver + 400ms interval) arms via
+      // __shellPaintGate.onApi (webpack entry completed) instead of at
+      // seed time; plugins cannot build media-bar DOM before app init,
+      // so crash coverage is unchanged while the whole-tree observer no
+      // longer fires on every splash/boot DOM mutation. The passive
+      // iframe src setter/setAttribute intercepts and the one-shot
+      // cap() stay armed from t0 (essential guard).
+      `  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}`,
       "  try{(function(){",
       "    var on=false;",
       '    try{on=(localStorage.getItem("jellyfin.shell.afSelfTest")==="1")||/shellSelfTest=focus/.test(String(location.hash||""))||/shellSelfTest=focus/.test(String(location.search||""));}catch(_){}',
@@ -834,6 +879,10 @@
       "      try{document.body&&document.body.focus&&document.body.focus();}catch(_){}",
       "    }",
       "    function go(){",
+      // JEL-623: the self-test depends on the now-gated 600ms auto-
+      // focus poll; force-fire the paint gate so the harness still
+      // runs on splash / user-picker pages where no card ever paints.
+      '      try{window.__shellPaintGate&&window.__shellPaintGate.fire("selftest");}catch(_){}',
       "      inject();",
       "      window.__shellSelfTestStart=Date.now();",
       '      window.__shellSelfTest={r:"wait",t:0,af:0,sc:-1};',
@@ -952,6 +1001,27 @@
       '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
+      // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
+      // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
+      // window.__shellTxDrop (window survives the document.write handoff);
+      // on a hash hit the pre-lowered ES5 body is fetched from the server's
+      // /shell/ drop and Babel is never invoked for that script. Misses and
+      // failures fall back to maybeTranspile unchanged. __txFnv must stay
+      // byte-lockstep with the widget-side txFnv1a (same fnv1a the JEL-178
+      // `txc:` key uses), and __oracleRe with MODERN_SYNTAX_RE_SRC — the
+      // STRICT post-transpile oracle, NOT the broader __modernRe pre-check
+      // above, which would false-positive on legal ES2015 `, ...x` array/
+      // call spread that preset-env legitimately leaves in lowered output.
+      "    var __oracleRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      "    function __txFnv(s){var h=0x811c9dc5;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;}return h.toString(36);}",
+      "    function __txDropGet(code){",
+      '      try{if(localStorage.getItem("jellyfin.shell.txDropDisabled")==="1")return Promise.resolve(null);}catch(_){}',
+      "      var d=window.__shellTxDrop;",
+      "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
+      '      var rel=d.entries[__txFnv(String(code||""))];',
+      '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      "    }",
       "    var __TXVER=" + JSON.stringify(TX_VER) + ";",
       "    try{window.__TXVER=__TXVER;}catch(_){}",
       '    var __TXPFX="shell.tx"+__TXVER+":";',
@@ -991,9 +1061,13 @@
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
-      '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      // JEL-621: server pre-lowered drop attempt first — on a hit neither
+      // __ensureBabel nor maybeTranspile runs for this script.
+      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      "          return __dp.then(function(pre){",
+      '          var __p=pre==null&&needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
       "          return __p.then(function(){",
-      "            var out=maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code);",
       "            if(out==null){",
       "              try{parent.removeChild(stub);}catch(_){}",
       '              try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -1009,6 +1083,7 @@
       "            try{parent.replaceChild(node,stub);}catch(_){try{parent.appendChild(node);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "          });",
       "          });",
       "        })",
       "        .catch(function(err){",
@@ -1059,9 +1134,12 @@
       '      window.fetch(String(src).indexOf("?")>=0?src+"&__sb="+Date.now()+"."+(window.__sbN=(window.__sbN||0)+1):src,String(src).indexOf("?")>=0?{credentials:"omit",cache:"no-store"}:{credentials:"omit"})',
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
-      '          var __p=needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      // JEL-621: server pre-lowered drop attempt first (see rewrite above).
+      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      "          return __dp.then(function(pre){",
+      '          var __p=pre==null&&needsTx(code)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
       "          return __p.then(function(){",
-      "            var out=maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code);",
       '            if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '            var ns=document.createElement("script");',
       "            var gated=needsJq(out);",
@@ -1074,6 +1152,7 @@
       "            catch(_){try{(document.head||document.documentElement).appendChild(ns);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "          });",
       "          });",
       "        })",
       '        .catch(function(err){try{console.warn("shell: setter fetch/transpile failed",src,err&&err.message);}catch(_){}dispatchEvt(node,"error");});',
@@ -1190,14 +1269,19 @@
       "        busy=true;",
       "        setTimeout(function(){",
       "          if(authed()){stopAuth();busy=false;return;}",
-      '          var __p=needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
-      "          __p.then(function(){",
-      "            try{",
-      "              var out=maybeTranspile(it.c);",
-      "              if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
-      "            }catch(_){P.e++;}",
-      "            busy=false;",
-      "            drain();",
+      // JEL-621: try the pre-lowered drop before priming Babel — on a drop
+      // hit the primer caches the server-lowered body and Babel stays cold.
+      "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
+      "          __dp.then(function(pre){",
+      '            var __p=pre==null&&needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "            __p.then(function(){",
+      "              try{",
+      "                var out=pre!=null?pre:maybeTranspile(it.c);",
+      "                if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
+      "              }catch(_){P.e++;}",
+      "              busy=false;",
+      "              drain();",
+      "            });",
       "          });",
       "        },120);",
       "      }",
@@ -1854,7 +1938,14 @@
       "        if((!window.__shellCMPatched||!window.__shellPMPatched||!window.__shellPluginManager)&&window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
       '      }catch(e){window.__shellCMErr="walk:"+String(e.message).slice(0,40);setTimeout(__shellWalkWebpack,500);}',
       "    }",
-      "    setTimeout(__shellWalkWebpack,200);",
+      // JEL-623: kick the walker on first paint instead of at seed time.
+      // Pre-paint it was just a 500ms ApiClient wait loop (the paint
+      // gate now owns that wait with a cheaper property check), and
+      // kicking at entry-completion made the expensive wr.m factory-
+      // registry scan compete with the first home render. The CM/PM/
+      // pluginManager patches it installs are playback-path only, so
+      // first-paint is early enough by seconds.
+      "    (function(){function kick(){setTimeout(__shellWalkWebpack,200);}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(kick);}else{kick();}})();",
       "  }catch(_){}",
       "})();",
     ].join(`
@@ -2143,7 +2234,7 @@
     }
   }
   function qaBeaconBody() {
-    return "/* JEL-1971: QA HTTP beacon \u2014 outbound DOM telemetry channel for the hourly\n * scout. Replaces `0 debug` AUL handshake (capped at ~2 sessions per TV boot,\n * see JEL-1969) and persistent WebInspector (Samsung silently ignores\n * `web-inspector=\"enable\"` on consumer Tizen 5.0 release-signed WGTs, see\n * JEL-1970).\n *\n * Outbound HTTP works from the Tizen web app sandbox unrestricted because\n * config.xml `<access origin=\"*\">` is already set. The QA host listens on a\n * fixed LAN port and persists each POST as a JSON line; scout polls\n * `GET /latest?serial=...` for current state.\n *\n * Gating:\n *   - off unless localStorage['jellyfin.qa.overlay'] === '1' (same flag as\n *     the QA HUD overlay). Production builds never trip the gate because\n *     index.html sets it only on QA-flavored WGTs.\n *   - beacon URL overridable via localStorage['jellyfin.qa.beaconUrl'];\n *     default `http://192.168.0.20:8731/qa-beacon`.\n *   - tick paused when document.hidden (no telemetry while app backgrounded).\n *   - deferred 5 s post-DOMContentLoaded so cold-boot critical path stays\n *     untouched.\n */\n(function(){\n    try {\n        if (localStorage.getItem('jellyfin.qa.overlay') !== '1') return;\n    } catch (e) { return; }\n\n    var DEFAULT_URL = 'http://192.168.0.20:8731/qa-beacon';\n    var TICK_MS = 4000;\n    var START_DELAY_MS = 5000;\n    var MAX_TEXT_LEN = 120;\n    var MAX_ERRORS = 20;\n\n    var beaconUrl;\n    try { beaconUrl = localStorage.getItem('jellyfin.qa.beaconUrl') || DEFAULT_URL; }\n    catch (e) { beaconUrl = DEFAULT_URL; }\n\n    var serial = null;\n    try {\n        if (typeof webapis !== 'undefined' && webapis.productinfo && typeof webapis.productinfo.getDuid === 'function') {\n            serial = webapis.productinfo.getDuid();\n        }\n    } catch (e) {}\n    if (!serial) {\n        try {\n            serial = localStorage.getItem('jellyfin.qa.beaconSerial');\n            if (!serial) {\n                serial = 'shell-' + Math.random().toString(36).slice(2, 10);\n                try { localStorage.setItem('jellyfin.qa.beaconSerial', serial); } catch (_) {}\n            }\n        } catch (e) { serial = 'shell-unknown'; }\n    }\n\n    var errors = [];\n    var seenErrors = {};\n    function pushError(s) {\n        if (!s) return;\n        s = String(s).slice(0, 400);\n        if (seenErrors[s]) return;\n        seenErrors[s] = 1;\n        errors.push(s);\n        if (errors.length > MAX_ERRORS) errors.shift();\n    }\n    try {\n        window.addEventListener('error', function(ev){\n            try {\n                var msg = ev && ev.error && ev.error.stack ? String(ev.error.stack).split('\\n').slice(0,3).join(' @@ ') : (ev && ev.message) || '';\n                if (msg) pushError(msg);\n            } catch (_) {}\n        }, true);\n        window.addEventListener('unhandledrejection', function(ev){\n            try {\n                var r = ev && ev.reason;\n                var msg = r && r.stack ? String(r.stack).split('\\n').slice(0,3).join(' @@ ') : (r && r.message) || String(r || '');\n                if (msg) pushError('unhandled: ' + msg);\n            } catch (_) {}\n        }, true);\n    } catch (e) {}\n\n    function descActive() {\n        try {\n            var el = document.activeElement;\n            if (!el) return null;\n            var r = (typeof el.getBoundingClientRect === 'function') ? el.getBoundingClientRect() : null;\n            var txt = '';\n            try { txt = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT_LEN); } catch (_) {}\n            return {\n                tag: el.tagName || null,\n                id: el.id || '',\n                className: (typeof el.className === 'string') ? el.className.slice(0, MAX_TEXT_LEN) : '',\n                textContent: txt,\n                rect: r ? {x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)} : null\n            };\n        } catch (_) { return null; }\n    }\n\n    function getHudText() {\n        try {\n            var hud = document.getElementById('__qa_hud');\n            if (!hud) return null;\n            return (hud.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 500);\n        } catch (_) { return null; }\n    }\n\n    function getQcState() {\n        try {\n            var creds = localStorage.getItem('jellyfin_credentials');\n            if (creds) {\n                var p = JSON.parse(creds);\n                var s = p && p.Servers && p.Servers[0];\n                if (s && s.AccessToken) return 'loggedIn';\n            }\n        } catch (_) {}\n        try {\n            if (document.querySelector('.btnUseQuickConnect, .qcCode')) return 'quickConnect';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.manualLoginForm, .loginForm, #txtUserName, #txtManualName')) return 'manualLogin';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.userItemContainer, .btnUser')) return 'userPicker';\n        } catch (_) {}\n        return 'unknown';\n    }\n\n    function countCards() {\n        try {\n            var n = document.querySelectorAll('.card, .listItem, .cardScalable').length;\n            return n;\n        } catch (_) { return -1; }\n    }\n\n    // JEL-1974 (v68): one-shot read of `jellyfin.qa.bootMarks.prior` \u2014\n    // the boot-mark IIFE in index.html rotated last boot's marks into\n    // this key. Beacon emits as payload.priorBootMarks on FIRST POST\n    // only, then nulls so subsequent 4 s ticks don't re-send (marks\n    // never change mid-boot). Server collector accepts arbitrary fields\n    // and persists into ndjson, so no schema change needed.\n    var priorBootMarks = null;\n    try {\n        var rawMarks = localStorage.getItem('jellyfin.qa.bootMarks.prior');\n        if (rawMarks) priorBootMarks = JSON.parse(rawMarks);\n    } catch (_) { priorBootMarks = null; }\n\n    function takePriorBootMarks() {\n        var v = priorBootMarks;\n        priorBootMarks = null;\n        return v;\n    }\n\n    function collectProbe() {\n        var p = {};\n        try { p.nl = typeof NodeList.prototype[Symbol.iterator]; } catch (e) { p.nl = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.hc = typeof HTMLCollection.prototype[Symbol.iterator]; } catch (e) { p.hc = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.symNat = String(window.Symbol).indexOf('native code') >= 0 ? 1 : 0; } catch (e) { p.symNat = -1; }\n        try { var nodes = document.querySelectorAll('html'); var seen = 0; for (var node of nodes) seen++; p.forof = 'ok:' + seen; } catch (e) { p.forof = String((e && e.message) || e).slice(0, 120); }\n        try { p.iterFix = window.__shellIterFix || null; } catch (e) { p.iterFix = null; }\n        try { var d = window.__shellDiag; p.diagErrs = d && d.errors && d.errors.length ? d.errors.slice(-3).map(function(r){ return (r.f || '') + ':' + (r.l || '') + ' ' + String(r.m || '').slice(0, 200); }) : null; } catch (e) { p.diagErrs = null; }\n        try { p.spin = document.querySelector('.docspinner, .mdlSpinner, .loading-spinner, .mdl-spinner') ? 1 : 0; } catch (e) { p.spin = -1; }\n        try { p.realCards = document.querySelectorAll('.card[data-id]').length; } catch (e) { p.realCards = -1; }\n        return p;\n    }\n\n    function buildPayload() {\n        var active = descActive();\n        var hud = getHudText();\n        var cards = countCards();\n        var snap = errors.slice(); // copy\n        errors.length = 0;\n        seenErrors = {};\n\n        var focus = null;\n        if (active && active.rect) {\n            focus = {y: active.rect.y, w: active.rect.w};\n        }\n\n        return {\n            ts: Date.now(),\n            serial: serial,\n            url: (location && location.href) || '',\n            title: document.title || '',\n            activeElement: active,\n            focus: focus,\n            hud: hud,\n            cards: cards,\n            errors: snap,\n            qcState: getQcState(),\n            probe: collectProbe(),\n            screenshotBase64: null,\n            ua: (navigator && navigator.userAgent) || '',\n            visibility: document.visibilityState || (document.hidden ? 'hidden' : 'visible'),\n            priorBootMarks: takePriorBootMarks()\n        };\n    }\n\n    var inflight = false;\n    function postOnce() {\n        if (inflight) return;\n        if (document.hidden) return;\n        inflight = true;\n        var body;\n        try { body = JSON.stringify(buildPayload()); }\n        catch (e) { inflight = false; return; }\n        try {\n            var xhr = new XMLHttpRequest();\n            xhr.open('POST', beaconUrl, true);\n            xhr.setRequestHeader('Content-Type', 'application/json');\n            xhr.timeout = 2500;\n            xhr.onloadend = function(){ inflight = false; };\n            xhr.ontimeout = function(){ inflight = false; };\n            xhr.onerror = function(){ inflight = false; };\n            xhr.send(body);\n        } catch (e) { inflight = false; }\n    }\n\n    function start() {\n        try { postOnce(); } catch (_) {}\n        setInterval(postOnce, TICK_MS);\n    }\n\n    if (document.readyState === 'complete' || document.readyState === 'interactive') {\n        setTimeout(start, START_DELAY_MS);\n    } else {\n        document.addEventListener('DOMContentLoaded', function(){ setTimeout(start, START_DELAY_MS); });\n    }\n\n    try {\n        window.__qaBeacon = {\n            post: postOnce,\n            url: function(){ return beaconUrl; },\n            serial: function(){ return serial; }\n        };\n    } catch (_) {}\n})();\n";
+    return "/* JEL-1971: QA HTTP beacon \u2014 outbound DOM telemetry channel for the hourly\n * scout. Replaces `0 debug` AUL handshake (capped at ~2 sessions per TV boot,\n * see JEL-1969) and persistent WebInspector (Samsung silently ignores\n * `web-inspector=\"enable\"` on consumer Tizen 5.0 release-signed WGTs, see\n * JEL-1970).\n *\n * Outbound HTTP works from the Tizen web app sandbox unrestricted because\n * config.xml `<access origin=\"*\">` is already set. The QA host listens on a\n * fixed LAN port and persists each POST as a JSON line; scout polls\n * `GET /latest?serial=...` for current state.\n *\n * Gating:\n *   - off unless localStorage['jellyfin.qa.overlay'] === '1' (same flag as\n *     the QA HUD overlay). Production builds never trip the gate because\n *     index.html sets it only on QA-flavored WGTs.\n *   - beacon URL comes ONLY from localStorage['jellyfin.qa.beaconUrl'];\n *     unset means the beacon stays OFF. No baked-in default endpoint \u2014\n *     a hardcoded operator-LAN URL is public-repo residue (JEL-628); QA\n *     builds / JSI snippets must seed the key alongside the overlay flag.\n *   - tick paused when document.hidden (no telemetry while app backgrounded).\n *   - deferred 5 s post-DOMContentLoaded so cold-boot critical path stays\n *     untouched.\n */\n(function(){\n    try {\n        if (localStorage.getItem('jellyfin.qa.overlay') !== '1') return;\n    } catch (e) { return; }\n\n    var TICK_MS = 4000;\n    var START_DELAY_MS = 5000;\n    var MAX_TEXT_LEN = 120;\n    var MAX_ERRORS = 20;\n\n    var beaconUrl = null;\n    try { beaconUrl = localStorage.getItem('jellyfin.qa.beaconUrl'); }\n    catch (e) { return; }\n    if (!beaconUrl) return;\n\n    var serial = null;\n    try {\n        if (typeof webapis !== 'undefined' && webapis.productinfo && typeof webapis.productinfo.getDuid === 'function') {\n            serial = webapis.productinfo.getDuid();\n        }\n    } catch (e) {}\n    if (!serial) {\n        try {\n            serial = localStorage.getItem('jellyfin.qa.beaconSerial');\n            if (!serial) {\n                serial = 'shell-' + Math.random().toString(36).slice(2, 10);\n                try { localStorage.setItem('jellyfin.qa.beaconSerial', serial); } catch (_) {}\n            }\n        } catch (e) { serial = 'shell-unknown'; }\n    }\n\n    var errors = [];\n    var seenErrors = {};\n    function pushError(s) {\n        if (!s) return;\n        s = String(s).slice(0, 400);\n        if (seenErrors[s]) return;\n        seenErrors[s] = 1;\n        errors.push(s);\n        if (errors.length > MAX_ERRORS) errors.shift();\n    }\n    try {\n        window.addEventListener('error', function(ev){\n            try {\n                var msg = ev && ev.error && ev.error.stack ? String(ev.error.stack).split('\\n').slice(0,3).join(' @@ ') : (ev && ev.message) || '';\n                if (msg) pushError(msg);\n            } catch (_) {}\n        }, true);\n        window.addEventListener('unhandledrejection', function(ev){\n            try {\n                var r = ev && ev.reason;\n                var msg = r && r.stack ? String(r.stack).split('\\n').slice(0,3).join(' @@ ') : (r && r.message) || String(r || '');\n                if (msg) pushError('unhandled: ' + msg);\n            } catch (_) {}\n        }, true);\n    } catch (e) {}\n\n    function descActive() {\n        try {\n            var el = document.activeElement;\n            if (!el) return null;\n            var r = (typeof el.getBoundingClientRect === 'function') ? el.getBoundingClientRect() : null;\n            var txt = '';\n            try { txt = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT_LEN); } catch (_) {}\n            return {\n                tag: el.tagName || null,\n                id: el.id || '',\n                className: (typeof el.className === 'string') ? el.className.slice(0, MAX_TEXT_LEN) : '',\n                textContent: txt,\n                rect: r ? {x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)} : null\n            };\n        } catch (_) { return null; }\n    }\n\n    function getHudText() {\n        try {\n            var hud = document.getElementById('__qa_hud');\n            if (!hud) return null;\n            return (hud.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 500);\n        } catch (_) { return null; }\n    }\n\n    function getQcState() {\n        try {\n            var creds = localStorage.getItem('jellyfin_credentials');\n            if (creds) {\n                var p = JSON.parse(creds);\n                var s = p && p.Servers && p.Servers[0];\n                if (s && s.AccessToken) return 'loggedIn';\n            }\n        } catch (_) {}\n        try {\n            if (document.querySelector('.btnUseQuickConnect, .qcCode')) return 'quickConnect';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.manualLoginForm, .loginForm, #txtUserName, #txtManualName')) return 'manualLogin';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.userItemContainer, .btnUser')) return 'userPicker';\n        } catch (_) {}\n        return 'unknown';\n    }\n\n    function countCards() {\n        try {\n            var n = document.querySelectorAll('.card, .listItem, .cardScalable').length;\n            return n;\n        } catch (_) { return -1; }\n    }\n\n    // JEL-1974 (v68): one-shot read of `jellyfin.qa.bootMarks.prior` \u2014\n    // the boot-mark IIFE in index.html rotated last boot's marks into\n    // this key. Beacon emits as payload.priorBootMarks on FIRST POST\n    // only, then nulls so subsequent 4 s ticks don't re-send (marks\n    // never change mid-boot). Server collector accepts arbitrary fields\n    // and persists into ndjson, so no schema change needed.\n    var priorBootMarks = null;\n    try {\n        var rawMarks = localStorage.getItem('jellyfin.qa.bootMarks.prior');\n        if (rawMarks) priorBootMarks = JSON.parse(rawMarks);\n    } catch (_) { priorBootMarks = null; }\n\n    function takePriorBootMarks() {\n        var v = priorBootMarks;\n        priorBootMarks = null;\n        return v;\n    }\n\n    function collectProbe() {\n        var p = {};\n        try { p.nl = typeof NodeList.prototype[Symbol.iterator]; } catch (e) { p.nl = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.hc = typeof HTMLCollection.prototype[Symbol.iterator]; } catch (e) { p.hc = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.symNat = String(window.Symbol).indexOf('native code') >= 0 ? 1 : 0; } catch (e) { p.symNat = -1; }\n        try { var nodes = document.querySelectorAll('html'); var seen = 0; for (var node of nodes) seen++; p.forof = 'ok:' + seen; } catch (e) { p.forof = String((e && e.message) || e).slice(0, 120); }\n        try { p.iterFix = window.__shellIterFix || null; } catch (e) { p.iterFix = null; }\n        try { var d = window.__shellDiag; p.diagErrs = d && d.errors && d.errors.length ? d.errors.slice(-3).map(function(r){ return (r.f || '') + ':' + (r.l || '') + ' ' + String(r.m || '').slice(0, 200); }) : null; } catch (e) { p.diagErrs = null; }\n        try { p.spin = document.querySelector('.docspinner, .mdlSpinner, .loading-spinner, .mdl-spinner') ? 1 : 0; } catch (e) { p.spin = -1; }\n        try { p.realCards = document.querySelectorAll('.card[data-id]').length; } catch (e) { p.realCards = -1; }\n        return p;\n    }\n\n    function buildPayload() {\n        var active = descActive();\n        var hud = getHudText();\n        var cards = countCards();\n        var snap = errors.slice(); // copy\n        errors.length = 0;\n        seenErrors = {};\n\n        var focus = null;\n        if (active && active.rect) {\n            focus = {y: active.rect.y, w: active.rect.w};\n        }\n\n        return {\n            ts: Date.now(),\n            serial: serial,\n            url: (location && location.href) || '',\n            title: document.title || '',\n            activeElement: active,\n            focus: focus,\n            hud: hud,\n            cards: cards,\n            errors: snap,\n            qcState: getQcState(),\n            probe: collectProbe(),\n            screenshotBase64: null,\n            ua: (navigator && navigator.userAgent) || '',\n            visibility: document.visibilityState || (document.hidden ? 'hidden' : 'visible'),\n            priorBootMarks: takePriorBootMarks()\n        };\n    }\n\n    var inflight = false;\n    function postOnce() {\n        if (inflight) return;\n        if (document.hidden) return;\n        inflight = true;\n        var body;\n        try { body = JSON.stringify(buildPayload()); }\n        catch (e) { inflight = false; return; }\n        try {\n            var xhr = new XMLHttpRequest();\n            xhr.open('POST', beaconUrl, true);\n            xhr.setRequestHeader('Content-Type', 'application/json');\n            xhr.timeout = 2500;\n            xhr.onloadend = function(){ inflight = false; };\n            xhr.ontimeout = function(){ inflight = false; };\n            xhr.onerror = function(){ inflight = false; };\n            xhr.send(body);\n        } catch (e) { inflight = false; }\n    }\n\n    function start() {\n        try { postOnce(); } catch (_) {}\n        setInterval(postOnce, TICK_MS);\n    }\n\n    if (document.readyState === 'complete' || document.readyState === 'interactive') {\n        setTimeout(start, START_DELAY_MS);\n    } else {\n        document.addEventListener('DOMContentLoaded', function(){ setTimeout(start, START_DELAY_MS); });\n    }\n\n    try {\n        window.__qaBeacon = {\n            post: postOnce,\n            url: function(){ return beaconUrl; },\n            serial: function(){ return serial; }\n        };\n    } catch (_) {}\n})();\n";
   }
   function injectQaBeacon(doc) {
     var body = qaBeaconBody();
@@ -2240,11 +2331,111 @@
     } catch (_) {}
     return JSI_PUBLIC_PATH;
   }
+  // JEL-618: channel body cache (lockstep with shell.js — see the full
+  // rationale there). The channel aggregates EVERY enabled JS-Injector
+  // snippet (~1.2 MB live) and txSetStatic refuses bodies > 256 KiB, so
+  // pre-JEL-618 every boot re-downloaded AND re-babeled the whole channel.
+  // The FINAL executable body (post-transpile, post-jQuery-gate) persists
+  // in a chunked localStorage record; served while fresh (6 h TTL,
+  // override 'jellyfin.shell.jsiChannelMaxAgeMs', '0' disables) and only
+  // while TX_VER matches. Chunks first, meta last; joined body is length-
+  // and hash-checked on read. Plugin-agnostic.
+  var JSI_CHANNEL_META_KEY = "jellyfin.shell.jsiChannel.meta",
+    JSI_CHANNEL_CHUNK_PFX = "jellyfin.shell.jsiChannel.c",
+    JSI_CHANNEL_MAXAGE_KEY = "jellyfin.shell.jsiChannelMaxAgeMs",
+    JSI_CHANNEL_MAXAGE_DEFAULT = 21600000,
+    JSI_CHANNEL_CHUNK_LEN = 131072,
+    JSI_CHANNEL_MAX_CHUNKS = 32;
+  function jsiChannelMaxAge() {
+    try {
+      var v = localStorage.getItem(JSI_CHANNEL_MAXAGE_KEY);
+      if (v != null && /^[0-9]+$/.test(v)) return parseInt(v, 10);
+    } catch (_) {}
+    return JSI_CHANNEL_MAXAGE_DEFAULT;
+  }
+  function jsiChannelCacheClear() {
+    try {
+      localStorage.removeItem(JSI_CHANNEL_META_KEY);
+      for (var i = 0; i < JSI_CHANNEL_MAX_CHUNKS; i++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + i);
+    } catch (_) {}
+  }
+  function jsiChannelCacheGet() {
+    try {
+      var maxAge = jsiChannelMaxAge();
+      if (maxAge <= 0) return null;
+      var meta = JSON.parse(localStorage.getItem(JSI_CHANNEL_META_KEY));
+      if (!meta || meta.v !== TX_VER) return null;
+      // Math.abs: a TV clock jump in EITHER direction bounds staleness
+      // instead of making a backdated record immortal.
+      if (!(meta.t > 0) || Math.abs(Date.now() - meta.t) > maxAge) return null;
+      if (!(meta.n >= 1) || meta.n > JSI_CHANNEL_MAX_CHUNKS) return null;
+      var parts = [];
+      for (var i = 0; i < meta.n; i++) {
+        var c = localStorage.getItem(JSI_CHANNEL_CHUNK_PFX + i);
+        if (c == null) return null;
+        parts.push(c);
+      }
+      var body = parts.join("");
+      if (body.length !== meta.l || txFnv1a(body) !== meta.h) return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+  function jsiChannelCacheSet(body) {
+    try {
+      if (typeof body !== "string" || !body) return;
+      if (body.length > JSI_CHANNEL_CHUNK_LEN * JSI_CHANNEL_MAX_CHUNKS) return;
+      if (jsiChannelMaxAge() <= 0) return;
+      var n = Math.ceil(body.length / JSI_CHANNEL_CHUNK_LEN);
+      for (var i = 0; i < n; i++)
+        localStorage.setItem(
+          JSI_CHANNEL_CHUNK_PFX + i,
+          body.slice(
+            i * JSI_CHANNEL_CHUNK_LEN,
+            (i + 1) * JSI_CHANNEL_CHUNK_LEN,
+          ),
+        );
+      for (var j = n; j < JSI_CHANNEL_MAX_CHUNKS; j++)
+        localStorage.removeItem(JSI_CHANNEL_CHUNK_PFX + j);
+      localStorage.setItem(
+        JSI_CHANNEL_META_KEY,
+        JSON.stringify({
+          v: TX_VER,
+          t: Date.now(),
+          n: n,
+          l: body.length,
+          h: txFnv1a(body),
+        }),
+      );
+    } catch (_) {
+      // Quota mid-write: drop the whole record so a later boot can never
+      // pair a surviving meta with half-written chunks.
+      jsiChannelCacheClear();
+    }
+  }
   function injectJsInjectorChannel(doc, serverUrl) {
     try {
       if (jsiChannelDisabled() || !doc || !doc.body) return;
       var channelPath = jsiChannelPath();
       if (doc.querySelector('script[src*="' + channelPath + '"]')) return;
+      // JEL-618: a fresh cached channel body (already transpiled + gated on
+      // a prior boot) is inlined directly — no <script src>, no download,
+      // no babel. transpileLegacyScripts skips it via data-shell-jsi-cached,
+      // and a body that is already lowered needs no babel eager-kick.
+      var cachedBody = jsiChannelCacheGet();
+      try {
+        window.__shellJsiChannelCache = cachedBody != null ? "hit" : "miss";
+      } catch (_) {}
+      if (cachedBody != null) {
+        var sc = doc.createElement("script");
+        sc.textContent = cachedBody;
+        sc.setAttribute("data-shell-jsi-channel", "1");
+        sc.setAttribute("data-shell-jsi-cached", "1");
+        doc.body.appendChild(sc);
+        return;
+      }
       var s = doc.createElement("script");
       // JEL-216: the snippet channel aggregates arbitrary user JS-Injector
       // snippets, so its body is config-mutable (a user can edit/add a snippet
@@ -2262,13 +2453,35 @@
         (channelPath.indexOf("?") < 0 ? "?_jsi=1" : "&_jsi=1")),
         s.setAttribute("data-shell-jsi-channel", "1"),
         doc.body.appendChild(s));
-      // JEL-216: an active channel on a legacy engine GUARANTEES a transpile is
-      // needed (the channel body is the only place a user can introduce
+      // JEL-216: an active channel on a legacy engine used to GUARANTEE a
+      // transpile (the channel body is the only place a user can introduce
       // `?.`/`??`). Kick the babel load now (idempotent, cached promise) so it
       // is not lazily started inside the pre-write critical path where a cold
-      // 2.4 MB parse on a slow TV can lose the give-up race and let raw modern
+      // parse on a slow TV can lose the give-up race and let raw modern
       // syntax through. Fire-and-forget; transpileLegacyScripts still awaits it.
-      if (isLegacyChromium() && typeof window.__ensureBabel == "function")
+      // Two independent reasons now let us skip that eager kick on the happy
+      // path (either one suffices — a genuine per-script miss still lazy-loads
+      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
+      //   JEL-620: the channel body routes through the content-addressed
+      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      //   soft-skip — streak >= 2 means the last two full passes (channel
+      //   included) were cache-covered; a miss resets the streak so the next
+      //   boot kicks eagerly again.
+      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
+      //   a drop-covered channel body never touches Babel, so the eager kick
+      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
+      var jsiStreakSkip = false;
+      try {
+        jsiStreakSkip =
+          (parseInt(localStorage.getItem(BABEL_UNUSED_STREAK_KEY) || "0", 10) ||
+            0) >= 2;
+      } catch (_) {}
+      if (
+        isLegacyChromium() &&
+        !jsiStreakSkip &&
+        typeof window.__ensureBabel == "function" &&
+        !(window.__shellTxDrop && window.__shellTxDrop.ok)
+      )
         try {
           window.__ensureBabel();
         } catch (_) {}
@@ -2304,6 +2517,121 @@
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
       } catch (_) {}
+  }
+  // ---- Pre-lowered transpile drop (JEL-621) ------------------------------
+  // THE dominant cold-boot cost on Tizen 5.0 is Babel itself (~1.9 MB of
+  // plugin JS serially transformed on the TV main thread, 21-42 s measured).
+  // The /shell/ drop (packages/server-shell-drop, build-tx-drop.mjs) may
+  // publish pre-lowered ES5 bodies keyed by the fnv1a hash of the ORIGINAL
+  // source text (same txFnv1a the JEL-178 `txc:` key uses). The shell fetches
+  // ${server}/shell/tx-manifest.json in parallel with the /web/ RTT; each
+  // slow-path script hashes its fetched source and, on a manifest hit,
+  // downloads the pre-lowered body instead of loading Babel at all. A drop
+  // body is accepted ONLY if the STRICT post-transpile oracle
+  // (MODERN_SYNTAX_RE) finds no modern token, and the manifest must carry
+  // this shell's exact BABEL_OPTS_KEY — anything else falls back to the
+  // on-device Babel path, never to raw modern source. Mirrored 1:1 with
+  // shell.js (JEL-624 EXPECTED_MIRRORED).
+  // Kill switch: localStorage["jellyfin.shell.txDropDisabled"]="1".
+  var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
+  function txDropDisabled() {
+    try {
+      return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function loadTxDropManifest(serverUrl) {
+    // Parks a never-rejecting promise on window.__shellTxDropReady and the
+    // resolved {ok,base,entries,...} state on window.__shellTxDrop (read by
+    // the in-document seed pipelines — window survives document.write).
+    // Non-legacy engines and disabled boots resolve null immediately; a
+    // missing/invalid manifest (today's servers: /shell/ 404) resolves null
+    // after one small bounded fetch, and every consumer falls back to the
+    // on-device transpile path unchanged.
+    if (!isLegacyChromium() || txDropDisabled()) {
+      window.__shellTxDropReady = Promise.resolve(null);
+      return window.__shellTxDropReady;
+    }
+    var p = withBootTimeout(
+      fetch(
+        // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
+        // reliably; a per-fetch unique token forces a real network read so
+        // a freshly regenerated drop is picked up on the next boot.
+        serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
+        { credentials: "omit", cache: "no-store" },
+      ),
+      "tx drop manifest",
+      4000,
+    )
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (mf) {
+        if (!mf || typeof mf !== "object" || !mf.entries) return null;
+        // Different transform semantics (target/loose/assumptions drift
+        // between the drop builder and this shell) could pass the syntax
+        // oracle yet behave differently at runtime; require an exact match.
+        if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
+        var d = {
+          ok: true,
+          base: serverUrl + "/shell/",
+          entries: mf.entries,
+          h: 0,
+          m: 0,
+          r: 0,
+          f: 0,
+        };
+        window.__shellTxDrop = d;
+        return d;
+      })
+      .catch(function () {
+        return null;
+      });
+    window.__shellTxDropReady = p;
+    return p;
+  }
+  function txDropResolve(code) {
+    // Promise<loweredBody|null>. null means "no usable drop body" — the
+    // caller falls back to the Babel slow path. Never rejects.
+    var ready = window.__shellTxDropReady;
+    if (!ready || typeof ready.then !== "function")
+      return Promise.resolve(null);
+    return ready
+      .then(function (d) {
+        if (!d || !d.ok || !d.entries) return null;
+        var rel = d.entries[txFnv1a(String(code || ""))];
+        if (typeof rel !== "string" || !rel) {
+          d.m++;
+          return null;
+        }
+        return fetch(d.base + rel, { credentials: "omit" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (body) {
+            if (
+              typeof body !== "string" ||
+              !body.length ||
+              MODERN_SYNTAX_RE.test(body)
+            ) {
+              d.r++;
+              return null;
+            }
+            d.h++;
+            return body;
+          })
+          .catch(function () {
+            d.f++;
+            return null;
+          });
+      })
+      .catch(function () {
+        return null;
+      });
   }
   // JEL-417: PRE-check gates on the broader MODERN_PRECHECK_RE (also catches
   // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
@@ -2350,8 +2678,11 @@
           } catch (_) {}
           var next = prev;
           if ((c.scriptsFound || 0) > 0) {
+            // JEL-621: a script served by the pre-lowered drop needed no
+            // Babel either — count it toward full coverage so drop-covered
+            // servers reach streak>=2 and stop the eager babel preload.
             (c.pluginBabelLazy || 0) === 0 &&
-            (c.cachedHits || 0) === c.scriptsFound
+            (c.cachedHits || 0) + (c.txDropHits || 0) === c.scriptsFound
               ? (next = prev + 1)
               : (next = 0);
             try {
@@ -2413,7 +2744,8 @@
       (counts.fastPath = 0),
       (counts.babelLazyTriggered = 0),
       (counts.pluginBabelLazy = 0),
-      (counts.pluginPrefetchAdopted = 0));
+      (counts.pluginPrefetchAdopted = 0),
+      (counts.txDropHits = 0));
     for (
       var pluginPrefetch = window.__shellPluginPrefetch || null,
         pluginUrlsForNextBoot = [],
@@ -2537,12 +2869,22 @@
         s.getAttribute("data-shell-diag") === "1"
       )
         return null;
+      // JEL-618: an inlined cached channel body is FINAL executable output
+      // (transpiled + jQuery-gated on a prior boot). Running the modern-
+      // syntax pre-check over ~1 MB — or worse, a string-literal false
+      // positive re-babeling it — would refund the entire caching win.
+      if (s.getAttribute("data-shell-jsi-cached") === "1")
+        return (counts.skipped++, null);
       if (s.getAttribute("data-shell-bundle-patched"))
         return (counts.skipped++, null);
       var src = s.getAttribute("src");
       if (src) {
         if (isJellyfinWebBundle(src)) return (counts.skipped++, null);
         counts.scriptsFound++;
+        // JEL-618: adopt the finished channel body into the channel cache.
+        // Attribute-matched (our own injected tag), never URL-matched, so a
+        // server-injected public.js is never recorded. Plugin-agnostic.
+        var isJsiChannelTag = s.getAttribute("data-shell-jsi-channel") === "1";
         var url;
         try {
           url = new URL(src, baseUrl).href;
@@ -2611,6 +2953,7 @@
                   s.setAttribute("data-shell-tx-cached", "1"),
                   counts.transpiled++,
                   counts.cachedHits++);
+                if (isJsiChannelTag) jsiChannelCacheSet(pre);
                 return;
               }
               if (!needsTranspile(code)) {
@@ -2625,6 +2968,7 @@
                   s.setAttribute("data-shell-fast-path", "1"),
                   gatedRaw && s.setAttribute("data-shell-jquery-gated", "1"),
                   txSetStatic(ck, bodyRaw),
+                  isJsiChannelTag && jsiChannelCacheSet(bodyRaw),
                   counts.transpiled++,
                   counts.fastPath++,
                   shellLog(
@@ -2634,56 +2978,87 @@
                   ));
                 return;
               }
-              return (
-                counts.babelLazyTriggered++,
-                counts.pluginBabelLazy++,
-                markBabelNeeded(),
-                ensureBabelReady().then(function (ready) {
-                  if (!ready) {
-                    counts.transpileFailed++;
-                    // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
-                    // leaving the raw external <script src> in place would let
-                    // un-transpiled `?.`/`??` reach the M63 engine — a SyntaxError
-                    // that kills the ENTIRE script (e.g. the whole concatenated
-                    // JS-Injector public.js, taking every snippet with it). Drop
-                    // the src so it cannot execute raw; markBabelNeeded() above
-                    // primes babel on the next boot, which then transpiles it
-                    // (graceful one-boot degradation instead of a hard crash).
-                    neutralizeUntranspiled(s, url);
-                    try {
-                      console.warn(
-                        "shell: babel not available, dropped untranspiled",
-                        url,
-                      );
-                    } catch (_) {}
-                    return;
-                  }
-                  counts.babel = !0;
-                  var out = babelTranspile(code);
-                  if (out == null) {
-                    counts.transpileFailed++;
-                    // JEL-216: same fail-safe for a transform that threw.
-                    neutralizeUntranspiled(s, url);
-                    return;
-                  }
-                  (counts.transpiled++,
-                    s.removeAttribute("src"),
+              // JEL-621: pre-lowered drop attempt before the Babel slow path.
+              // On a manifest hit the server already ran this exact transform
+              // offline — inline the drop body (same jq gate + tx-cache write
+              // as the Babel path) and never touch Babel for this script.
+              return txDropResolve(code).then(function (dropped) {
+                if (dropped != null) {
+                  (s.removeAttribute("src"),
                     s.removeAttribute("defer"),
                     s.removeAttribute("async"),
                     s.removeAttribute("type"));
-                  var gated = needsJQueryGate(out),
-                    body = gated ? wrapForJQuery(out) : out;
-                  ((s.textContent = body),
+                  var gatedD = needsJQueryGate(dropped),
+                    bodyD = gatedD ? wrapForJQuery(dropped) : dropped;
+                  ((s.textContent = bodyD),
                     s.setAttribute("data-shell-transpiled-from", url),
-                    gated && s.setAttribute("data-shell-jquery-gated", "1"),
-                    txSetStatic(ck, body),
+                    s.setAttribute("data-shell-tx-drop", "1"),
+                    gatedD && s.setAttribute("data-shell-jquery-gated", "1"),
+                    txSetStatic(ck, bodyD),
+                    // JEL-618 x JEL-621: drop already carries the transpiled
+                    // JSI-channel body — seed the channel-body cache here too.
+                    isJsiChannelTag && jsiChannelCacheSet(bodyD),
+                    counts.transpiled++,
+                    counts.txDropHits++,
                     shellLog(
-                      "transpiled+inlined",
+                      "tx-drop+inlined",
                       url,
-                      gated ? "(jq-gated)" : "",
+                      gatedD ? "(jq-gated)" : "",
                     ));
-                })
-              );
+                  return;
+                }
+                return (
+                  counts.babelLazyTriggered++,
+                  counts.pluginBabelLazy++,
+                  markBabelNeeded(),
+                  ensureBabelReady().then(function (ready) {
+                    if (!ready) {
+                      counts.transpileFailed++;
+                      // JEL-216 fail-safe: this body matched MODERN_SYNTAX_RE, so
+                      // leaving the raw external <script src> in place would let
+                      // un-transpiled `?.`/`??` reach the M63 engine — a SyntaxError
+                      // that kills the ENTIRE script (e.g. the whole concatenated
+                      // JS-Injector public.js, taking every snippet with it). Drop
+                      // the src so it cannot execute raw; markBabelNeeded() above
+                      // primes babel on the next boot, which then transpiles it
+                      // (graceful one-boot degradation instead of a hard crash).
+                      neutralizeUntranspiled(s, url);
+                      try {
+                        console.warn(
+                          "shell: babel not available, dropped untranspiled",
+                          url,
+                        );
+                      } catch (_) {}
+                      return;
+                    }
+                    counts.babel = !0;
+                    var out = babelTranspile(code);
+                    if (out == null) {
+                      counts.transpileFailed++;
+                      // JEL-216: same fail-safe for a transform that threw.
+                      neutralizeUntranspiled(s, url);
+                      return;
+                    }
+                    (counts.transpiled++,
+                      s.removeAttribute("src"),
+                      s.removeAttribute("defer"),
+                      s.removeAttribute("async"),
+                      s.removeAttribute("type"));
+                    var gated = needsJQueryGate(out),
+                      body = gated ? wrapForJQuery(out) : out;
+                    ((s.textContent = body),
+                      s.setAttribute("data-shell-transpiled-from", url),
+                      gated && s.setAttribute("data-shell-jquery-gated", "1"),
+                      txSetStatic(ck, body),
+                      isJsiChannelTag && jsiChannelCacheSet(body),
+                      shellLog(
+                        "transpiled+inlined",
+                        url,
+                        gated ? "(jq-gated)" : "",
+                      ));
+                  })
+                );
+              });
             })
             .catch(function (e) {
               counts.transpileFailed++;
@@ -2697,25 +3072,39 @@
       return !content || !content.replace(/\s/g, "")
         ? null
         : needsTranspile(content)
-          ? (counts.babelLazyTriggered++,
-            markBabelNeeded(),
-            ensureBabelReady().then(function (ready) {
-              if (!ready) {
-                try {
-                  console.warn(
-                    "shell: babel not available, skip inline transpile",
-                  );
-                } catch (_) {}
+          ? // JEL-621: pre-lowered drop attempt before the Babel slow path —
+            // inline bodies hash the same way as fetched external sources.
+            txDropResolve(content).then(function (droppedInline) {
+              if (droppedInline != null) {
+                ((s.textContent = droppedInline),
+                  s.setAttribute("data-shell-transpiled-inline", "1"),
+                  s.setAttribute("data-shell-tx-drop", "1"),
+                  counts.txDropHits++,
+                  shellLog("tx-drop inline script"));
                 return;
               }
-              counts.babel = !0;
-              var transpiled = babelTranspile(content);
-              transpiled != null &&
-                transpiled !== content &&
-                ((s.textContent = transpiled),
-                s.setAttribute("data-shell-transpiled-inline", "1"),
-                shellLog("transpiled inline script"));
-            }))
+              return (
+                counts.babelLazyTriggered++,
+                markBabelNeeded(),
+                ensureBabelReady().then(function (ready) {
+                  if (!ready) {
+                    try {
+                      console.warn(
+                        "shell: babel not available, skip inline transpile",
+                      );
+                    } catch (_) {}
+                    return;
+                  }
+                  counts.babel = !0;
+                  var transpiled = babelTranspile(content);
+                  transpiled != null &&
+                    transpiled !== content &&
+                    ((s.textContent = transpiled),
+                    s.setAttribute("data-shell-transpiled-inline", "1"),
+                    shellLog("transpiled inline script"));
+                })
+              );
+            })
           : (counts.fastPath++, null);
     });
     return Promise.all(jobs);
@@ -3096,11 +3485,30 @@
       babelNeeded = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}
     // JEL-197: the JS-Injector snippet channel injects + transpiles public.js,
-    // which only the DOMParser path can do. Bail when the channel is on and the
-    // document carries no public.js tag so injectJsInjectorChannel runs it
-    // through the firewall. Killswitch (jsiChannelDisabled) keeps the fast path.
-    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0)
-      return bail("jsiChannel");
+    // which only the DOMParser path can do. JEL-618: unless a fresh cached
+    // channel body exists — then the fast path splices it inline before
+    // </body> (the same position the DOM path appends it) and the slow walk
+    // isn't needed for the channel at all. A stale or absent cache still
+    // bails so injectJsInjectorChannel + the walk refresh it. Killswitch
+    // (jsiChannelDisabled) keeps the fast path on with no channel at all.
+    var jsiInlineTag = null;
+    if (!jsiChannelDisabled() && html.indexOf(jsiChannelPath()) < 0) {
+      var jsiBody = jsiChannelCacheGet();
+      if (jsiBody == null) return bail("jsiChannel");
+      // A "</script" literal inside a snippet body would terminate the
+      // spliced inline tag and corrupt the document (same guard as the
+      // bundle path). The DOM path tolerates such a body via textContent;
+      // only the string splice can't.
+      if (jsiBody.indexOf("</script") >= 0)
+        return bail("jsiChannelScriptClose");
+      jsiInlineTag =
+        '<script data-shell-jsi-channel="1" data-shell-jsi-cached="1">' +
+        jsiBody +
+        "</script>";
+      try {
+        window.__shellJsiChannelCache = "hit";
+      } catch (_) {}
+    }
     var headIdx = html.indexOf("<head>");
     if (headIdx < 0) return bail("noHead");
     var bundleMatch = BUNDLE_FAST_RE.exec(html),
@@ -3311,6 +3719,14 @@
         (window.__shellFastPathTxInlines =
           (window.__shellFastPathTxInlines || 0) + txInlines));
     }
+    // JEL-618: splice the cached channel body in last, immediately before
+    // </body> — after the bundle/tx inlining so its position mirrors the
+    // DOM path's body.appendChild ordering (channel executes after bundles).
+    if (jsiInlineTag) {
+      var jsiAt = patched.lastIndexOf("</body>");
+      if (jsiAt < 0) return bail("jsiChannelNoBody");
+      patched = patched.slice(0, jsiAt) + jsiInlineTag + patched.slice(jsiAt);
+    }
     return (window.__shellFastPathHits++, patched);
   }
   function markDocumentWrite() {
@@ -3459,6 +3875,12 @@
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
+    // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
+    // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
+    // without a /shell/ drop and every consumer falls back to Babel.
+    try {
+      loadTxDropManifest(serverUrl);
+    } catch (_) {}
     try {
       babelNeededFlag = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}

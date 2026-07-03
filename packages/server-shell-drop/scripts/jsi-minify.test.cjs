@@ -88,7 +88,9 @@ async function main() {
   // ---- 2) functional ------------------------------------------------------
   const { createRequire } = require("node:module");
   const req = createRequire(path.join(HERE, "jsi-minify-es5.mjs"));
-  const Babel = require(
+  // Load babel through the tool's own loader so the test tracks whatever
+  // babel.min.js shape the shells ship (JEL-620 slim IIFE isn't require()-able).
+  const Babel = tool.loadBabel(
     path.join(REPO, "packages", "shell-tizen", "src", "babel.min.js"),
   );
   const esbuild = req("esbuild");
@@ -96,28 +98,28 @@ async function main() {
   const PRECHECK_RE = new RegExp(tool.PRECHECK_SRC);
 
   // Snippet A: defines a shared top-level helper; uses every precheck
-  // trigger class the channel snippets realistically carry (optional
+  // trigger class the slim chrome:56 babel actually LOWERS (optional
   // chaining, nullish, logical assign, object spread incl. INTERIOR
-  // spread [JEL-417], rest params, call spread, optional catch binding,
-  // numeric separator).
+  // spread [JEL-417], optional catch binding, numeric separator). Chrome-56
+  // NATIVE comma-spread / rest params are deliberately absent — those are
+  // fail-closed by the gate (covered separately below), not lowered.
   const padding = "// " + "x".repeat(400) + "\n";
   const snippetA =
     padding +
-    "function jpSharedHelper(base, ...extra) {\n" +
+    "function jpSharedHelper(base, bonus) {\n" +
     "  const merged = { a: 1, ...base, z: 26 };\n" +
-    "  const arr = [0, ...extra];\n" +
     "  let count = merged.count ?? 1_000;\n" +
     "  count ||= 5;\n" +
-    "  try { count += arr.length; } catch { count = -1; }\n" +
+    "  try { count += bonus; } catch { count = -1; }\n" +
     "  return { merged, count, tag: base?.tag ?? 'none' };\n" +
     "}\n" +
-    "var jpChannelState = jpSharedHelper({ tag: 'seed', mid: true }, 7, 8);\n";
+    "var jpChannelState = jpSharedHelper({ tag: 'seed', mid: true }, 15);\n";
   // Snippet B: separate channel entry consuming A's top-level global —
   // the cross-snippet contract that forbids top-level mangling.
   const snippetB =
     padding +
     "var jpChannelResult = jpSharedHelper(\n" +
-    "  { tag: jpChannelState.tag, n: jpChannelState.count }, 1, 2, 3);\n";
+    "  { tag: jpChannelState.tag, n: jpChannelState.count }, 6);\n";
 
   assert.ok(PRECHECK_RE.test(snippetA), "fixture A must trip the precheck");
 
@@ -165,6 +167,30 @@ async function main() {
   vm.createContext(s2);
   vm.runInContext(outEs5, s2);
   assert.strictEqual(s2.jpPlainMarker, 42);
+
+  // ---- 2b) fail-closed on Chrome-56-native comma-spread / rest -------------
+  // The slim chrome:56 babel keeps these (JEL-620 stubs transform-spread /
+  // transform-parameters), so they still trip the shell precheck. The gate
+  // must REJECT them loudly — shipping one would forfeit the JEL-618 raw fast
+  // path for the whole concatenated channel.
+  const rejects = [
+    "function jpF(a, ...rest) { return jpG(a, rest.length); }\n", // rest params
+    "var jpY = jpH(seed, ...items);\n", // call spread
+    "var jpZ = [seed, ...items];\n", // array spread
+  ];
+  for (const bad of rejects) {
+    assert.ok(PRECHECK_RE.test(bad), "reject fixture should trip precheck");
+    assert.throws(
+      () => tool.transformSnippet(bad, ctx),
+      /comma-spread|precheck|stub/i,
+      "gate must fail-close on: " + bad.trim(),
+    );
+  }
+  // Leading (non-comma) spread is Chrome-56 native AND precheck-clean — it
+  // must pass through untouched, not be falsely rejected.
+  const leadClean = "var jpLead = jpMake(items[0]);\n";
+  assert.ok(!PRECHECK_RE.test(leadClean));
+  assert.ok(/;\n$/.test(tool.transformSnippet(leadClean, ctx)));
 
   // ---- 3) CLI end-to-end ---------------------------------------------------
   const { execFileSync } = require("node:child_process");
