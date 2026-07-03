@@ -1975,14 +1975,7 @@
       return !0;
     }
   }
-  function isJellyfinWebBundle(src) {
-    var bare = String(src || "").split("?")[0];
-    return !!(
-      /\.bundle\.js$/i.test(bare) ||
-      /\.chunk\.js$/i.test(bare) ||
-      /(^|\/)serviceworker\.js$/i.test(bare)
-    );
-  }
+  //@@SHELL_CORE:isJellyfinWebBundle@@
   var SHELL_DEBUG = !1;
   try {
     SHELL_DEBUG = localStorage.getItem("jellyfin.shell.debug") === "1";
@@ -2234,31 +2227,11 @@
     ].join(`
 `);
   }
-  function injectChromium56Polyfills(doc) {
-    if (isLegacyChromium()) {
-      var polyfillTag = doc.createElement("script");
-      ((polyfillTag.textContent = chromium56PolyfillBody()),
-        polyfillTag.setAttribute("data-shell-polyfill", "1"));
-      var seedTag = doc.querySelector("script[data-shell-seed]");
-      seedTag && seedTag.nextSibling
-        ? doc.head.insertBefore(polyfillTag, seedTag.nextSibling)
-        : seedTag
-          ? doc.head.appendChild(polyfillTag)
-          : doc.head.insertBefore(polyfillTag, doc.head.firstChild);
-    }
-  }
+  //@@SHELL_CORE:injectChromium56Polyfills@@
   function qaBeaconBody() {
     return "/* JEL-1971: QA HTTP beacon \u2014 outbound DOM telemetry channel for the hourly\n * scout. Replaces `0 debug` AUL handshake (capped at ~2 sessions per TV boot,\n * see JEL-1969) and persistent WebInspector (Samsung silently ignores\n * `web-inspector=\"enable\"` on consumer Tizen 5.0 release-signed WGTs, see\n * JEL-1970).\n *\n * Outbound HTTP works from the Tizen web app sandbox unrestricted because\n * config.xml `<access origin=\"*\">` is already set. The QA host listens on a\n * fixed LAN port and persists each POST as a JSON line; scout polls\n * `GET /latest?serial=...` for current state.\n *\n * Gating:\n *   - off unless localStorage['jellyfin.qa.overlay'] === '1' (same flag as\n *     the QA HUD overlay). Production builds never trip the gate because\n *     index.html sets it only on QA-flavored WGTs.\n *   - beacon URL comes ONLY from localStorage['jellyfin.qa.beaconUrl'];\n *     unset means the beacon stays OFF. No baked-in default endpoint \u2014\n *     a hardcoded operator-LAN URL is public-repo residue (JEL-628); QA\n *     builds / JSI snippets must seed the key alongside the overlay flag.\n *   - tick paused when document.hidden (no telemetry while app backgrounded).\n *   - deferred 5 s post-DOMContentLoaded so cold-boot critical path stays\n *     untouched.\n */\n(function(){\n    try {\n        if (localStorage.getItem('jellyfin.qa.overlay') !== '1') return;\n    } catch (e) { return; }\n\n    var TICK_MS = 4000;\n    var START_DELAY_MS = 5000;\n    var MAX_TEXT_LEN = 120;\n    var MAX_ERRORS = 20;\n\n    var beaconUrl = null;\n    try { beaconUrl = localStorage.getItem('jellyfin.qa.beaconUrl'); }\n    catch (e) { return; }\n    if (!beaconUrl) return;\n\n    var serial = null;\n    try {\n        if (typeof webapis !== 'undefined' && webapis.productinfo && typeof webapis.productinfo.getDuid === 'function') {\n            serial = webapis.productinfo.getDuid();\n        }\n    } catch (e) {}\n    if (!serial) {\n        try {\n            serial = localStorage.getItem('jellyfin.qa.beaconSerial');\n            if (!serial) {\n                serial = 'shell-' + Math.random().toString(36).slice(2, 10);\n                try { localStorage.setItem('jellyfin.qa.beaconSerial', serial); } catch (_) {}\n            }\n        } catch (e) { serial = 'shell-unknown'; }\n    }\n\n    var errors = [];\n    var seenErrors = {};\n    function pushError(s) {\n        if (!s) return;\n        s = String(s).slice(0, 400);\n        if (seenErrors[s]) return;\n        seenErrors[s] = 1;\n        errors.push(s);\n        if (errors.length > MAX_ERRORS) errors.shift();\n    }\n    try {\n        window.addEventListener('error', function(ev){\n            try {\n                var msg = ev && ev.error && ev.error.stack ? String(ev.error.stack).split('\\n').slice(0,3).join(' @@ ') : (ev && ev.message) || '';\n                if (msg) pushError(msg);\n            } catch (_) {}\n        }, true);\n        window.addEventListener('unhandledrejection', function(ev){\n            try {\n                var r = ev && ev.reason;\n                var msg = r && r.stack ? String(r.stack).split('\\n').slice(0,3).join(' @@ ') : (r && r.message) || String(r || '');\n                if (msg) pushError('unhandled: ' + msg);\n            } catch (_) {}\n        }, true);\n    } catch (e) {}\n\n    function descActive() {\n        try {\n            var el = document.activeElement;\n            if (!el) return null;\n            var r = (typeof el.getBoundingClientRect === 'function') ? el.getBoundingClientRect() : null;\n            var txt = '';\n            try { txt = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, MAX_TEXT_LEN); } catch (_) {}\n            return {\n                tag: el.tagName || null,\n                id: el.id || '',\n                className: (typeof el.className === 'string') ? el.className.slice(0, MAX_TEXT_LEN) : '',\n                textContent: txt,\n                rect: r ? {x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height)} : null\n            };\n        } catch (_) { return null; }\n    }\n\n    function getHudText() {\n        try {\n            var hud = document.getElementById('__qa_hud');\n            if (!hud) return null;\n            return (hud.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 500);\n        } catch (_) { return null; }\n    }\n\n    function getQcState() {\n        try {\n            var creds = localStorage.getItem('jellyfin_credentials');\n            if (creds) {\n                var p = JSON.parse(creds);\n                var s = p && p.Servers && p.Servers[0];\n                if (s && s.AccessToken) return 'loggedIn';\n            }\n        } catch (_) {}\n        try {\n            if (document.querySelector('.btnUseQuickConnect, .qcCode')) return 'quickConnect';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.manualLoginForm, .loginForm, #txtUserName, #txtManualName')) return 'manualLogin';\n        } catch (_) {}\n        try {\n            if (document.querySelector('.userItemContainer, .btnUser')) return 'userPicker';\n        } catch (_) {}\n        return 'unknown';\n    }\n\n    function countCards() {\n        try {\n            var n = document.querySelectorAll('.card, .listItem, .cardScalable').length;\n            return n;\n        } catch (_) { return -1; }\n    }\n\n    // JEL-1974 (v68): one-shot read of `jellyfin.qa.bootMarks.prior` \u2014\n    // the boot-mark IIFE in index.html rotated last boot's marks into\n    // this key. Beacon emits as payload.priorBootMarks on FIRST POST\n    // only, then nulls so subsequent 4 s ticks don't re-send (marks\n    // never change mid-boot). Server collector accepts arbitrary fields\n    // and persists into ndjson, so no schema change needed.\n    var priorBootMarks = null;\n    try {\n        var rawMarks = localStorage.getItem('jellyfin.qa.bootMarks.prior');\n        if (rawMarks) priorBootMarks = JSON.parse(rawMarks);\n    } catch (_) { priorBootMarks = null; }\n\n    function takePriorBootMarks() {\n        var v = priorBootMarks;\n        priorBootMarks = null;\n        return v;\n    }\n\n    function collectProbe() {\n        var p = {};\n        try { p.nl = typeof NodeList.prototype[Symbol.iterator]; } catch (e) { p.nl = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.hc = typeof HTMLCollection.prototype[Symbol.iterator]; } catch (e) { p.hc = 'ERR:' + String((e && e.message) || e).slice(0, 60); }\n        try { p.symNat = String(window.Symbol).indexOf('native code') >= 0 ? 1 : 0; } catch (e) { p.symNat = -1; }\n        try { var nodes = document.querySelectorAll('html'); var seen = 0; for (var node of nodes) seen++; p.forof = 'ok:' + seen; } catch (e) { p.forof = String((e && e.message) || e).slice(0, 120); }\n        try { p.iterFix = window.__shellIterFix || null; } catch (e) { p.iterFix = null; }\n        try { var d = window.__shellDiag; p.diagErrs = d && d.errors && d.errors.length ? d.errors.slice(-3).map(function(r){ return (r.f || '') + ':' + (r.l || '') + ' ' + String(r.m || '').slice(0, 200); }) : null; } catch (e) { p.diagErrs = null; }\n        try { p.spin = document.querySelector('.docspinner, .mdlSpinner, .loading-spinner, .mdl-spinner') ? 1 : 0; } catch (e) { p.spin = -1; }\n        try { p.realCards = document.querySelectorAll('.card[data-id]').length; } catch (e) { p.realCards = -1; }\n        return p;\n    }\n\n    function buildPayload() {\n        var active = descActive();\n        var hud = getHudText();\n        var cards = countCards();\n        var snap = errors.slice(); // copy\n        errors.length = 0;\n        seenErrors = {};\n\n        var focus = null;\n        if (active && active.rect) {\n            focus = {y: active.rect.y, w: active.rect.w};\n        }\n\n        return {\n            ts: Date.now(),\n            serial: serial,\n            url: (location && location.href) || '',\n            title: document.title || '',\n            activeElement: active,\n            focus: focus,\n            hud: hud,\n            cards: cards,\n            errors: snap,\n            qcState: getQcState(),\n            probe: collectProbe(),\n            screenshotBase64: null,\n            ua: (navigator && navigator.userAgent) || '',\n            visibility: document.visibilityState || (document.hidden ? 'hidden' : 'visible'),\n            priorBootMarks: takePriorBootMarks()\n        };\n    }\n\n    var inflight = false;\n    function postOnce() {\n        if (inflight) return;\n        if (document.hidden) return;\n        inflight = true;\n        var body;\n        try { body = JSON.stringify(buildPayload()); }\n        catch (e) { inflight = false; return; }\n        try {\n            var xhr = new XMLHttpRequest();\n            xhr.open('POST', beaconUrl, true);\n            xhr.setRequestHeader('Content-Type', 'application/json');\n            xhr.timeout = 2500;\n            xhr.onloadend = function(){ inflight = false; };\n            xhr.ontimeout = function(){ inflight = false; };\n            xhr.onerror = function(){ inflight = false; };\n            xhr.send(body);\n        } catch (e) { inflight = false; }\n    }\n\n    function start() {\n        try { postOnce(); } catch (_) {}\n        setInterval(postOnce, TICK_MS);\n    }\n\n    if (document.readyState === 'complete' || document.readyState === 'interactive') {\n        setTimeout(start, START_DELAY_MS);\n    } else {\n        document.addEventListener('DOMContentLoaded', function(){ setTimeout(start, START_DELAY_MS); });\n    }\n\n    try {\n        window.__qaBeacon = {\n            post: postOnce,\n            url: function(){ return beaconUrl; },\n            serial: function(){ return serial; }\n        };\n    } catch (_) {}\n})();\n";
   }
-  function injectQaBeacon(doc) {
-    var body = qaBeaconBody();
-    if (!(!body || body === "__QA_BEACON_BODY__")) {
-      var beaconTag = doc.createElement("script");
-      (beaconTag.setAttribute("data-shell-beacon", "1"),
-        (beaconTag.textContent = body),
-        doc.head.appendChild(beaconTag));
-    }
-  }
+  //@@SHELL_CORE:injectQaBeacon@@
   // JEL-126: compositor-driven boot progress indicator for the written
   // document — three pulsing dots (CSS transform/opacity keyframes) that
   // keep animating through the ~20 s main-thread blackout while the M63
@@ -2777,16 +2750,7 @@
   // `?.`/`??` can't SyntaxError the M63 engine. The original URL is preserved
   // (already recorded into jellyfin.shell.pluginUrls for next-boot priming) via
   // a marker attribute for diagnostics.
-  function neutralizeUntranspiled(s, url) {
-    try {
-      (s.removeAttribute("src"),
-        s.removeAttribute("defer"),
-        s.removeAttribute("async"),
-        s.removeAttribute("type"),
-        (s.textContent = ""),
-        s.setAttribute("data-shell-tx-dropped", url || "1"));
-    } catch (_) {}
-  }
+  //@@SHELL_CORE:neutralizeUntranspiled@@
   function transpileLegacyScripts(doc, baseUrl) {
     var legacy = isLegacyChromium();
     if (!legacy) return Promise.resolve();
@@ -3613,12 +3577,7 @@
     }
     setTimeout(tick, POLL);
   }
-  function escAttr(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;");
-  }
+  //@@SHELL_CORE:escAttr@@
   var BUNDLE_FAST_RE =
       /<script\b[^>]*\bsrc\s*=\s*["']([^"']*main\.[^"']*\.bundle\.js[^"']*)["'][^>]*>\s*<\/script>/i,
     VENDORS_FAST_RE =
@@ -3894,18 +3853,7 @@
     }
     return (window.__shellFastPathHits++, patched);
   }
-  function markDocumentWrite() {
-    try {
-      if (!window.__qaMarks) return;
-      ((window.__qaMarks.tDocumentWrite = performance.now()),
-        typeof window.__qaMarksSave == "function"
-          ? window.__qaMarksSave()
-          : localStorage.setItem(
-              "jellyfin.qa.bootMarks.current",
-              JSON.stringify(window.__qaMarks),
-            ));
-    } catch (_) {}
-  }
+  //@@SHELL_CORE:markDocumentWrite@@
   function restoreCredsVault() {
     // JEL-134 (JEL-132 v2): boot-time restore from the IndexedDB creds
     // vault. A hard TV restart rolls localStorage back to the last durable
@@ -4245,15 +4193,7 @@
     var err = document.getElementById("boot-error");
     err && ((err.textContent = msg), (err.hidden = !1));
   }
-  function injectConnectStylesheet() {
-    if (!document.getElementById("shell-connect-css")) {
-      var ln = document.createElement("link");
-      ((ln.id = "shell-connect-css"),
-        (ln.rel = "stylesheet"),
-        (ln.href = "connect/connect.css"),
-        document.head.appendChild(ln));
-    }
-  }
+  //@@SHELL_CORE:injectConnectStylesheet@@
   function attachConnectForm() {
     injectConnectStylesheet();
     var rootEl = document.getElementById("boot-root");

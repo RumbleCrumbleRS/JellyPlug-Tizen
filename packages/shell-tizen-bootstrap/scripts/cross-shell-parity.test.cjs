@@ -45,8 +45,19 @@
 // so release version bumps do not churn the pins (scenario12/13 in
 // selftest.cjs already assert the literals match config.xml).
 //
+// JEL-644: some mirrored functions are no longer hand-duplicated — they live
+// once in packages/shell-core/src/shell-core.src.js and are spliced into both
+// shells at build time via //@@SHELL_CORE:name@@ markers. This test expands
+// both sources through expand() BEFORE extraction, so those functions reappear
+// (identical text in both, trivially mirrored — drift is structurally
+// impossible for them). Everything still in EXPECTED_MIRRORED as raw text is
+// hand-mirrored and gets the real byte-for-byte check.
+//
 // Maintenance:
-//   - Changed a mirrored function? Apply the SAME change to both
+//   - Changed a SHELL-CORE function (has a //@@SHELL_CORE:name@@ marker in
+//     both shells)? Edit packages/shell-core/src/shell-core.src.js ONCE. The
+//     build/verify guards prove both .min blobs still regenerate byte-identically.
+//   - Changed a still-hand-mirrored function? Apply the SAME change to both
 //     packages/shell-tizen/src/shell.js and
 //     packages/shell-tizen-bootstrap/src/boot-shell.src.js.
 //   - Changed an intentionally-divergent function (on both sides, on
@@ -64,6 +75,13 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { transformSync } = require("esbuild");
+// JEL-644: functions extracted into packages/shell-core live in BOTH shells as
+// //@@SHELL_CORE:name@@ markers, not raw declarations. Expand both sources
+// (identical shell-core text spliced into each) before extraction so those
+// names reappear and are trivially mirror-identical — they are single-source
+// now, so drift is structurally impossible, and the hand-mirrored functions
+// keep getting the real byte-for-byte check below.
+const { expand } = require("../../shell-core/expand.cjs");
 
 const BOOT_SRC = path.join(__dirname, "..", "src", "boot-shell.src.js");
 const RETAIL_SRC = path.join(
@@ -350,8 +368,8 @@ function extractConst(norm, name, label) {
   return m[1];
 }
 
-const retailRaw = fs.readFileSync(RETAIL_SRC, "utf8");
-const bootRaw = fs.readFileSync(BOOT_SRC, "utf8");
+const retailRaw = expand(fs.readFileSync(RETAIL_SRC, "utf8"));
+const bootRaw = expand(fs.readFileSync(BOOT_SRC, "utf8"));
 const configXml = fs.readFileSync(CONFIG_XML, "utf8");
 const verMatch = /<widget[^>]*\bversion="([0-9.]+)"/.exec(configXml);
 if (!verMatch) fatal("could not read widget version from bootstrap config.xml");

@@ -2433,21 +2433,7 @@
     }
   }
 
-  function isJellyfinWebBundle(src) {
-    // jellyfin-web webpack chunks served from /web/. They are deliberately
-    // transpiled to the browserslist that includes Chrome 56, so we leave
-    // them alone. Same for the service worker which runs in its own realm.
-    // Also skip async webpack chunks (*.chunk.js, chunkFilename pattern
-    // from webpack.common.js: [name].[contenthash].chunk.js) — they are
-    // already transpiled by the build and must not be re-fetched/inlined
-    // or chunk-load promises (e.g. import('./style.scss') in htmlVideoPlayer)
-    // will reject, preventing <video> element creation on Tizen 5.0 (JEL-436).
-    var bare = String(src || "").split("?")[0];
-    if (/\.bundle\.js$/i.test(bare)) return true;
-    if (/\.chunk\.js$/i.test(bare)) return true;
-    if (/(^|\/)serviceworker\.js$/i.test(bare)) return true;
-    return false;
-  }
+  //@@SHELL_CORE:isJellyfinWebBundle@@
 
   var SHELL_DEBUG = false;
   try {
@@ -2788,17 +2774,7 @@
     ].join("\n");
   }
 
-  function injectChromium56Polyfills(doc) {
-    if (!isLegacyChromium()) return;
-    var polyfillTag = doc.createElement("script");
-    polyfillTag.textContent = chromium56PolyfillBody();
-    polyfillTag.setAttribute("data-shell-polyfill", "1");
-    var seedTag = doc.querySelector("script[data-shell-seed]");
-    if (seedTag && seedTag.nextSibling)
-      doc.head.insertBefore(polyfillTag, seedTag.nextSibling);
-    else if (seedTag) doc.head.appendChild(polyfillTag);
-    else doc.head.insertBefore(polyfillTag, doc.head.firstChild);
-  }
+  //@@SHELL_CORE:injectChromium56Polyfills@@
 
   // JEL-1971: QA HTTP beacon body. Replaces `0 debug` AUL handshake
   // (JEL-1969: ~2 sessions per TV boot) + persistent WebInspector
@@ -2814,14 +2790,7 @@
     return "__QA_BEACON_BODY__";
   }
 
-  function injectQaBeacon(doc) {
-    var body = qaBeaconBody();
-    if (!body || body === "__QA_BEACON_BODY__") return;
-    var beaconTag = doc.createElement("script");
-    beaconTag.setAttribute("data-shell-beacon", "1");
-    beaconTag.textContent = body;
-    doc.head.appendChild(beaconTag);
-  }
+  //@@SHELL_CORE:injectQaBeacon@@
 
   // JEL-126: compositor-driven boot progress indicator for the written
   // document. The M63 spends ~40 s parsing + executing the jellyfin-web
@@ -3499,16 +3468,7 @@
   // an inert node so its raw `?.`/`??` can't SyntaxError the M63 engine (which
   // would take down the whole concatenated script). src/defer/async/type are
   // removed and the body emptied; the URL is preserved in a marker attribute.
-  function neutralizeUntranspiled(s, url) {
-    try {
-      s.removeAttribute("src");
-      s.removeAttribute("defer");
-      s.removeAttribute("async");
-      s.removeAttribute("type");
-      s.textContent = "";
-      s.setAttribute("data-shell-tx-dropped", url || "1");
-    } catch (_) {}
-  }
+  //@@SHELL_CORE:neutralizeUntranspiled@@
 
   function transpileLegacyScripts(doc, baseUrl) {
     var legacy = isLegacyChromium();
@@ -4436,12 +4396,7 @@
     setTimeout(tick, POLL);
   }
 
-  function escAttr(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;");
-  }
+  //@@SHELL_CORE:escAttr@@
 
   // JEL-1832: warm-boot string fast path.
   //
@@ -4652,18 +4607,7 @@
   // beacon (qa-beacon.js, injected via injectQaBeacon) reads
   // jellyfin.qa.bootMarks.prior on first POST and emits the previous
   // boot's full span set as payload.priorBootMarks.
-  function markDocumentWrite() {
-    try {
-      if (!window.__qaMarks) return;
-      window.__qaMarks.tDocumentWrite = performance.now();
-      if (typeof window.__qaMarksSave === "function") window.__qaMarksSave();
-      else
-        localStorage.setItem(
-          "jellyfin.qa.bootMarks.current",
-          JSON.stringify(window.__qaMarks),
-        );
-    } catch (_) {}
-  }
+  //@@SHELL_CORE:markDocumentWrite@@
 
   function restoreCredsVault() {
     // JEL-134 (JEL-132 v2): boot-time restore from the IndexedDB creds
@@ -5135,19 +5079,7 @@
     err.hidden = false;
   }
 
-  function injectConnectStylesheet() {
-    // JEL-739: connect.css moved off the critical path. Warm saved-server
-    // boot replaces #boot-root via document.write before paint, so the
-    // stylesheet was fetched + parsed on every boot but used only on
-    // first launch. Inject the <link> here, the only path that actually
-    // renders the connect form.
-    if (document.getElementById("shell-connect-css")) return;
-    var ln = document.createElement("link");
-    ln.id = "shell-connect-css";
-    ln.rel = "stylesheet";
-    ln.href = "connect/connect.css";
-    document.head.appendChild(ln);
-  }
+  //@@SHELL_CORE:injectConnectStylesheet@@
 
   function attachConnectForm() {
     injectConnectStylesheet();

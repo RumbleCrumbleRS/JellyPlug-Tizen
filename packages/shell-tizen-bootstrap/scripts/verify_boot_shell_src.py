@@ -38,6 +38,11 @@ SRC = HERE.parent / "src"
 BOOT_MIN = SRC / "boot-shell.min.js"
 BOOT_SRC = SRC / "boot-shell.src.js"
 
+# JEL-644: expand //@@SHELL_CORE:name@@ markers before canonicalizing so the
+# committed source side carries the same shared body the build inlines.
+sys.path.insert(0, str(HERE.parent.parent / "shell-core"))
+import expand as shell_core  # noqa: E402
+
 # Must match build_boot_shell.py / the historical build_shell_min.py flags so
 # the canonical form is the one the artifact is actually built with.
 ESBUILD_FLAGS = [
@@ -111,7 +116,9 @@ def main() -> int:
     esbuild = resolve_esbuild(args.esbuild)
 
     deployed_code = strip_manifest(BOOT_MIN.read_bytes())
-    source_code = BOOT_SRC.read_bytes()
+    source_code = shell_core.expand(
+        BOOT_SRC.read_text(encoding="utf-8")
+    ).encode("utf-8")  # JEL-644: splice shell-core before canonicalizing
 
     canon_deployed = canonicalize(esbuild, deployed_code)
     canon_source = canonicalize(esbuild, source_code)

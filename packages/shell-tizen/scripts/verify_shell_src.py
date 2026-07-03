@@ -121,7 +121,8 @@ def forward_build(esbuild: list[str]) -> bytes:
     overridden (build_shell_min resolves its binary at import time).
     """
     proc = subprocess.run(
-        [*esbuild, str(SHELL_JS), *ESBUILD_FLAGS],
+        [*esbuild, "--loader=js", *ESBUILD_FLAGS],
+        input=build.expanded_source(),  # JEL-644: splice shell-core first
         capture_output=True,
         check=True,
     )
@@ -146,7 +147,7 @@ def main() -> int:
 
     # JEL-625: the out-of-band breadcrumb manifest must match shell.js exactly.
     expected_history = build.build_history_text(
-        build.collect_breadcrumbs(SHELL_JS.read_text(encoding="utf-8"))
+        build.collect_breadcrumbs(build.expanded_text())  # JEL-644: expand first
     )
     actual_history = (
         JEL_HISTORY.read_text(encoding="utf-8") if JEL_HISTORY.exists() else None

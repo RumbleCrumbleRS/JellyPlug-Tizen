@@ -17,6 +17,8 @@ importers:
 
   packages/server-shell-drop: {}
 
+  packages/shell-core: {}
+
   packages/shell-tizen: {}
 
   packages/shell-tizen-bootstrap: {}

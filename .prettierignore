@@ -6,3 +6,9 @@ pnpm-lock.yaml
 
 # Frozen published release snapshots — versioned artifacts, not source
 release-artifacts/
+
+# JEL-644: raw JS fragment spliced into both shells. Deliberately kept at the
+# 2-space indentation it has inside each shell's IIFE (byte-for-byte from
+# shell.js) so the diff stays reviewable; prettier would flatten it to
+# top-level indent. esbuild re-minifies it anyway, so formatting is moot.
+packages/shell-core/src/shell-core.src.js

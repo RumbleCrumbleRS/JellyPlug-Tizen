@@ -49,6 +49,14 @@ BOOT_SRC = SRC / "boot-shell.src.js"
 BOOT_MANIFEST = SRC / "boot-shell.manifest.txt"
 BOOT_MIN = SRC / "boot-shell.min.js"
 
+# JEL-644: shared shell-core body is spliced into boot-shell.src.js at build
+# time via //@@SHELL_CORE:name@@ markers + expand(). The fragment carries
+# retail's canonical raw text, which was build-minify byte-identical to boot's
+# copy before extraction, so the expanded source re-minifies to the committed
+# boot-shell.min.js byte-for-byte (verify_boot_shell_src.py proves it).
+sys.path.insert(0, str(PKG_ROOT.parent / "shell-core"))
+import expand as shell_core  # noqa: E402
+
 ESBUILD_FLAGS = [
     "--minify-whitespace",
     "--minify-syntax",
@@ -76,9 +84,19 @@ def resolve_esbuild(explicit: str | None) -> list[str]:
     )
 
 
+def expanded_source(src: Path) -> bytes:
+    """`src` with its //@@SHELL_CORE:name@@ markers spliced (JEL-644)."""
+    return shell_core.expand(src.read_text(encoding="utf-8")).encode("utf-8")
+
+
 def minify(esbuild: list[str], src: Path) -> bytes:
+    # JEL-644: feed the shell-core-expanded source via stdin (not the file path)
+    # so the shared body is inlined before minification.
     proc = subprocess.run(
-        [*esbuild, str(src), *ESBUILD_FLAGS], capture_output=True, check=True
+        [*esbuild, "--loader=js", *ESBUILD_FLAGS],
+        input=expanded_source(src),
+        capture_output=True,
+        check=True,
     )
     return proc.stdout
 
