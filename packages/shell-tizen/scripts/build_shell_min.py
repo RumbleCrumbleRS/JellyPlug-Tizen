@@ -33,6 +33,13 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
+# JEL-644: shared shell-core body is spliced into shell.js at build time via
+# //@@SHELL_CORE:name@@ markers + expand(). The fragment carries retail's
+# canonical raw text, so the expanded source re-minifies to the committed
+# shell.min.js byte-for-byte (verify_shell_src.py proves it). expand.py lives
+# in packages/shell-core (repo root / packages / shell-core).
+sys.path.insert(0, str(HERE.parent.parent / "shell-core"))
+import expand as shell_core  # noqa: E402
 # JEL-98: the JEL-96 Tizen-only restructure split the formerly-flat package into
 # src/ (shell sources + deployed blobs) and tizen/ (the WGT config), but left
 # these path constants pointing at the script's own scripts/ dir, which silently
@@ -106,17 +113,37 @@ ESBUILD = (
 )
 
 
+def expanded_text() -> str:
+    """shell.js with its //@@SHELL_CORE:name@@ markers spliced (JEL-644).
+
+    Used both as the esbuild input and as the breadcrumb-collection input, so
+    JEL- breadcrumbs that live in the shell-core fragments stay in the
+    generated history (they ship in shell.min.js after the splice).
+    """
+    return shell_core.expand(SHELL_JS.read_text(encoding="utf-8"))
+
+
+def expanded_source() -> bytes:
+    return expanded_text().encode("utf-8")
+
+
 def run_esbuild() -> bytes:
-    """Run esbuild without mangle, no comments, return minified bytes."""
+    """Run esbuild without mangle, no comments, return minified bytes.
+
+    JEL-644: esbuild reads the shell-core-expanded source from stdin (not the
+    file path) so the shared body is inlined before minification.
+    """
     args = [
         ESBUILD,
-        str(SHELL_JS),
+        "--loader=js",
         "--minify-whitespace",
         "--minify-syntax",
         "--target=es2017",
         "--legal-comments=none",
     ]
-    proc = subprocess.run(args, capture_output=True, check=True)
+    proc = subprocess.run(
+        args, input=expanded_source(), capture_output=True, check=True
+    )
     return proc.stdout
 
 
@@ -295,7 +322,9 @@ def build_history_text(breadcrumbs) -> str:
 
 
 def main() -> int:
-    src = SHELL_JS.read_text(encoding="utf-8")
+    # JEL-644: breadcrumbs are collected from the shell-core-expanded source so
+    # crumbs in the shared fragments survive into shell.jel-history.txt.
+    src = expanded_text()
     minified = run_esbuild()
     minified = inject_babel_fingerprint(minified)
     minified = inject_shell_version(minified)
