@@ -324,7 +324,14 @@ async function main() {
     entries,
   };
   const outPath = path.join(dropDir, "tx-manifest.json");
-  await fs.writeFile(outPath, JSON.stringify(manifest, null, 2), "utf8");
+  // Atomic publish (JEL-653): the drop dir is a live web root under a cron
+  // regen loop; write-then-rename so a TV fetching mid-regen can never read
+  // a truncated manifest. tx/ bodies are content-addressed and written
+  // before this point, so the renamed manifest only ever references
+  // complete files.
+  const tmpPath = outPath + ".tmp";
+  await fs.writeFile(tmpPath, JSON.stringify(manifest, null, 2), "utf8");
+  await fs.rename(tmpPath, outPath);
   console.log(
     "manifest  path=" +
       outPath +

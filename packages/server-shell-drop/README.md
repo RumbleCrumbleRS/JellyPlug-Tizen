@@ -80,10 +80,46 @@ node scripts/build-tx-drop.mjs /var/www/jellyfin/shell \
                                        # jellyfin.shell.pluginUrls list
 ```
 
-Hook the same command into whatever regenerates your snippet-channel
-config (the JEL-178 Caddy-regen hook is a natural place) so the drop is
-never stale for more than one boot — a stale drop is safe (hash miss →
-on-device transpile), just slow.
+A stale drop is safe (hash miss → on-device transpile), just slow: every
+miss regresses that boot to the measured 21–42 s on-TV Babel class.
+
+### Automated regeneration (JEL-653)
+
+Do not run the builder by hand on a live host — schedule
+`scripts/regen-tx-drop.sh`, the unattended entrypoint that wraps the
+builder with single-flight locking, `--merge` semantics, atomic manifest
+publish (write + rename, so a TV fetching mid-regen never reads a torn
+manifest), optional pruning, and optional tooling self-update:
+
+```
+# crontab on the machine hosting /shell/ (every 15 min):
+MAILTO=ops@example.com
+*/15 * * * * TX_DROP_GIT_SYNC=1 TX_DROP_PRUNE_DAYS=14 \
+  /opt/JellyPlug-Tizen/packages/server-shell-drop/scripts/regen-tx-drop.sh \
+  /var/www/jellyfin/shell https://server
+```
+
+- **Server content change** (jellyfin-web update, plugin config edit, JSI
+  snippet edit): the next tick re-fetches `--web-index` plus the snippet
+  channel (`TX_DROP_JSI_PATH`, default `/JavaScriptInjector/public.js` —
+  the shell's `jsiChannelPath()` default) and publishes fresh entries
+  under the new source hashes. Staleness is bounded by the cron interval.
+- **Release cut (JEL-213)**: a shell release can change `BABEL_OPTS_KEY`,
+  the lockstep regexes, or the vendored `babel.min.js`, which stales the
+  whole drop at once (opts-key mismatch → the TV ignores the manifest).
+  `TX_DROP_GIT_SYNC=1` fast-forwards the repo checkout before each run, so
+  a release is picked up within one interval with no extra human step; the
+  release runbook may additionally trigger one immediate run.
+- **Alerting**: a failed run exits non-zero (cron `MAILTO` / systemd
+  `OnFailure` is the operator-side alert). The TV-side signal is the QA
+  beacon: `probe.txDrop` in the beacon payload echoes the
+  `window.__shellTxDrop {h,m,r,f}` counters and sets `stale: 1` for the
+  sustained-miss signature (manifest loaded, zero hits, ≥5
+  miss/reject/fetch-fail events in a boot) — the fingerprint of a drop
+  the automation stopped refreshing.
+- `TX_DROP_PRUNE_DAYS=N` bounds drop-dir growth: the builder rewrites
+  every still-served body each run (mtime refreshes), so only entries
+  whose source stopped being served keep aging and get reaped.
 
 ## manifest.json schema
 
