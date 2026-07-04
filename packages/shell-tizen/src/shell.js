@@ -2937,6 +2937,185 @@
     doc.head.appendChild(progressTag);
   }
 
+  // JEL-647: Instant-Home. Netflix paints a cached snapshot of the last
+  // menu immediately at launch and then refreshes; the shell does the same.
+  // Measured on QN90B (Tizen 6.5) warm reload the first live home section
+  // paints at 9.3-13.5 s — this closes the visible gap by painting a static
+  // NON-interactive overlay rebuilt from a localStorage snapshot of the
+  // last settled home (above-fold section titles + card art URLs +
+  // geometry; art itself comes from the WebView disk cache, uncached art
+  // shows a dark skeleton tile).
+  //
+  // One body, three injection sites, all sharing window-level state
+  // (window.__shellIH survives the document.write handoff):
+  //   1. bootstrap() injects into the WIDGET document when a saved server
+  //      exists, so the snapshot is on-screen within the shell's first
+  //      ~second — long before /web/index.html is even fetched;
+  //   2. the DOMParser write path and 3. the string fast path both carry
+  //      the same script tag in the written document, because timer
+  //      survival across document.open is not guaranteed on every TV
+  //      Chromium — a generation counter (G.gen) makes the newest copy own
+  //      the watch/capture intervals and older ones self-cancel, so the
+  //      re-injection can never double-paint or double-capture.
+  //
+  // Paint: only when authed (jellyfin_credentials AccessToken — an
+  // unauthenticated boot lands on login, never home), snapshot server
+  // matches the saved server, and the snapshot is < 7 days old. The
+  // overlay is a fixed full-screen div: pointer-events:none, aria-hidden,
+  // zero tabbables (divs only) — it can never intercept focus or nav.
+  // First paint records boot-phase ring mark "snap" (JEL-617 recorder).
+  //
+  // Dismiss (crossfade 400 ms): live home hydrated above-fold (>= 4
+  // visible .card rects in-viewport), any user input (keydown/mousedown/
+  // pointerdown, capture phase), a non-home route (login / selectserver /
+  // wizard), partial hydration stall (> 8 s after first card), or a 90 s
+  // absolute cap. The watch tick also re-creates the overlay after
+  // document.write wipes the DOM (getElementById re-entry guard makes the
+  // repaint idempotent and free on every other tick).
+  //
+  // Capture: 1.5 s poll, armed in every document but only ever fires on
+  // #/home with >= 5 above-fold cards stable across two consecutive ticks
+  // and our own overlay gone (so it never snapshots itself). Serializes
+  // above-fold .sectionTitle text + all visible img/background-image art
+  // (http(s) only, deduped by rect) into localStorage, chunked at 24 KiB,
+  // hard-capped at 300 KiB, meta written LAST and removed on any write
+  // failure so a quota abort can never leave a torn snapshot. One capture
+  // per boot; 5 min hard stop.
+  //
+  // Body constraints: ES5 only (runs pre-polyfill on Chromium 56/63), no
+  // "</script" literal (string fast path splices it as raw HTML), every
+  // section try/caught (additive-defensive; failures count into
+  // window.__shellIH.err instead of breaking boot).
+  // Kill switch: localStorage['jellyfin.shell.instantHomeDisabled'] = '1'.
+  function instantHomeBody() {
+    return (
+      "(function(){try{" +
+      'try{if(localStorage.getItem("jellyfin.shell.instantHomeDisabled")==="1")return}catch(_){}' +
+      'var W=window,MK="jellyfin.shell.instantHome",OID="__shell_instant_home";' +
+      "var G=W.__shellIH;" +
+      'if(!G)G=W.__shellIH={gen:0,painted:0,paintMs:0,dismissed:0,why:"",dismissMs:0,captured:0,capMs:0,items:0,err:0};' +
+      "var gen=++G.gen;" +
+      "var t0=+new Date();" +
+      "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
+      'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
+      'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
+      "function readSnap(){try{" +
+      'var m=JSON.parse(localStorage.getItem(MK)||"null");' +
+      "if(!m||m.v!==1||!m.n||m.n>40)return null;" +
+      "if(m.srv&&m.srv!==srv())return null;" +
+      "if(!m.ts||+new Date()-m.ts>604800000)return null;" +
+      'var s="",i;' +
+      'for(i=0;i<m.n;i++){var c=localStorage.getItem(MK+"."+i);if(c==null)return null;s+=c}' +
+      "var d=JSON.parse(s);" +
+      "if(!d||!d.items||d.items.length<4)return null;" +
+      "d.w=m.w||1920;d.h=m.h||1080;" +
+      "return d}catch(_){return null}}" +
+      "function dismiss(why){" +
+      "if(G.dismissed)return;" +
+      "G.dismissed=1;G.why=why;G.dismissMs=+new Date()-(W.__shellT0||t0);" +
+      'try{var e=el0();if(e){e.style.opacity="0";setTimeout(function(){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}},450)}}catch(_){}}' +
+      "function paint(){try{" +
+      "if(G.dismissed||el0())return;" +
+      "var de=document.documentElement;" +
+      "if(!de||!de.appendChild)return;" +
+      "if(!authed())return;" +
+      "var d=readSnap();" +
+      "if(!d)return;" +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,rx=vw/d.w,ry=vh/d.h;" +
+      'var e=document.createElement("div");' +
+      "e.id=OID;" +
+      'e.setAttribute("aria-hidden","true");' +
+      'e.style.cssText="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2147483000;background:#101010;pointer-events:none;overflow:hidden;opacity:1;transition:opacity .4s";' +
+      "for(var i=0;i<d.items.length;i++){" +
+      'var it=d.items[i],n=document.createElement("div");' +
+      'var cs="position:absolute;left:"+Math.round(it.x*rx)+"px;top:"+Math.round(it.y*ry)+"px;width:"+Math.round(it.w*rx)+"px;height:"+Math.round(it.h*ry)+"px;";' +
+      'if(it.u){cs+="background:#1f1f1f url(\\""+String(it.u).replace(/["\\\\]/g,"")+"\\") center center no-repeat;background-size:cover;border-radius:"+((it.r|0)||4)+"px"}' +
+      'else{n.textContent=it.s||"";cs+="color:#ccc;font:500 "+Math.round((it.fs||26)*ry)+"px/1.25 sans-serif;white-space:nowrap;overflow:hidden"}' +
+      "n.style.cssText=cs;" +
+      "e.appendChild(n)}" +
+      "de.appendChild(e);" +
+      'if(!G.painted){G.painted=1;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase("snap")}catch(_){}}' +
+      "}catch(_){G.err++}}" +
+      'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
+      "if(!G.inputBound){G.inputBound=1;" +
+      'var oi=function(){dismiss("input")};' +
+      'try{W.addEventListener("keydown",oi,!0)}catch(_){}' +
+      'try{W.addEventListener("mousedown",oi,!0)}catch(_){}' +
+      'try{W.addEventListener("pointerdown",oi,!0)}catch(_){}}' +
+      "paint();" +
+      "var fc=0;" +
+      "var wIv=setInterval(function(){try{" +
+      "if(G.gen!==gen||G.dismissed){clearInterval(wIv);return}" +
+      'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
+      'var h="";try{h=String(location.hash||"")}catch(_){}' +
+      'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
+      "paint();" +
+      "var n=folds();" +
+      'if(n>=4){dismiss("hydrated");clearInterval(wIv);return}' +
+      'if(n>0){if(!fc)fc=+new Date();else if(+new Date()-fc>8000){dismiss("partial");clearInterval(wIv);return}}' +
+      "}catch(_){G.err++}},700);" +
+      "function capture(){try{" +
+      "if(el0())return;" +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,fold=vh*1.05,items=[],i,r;" +
+      'var ts=document.querySelectorAll(".sectionTitle");' +
+      "for(i=0;i<ts.length;i++){r=ts[i].getBoundingClientRect();" +
+      "if(r.width>0&&r.height>0&&r.bottom>0&&r.top<fold){" +
+      'var s=String(ts[i].textContent||"").replace(/^\\s+|\\s+$/g,"").slice(0,60);' +
+      "var fs=24;try{fs=parseInt(getComputedStyle(ts[i]).fontSize,10)||24}catch(_){}" +
+      "if(s)items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),s:s,fs:fs})}}" +
+      "var seen={},imgs=0;" +
+      "var ns=document.querySelectorAll('img,[style*=\"background-image\"]');" +
+      "for(i=0;i<ns.length&&items.length<90;i++){" +
+      "r=ns[i].getBoundingClientRect();" +
+      "if(!(r.width>=40&&r.height>=40&&r.bottom>0&&r.top<fold))continue;" +
+      'var u="";' +
+      'try{if(String(ns[i].tagName).toUpperCase()==="IMG")u=ns[i].currentSrc||ns[i].src||"";' +
+      "else{var m=/url\\((['\"]?)([^)]*?)\\1\\)/.exec(String(ns[i].style.backgroundImage||\"\"));if(m)u=m[2]}}catch(_){}" +
+      "if(!u||!/^https?:/.test(u)||u.length>600)continue;" +
+      'var k=Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width);' +
+      "if(seen[k])continue;" +
+      "seen[k]=1;" +
+      "var rad=0;try{rad=parseInt(getComputedStyle(ns[i]).borderTopLeftRadius,10)||0}catch(_){}" +
+      "items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),u:u,r:rad});" +
+      "imgs++}" +
+      "if(imgs<4)return;" +
+      "var body=JSON.stringify({items:items});" +
+      "if(body.length>307200)return;" +
+      "var CH=24576,n2=Math.ceil(body.length/CH);" +
+      "try{" +
+      'for(i=0;i<n2;i++)localStorage.setItem(MK+"."+i,body.substr(i*CH,CH));' +
+      'for(var j=n2;j<64;j++){if(localStorage.getItem(MK+"."+j)==null)break;localStorage.removeItem(MK+"."+j)}' +
+      "localStorage.setItem(MK,JSON.stringify({v:1,ts:+new Date(),n:n2,w:vw,h:vh,srv:srv()}));" +
+      "}catch(e2){try{localStorage.removeItem(MK)}catch(_){}G.err++;return}" +
+      "G.captured=1;G.capMs=+new Date()-(W.__shellT0||t0);G.items=items.length" +
+      "}catch(_){G.err++}}" +
+      "G.capGen=gen;" +
+      "var st=0,ln=-1;" +
+      "var cIv=setInterval(function(){try{" +
+      "if(G.capGen!==gen||G.captured){clearInterval(cIv);return}" +
+      "if(+new Date()-t0>300000){clearInterval(cIv);return}" +
+      'var h="";try{h=String(location.hash||"")}catch(_){}' +
+      'if(h.indexOf("home")===-1){st=0;ln=-1;return}' +
+      "var n=folds();" +
+      "if(n<5){st=0;ln=n;return}" +
+      "if(n===ln)st++;else{st=0;ln=n}" +
+      "if(st>=2)capture()" +
+      "}catch(_){G.err++}},1500);" +
+      "}catch(_){}})();"
+    );
+  }
+
+  // JEL-647: NOT legacy-gated (unlike injectBootProgress) — the 9-13 s warm
+  // first-paint gap this covers was measured on QN90B's Chromium 85. Called
+  // with the widget document (bootstrap), the DOMParser-path doc, and
+  // mirrored as a string splice in the fast path.
+  function injectInstantHome(doc) {
+    var ihTag = doc.createElement("script");
+    ihTag.setAttribute("data-shell-instant-home", "1");
+    ihTag.textContent = instantHomeBody();
+    doc.head.appendChild(ihTag);
+  }
+
   // JEL-197: shell-side JS-Injector snippet channel (parent JEL-196).
   // The Tizen shell bakes its own connect-form body and, once connected,
   // document.writes the server's /web/index.html. The JellyPlug snippets
@@ -4620,6 +4799,12 @@
       '<script data-shell-boot-progress="1">' +
       bootProgressBody() +
       "</script>";
+    // JEL-647: instant-home overlay must survive the fast path too — the
+    // widget-document copy's timers may not outlive document.open, so the
+    // written document always carries its own copy (generation counter in
+    // the body makes the duplicate injection idempotent).
+    var instantHomeTag =
+      '<script data-shell-instant-home="1">' + instantHomeBody() + "</script>";
     var injected =
       '<script data-shell-diag="1">' +
       diagBody +
@@ -4634,7 +4819,8 @@
       polyBody +
       "</script>" +
       beaconTag +
-      progressTag;
+      progressTag +
+      instantHomeTag;
     var insertAt = headIdx + 6;
     var patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     // Init bundle counters so HUD reads consistent values whether or
@@ -5078,6 +5264,9 @@
         // JEL-126: boot progress dots that survive the ~20 s main-thread
         // blackout while jellyfin-web parses+executes (legacy-only).
         injectBootProgress(doc);
+        // JEL-647: instant-home snapshot overlay (repaint + dismiss +
+        // capture) in the written document — see instantHomeBody().
+        injectInstantHome(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through
         // the tizen-compat firewall (idempotent vs a server-injected copy).
@@ -5226,6 +5415,14 @@
 
     var stored = loadServerUrl();
     if (stored) {
+      // JEL-647: paint the cached home snapshot in the WIDGET document
+      // before the /web/ fetch even starts — this is what makes the
+      // time-to-first-visible-menu target (< 2.5 s warm) reachable; the
+      // written document re-injects the same body to survive
+      // document.open. No-op unless authed with a fresh snapshot.
+      try {
+        injectInstantHome(document);
+      } catch (_) {}
       // JEL-555: skip the /System/Info/Public pre-flight on resume.
       // loadRemoteWebClient fetches index.html + config.json anyway; if
       // those fail the catch below clears state and shows the connect
