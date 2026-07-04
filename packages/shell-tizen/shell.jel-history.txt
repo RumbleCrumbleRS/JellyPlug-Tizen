@@ -67,8 +67,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v32): same pre-check as static transpileLegacyScripts.
 *JEL-26 keep this seed-side pre-check in lockstep with the widget-si
 *JEL-417 this seed regex is a PRE-check (gates needsTx -> maybeTransp
+*JEL-652 seed-side parse probe. Same probe-first split as the
 *JEL-621 pre-lowered drop consumption in the dynamic pipelines. The
 *JEL-178 byte-lockstep with the widget-side txFnv1a (same fnv1a the
+*JEL-652 oracle is probe-first too — a drop body is accepted when
 *JEL-557 cache transpiled plugin bodies in localStorage so warm cold
 *JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
 *JEL-1150 TX_VER is derived from babel inputs at widget parse time
@@ -194,12 +196,19 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-621 Pre-lowered transpile drop
 *JEL-131 measured — see the primer comment in buildSeedScript). The
 *JEL-178 same txFnv1a the `txc:` cache key already uses. At boot the
+*JEL-652 bodyStillModern: parse probe, else the STRICT
 *JEL-26 iterables, assumptions) match what the TV would produce.
 *JEL-178 M63's WebView doesn't honor fetch cache:"no-store"
+*JEL-652 device-native parse-probe detection. The regex gates below
+*JEL-354 incident: (missed ES2018 forms -> raw SyntaxError on M56
+*JEL-417 interior object spread), each fixed by widening the regex pl
+*JEL-651 Caveat (accepted, doc §4): the Function wrapper legalizes
+*JEL-652 post-transform / tx-drop oracle, probe-first. A body is "sti
 *JEL-554 v32): fast pre-check for syntax that Chromium 56 can't parse
 *JEL-354 the ES2018 forms Chrome 56 also lacks: object rest/spread
 *JEL-1150 MODERN_SYNTAX_RE hoisted to top-of-IIFE so its source feeds
-*JEL-417 the PRE-check gates on MODERN_PRECHECK_RE (broader — also ca
+*JEL-417 the regex fallback PRE-check gates on MODERN_PRECHECK_RE
+*JEL-652 probe-first; the regex path serves probe-less documents and
 *JEL-216 turn a modern-syntax external script we could not transpile
 *JEL-1034 v53): babel is lazy. Don't gate the whole pipeline on
 *JEL-1984 settle babelUnusedStreak after the per-script jobs

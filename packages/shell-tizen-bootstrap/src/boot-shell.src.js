@@ -1052,7 +1052,18 @@
       // (trailing `,\s*\.\.\.[\w$]` flags interior object spread `{a, ...b, c}`).
       // Lockstep with the widget-side MODERN_PRECHECK_RE_SRC.
       "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await|,\\s*\\.\\.\\.[\\w$]/;",
-      '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
+      // JEL-652: seed-side parse probe. Same probe-first split as the
+      // widget-side needsTranspile/bodyStillModern, but capability is
+      // re-detected HERE because this code runs in the post-document.write
+      // document whose CSP can differ from the widget origin's. Counters on
+      // window.__shellPPSeed (separate from the widget-side
+      // __shellParseProbe so the on-device gate can see each origin's cap
+      // bit). Kill switch shared: jellyfin.shell.parseProbeDisabled.
+      '    var __ppSeed=window.__shellPPSeed;if(!__ppSeed){__ppSeed={cap:0,n:0,ms:0};try{new Function("1");try{new Function("var (");}catch(e){__ppSeed.cap=1;}}catch(_){__ppSeed.cap=0;}window.__shellPPSeed=__ppSeed;}',
+      '    function __ppOff(){try{return localStorage.getItem("jellyfin.shell.parseProbeDisabled")==="1";}catch(_){return false;}}',
+      "    function __ppUse(){return __ppSeed.cap===1&&!__ppOff();}",
+      "    function __pp(code){var t0=Date.now();try{new Function(code);return true;}catch(e){return false;}finally{__ppSeed.n++;__ppSeed.ms+=Date.now()-t0;}}",
+      '    function needsTx(code){if(typeof code!=="string")return false;if(__ppUse())return !__pp(code);return __modernRe.test(code);}',
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
@@ -1074,7 +1085,10 @@
       "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
       '      var rel=d.entries[__txFnv(String(code||""))];',
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
-      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      // JEL-652: oracle is probe-first too — a drop body is accepted when
+      // THIS engine parses it; regex-fallback documents keep the strict
+      // __oracleRe (never the broader __modernRe pre-check).
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||(__ppUse()?!__pp(b):__oracleRe.test(b))){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
       "    }",
       "    var __TXVER=" + JSON.stringify(TX_VER) + ";",
       "    try{window.__TXVER=__TXVER;}catch(_){}",
@@ -2694,8 +2708,9 @@
   // ${server}/shell/tx-manifest.json in parallel with the /web/ RTT; each
   // slow-path script hashes its fetched source and, on a manifest hit,
   // downloads the pre-lowered body instead of loading Babel at all. A drop
-  // body is accepted ONLY if the STRICT post-transpile oracle
-  // (MODERN_SYNTAX_RE) finds no modern token, and the manifest must carry
+  // body is accepted ONLY if the post-transpile oracle (bodyStillModern:
+  // JEL-652 parse probe, else the STRICT MODERN_SYNTAX_RE) clears it, and
+  // the manifest must carry
   // this shell's exact BABEL_OPTS_KEY — anything else falls back to the
   // on-device Babel path, never to raw modern source. Mirrored 1:1 with
   // shell.js (JEL-624 EXPECTED_MIRRORED).
@@ -2783,7 +2798,7 @@
             if (
               typeof body !== "string" ||
               !body.length ||
-              MODERN_SYNTAX_RE.test(body)
+              bodyStillModern(body)
             ) {
               d.r++;
               return null;
@@ -2800,10 +2815,74 @@
         return null;
       });
   }
-  // JEL-417: PRE-check gates on the broader MODERN_PRECHECK_RE (also catches
-  // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
+  // JEL-652: device-native parse-probe detection — mirrored 1:1 with
+  // shell.js (see the fuller rationale there and in
+  // docs/jel651-js-transform-investigation.md §4). `new Function(code)`
+  // parses without executing; a SyntaxError means THIS panel cannot swallow
+  // the body. Probe-first with the regex gates as fallback (probe-less CSP,
+  // kill switch jellyfin.shell.parseProbeDisabled). No TX_CACHE_EPOCH bump:
+  // bodies cached under either detection mode are parse-valid under the
+  // other. Counters: window.__shellParseProbe {cap:0|1, n, ms}.
+  var PARSE_PROBE_DISABLED_KEY = "jellyfin.shell.parseProbeDisabled";
+  function parseProbeDisabled() {
+    try {
+      return localStorage.getItem(PARSE_PROBE_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function parseProbeCap() {
+    var d = window.__shellParseProbe;
+    if (!d) {
+      var cap = 0;
+      try {
+        new Function("1");
+        try {
+          new Function("var (");
+        } catch (e) {
+          cap = 1;
+        }
+      } catch (_) {
+        cap = 0;
+      }
+      d = window.__shellParseProbe = { cap: cap, n: 0, ms: 0 };
+    }
+    return d.cap === 1;
+  }
+  function parseProbeUsable() {
+    return !parseProbeDisabled() && parseProbeCap();
+  }
+  function parsesOnThisEngine(code) {
+    var d = window.__shellParseProbe;
+    var t0 = Date.now();
+    try {
+      new Function(code);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      d.n++;
+      d.ms += Date.now() - t0;
+    }
+  }
+  // JEL-652: post-transform / tx-drop oracle, probe-first; regex-fallback
+  // documents keep the STRICT MODERN_SYNTAX_RE oracle (not the broader
+  // pre-check, which would false-positive on legal ES2015 `, ...x`
+  // array/call spread in lowered output).
+  function bodyStillModern(body) {
+    if (parseProbeUsable()) return !parsesOnThisEngine(body);
+    return MODERN_SYNTAX_RE.test(body);
+  }
+  // JEL-417: the regex fallback PRE-check gates on the broader
+  // MODERN_PRECHECK_RE (also catches interior `, ...x` object spread), not
+  // the precise MODERN_SYNTAX_RE oracle.
+  // JEL-652: probe-first; the regex path serves probe-less documents and the
+  // kill switch, and stays the offline coverage pre-filter in
+  // build-tx-drop.mjs.
   function needsTranspile(code) {
-    return typeof code == "string" && MODERN_PRECHECK_RE.test(code);
+    if (typeof code !== "string") return false;
+    if (parseProbeUsable()) return !parsesOnThisEngine(code);
+    return MODERN_PRECHECK_RE.test(code);
   }
   // JEL-216: turn a modern-syntax external script we could not transpile into
   // an inert node. Removing src/defer/async/type with an empty body means the
