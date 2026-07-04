@@ -101,10 +101,38 @@ function makeSnapshotStore(opts) {
   opts = opts || {};
   const items = opts.items || [
     { x: 40, y: 90, w: 300, h: 40, s: "Continue Watching", fs: 28 },
-    { x: 40, y: 140, w: 320, h: 180, u: "http://srv/Items/1/Images/Primary", r: 6 },
-    { x: 380, y: 140, w: 320, h: 180, u: "http://srv/Items/2/Images/Primary", r: 6 },
-    { x: 720, y: 140, w: 320, h: 180, u: "http://srv/Items/3/Images/Primary", r: 6 },
-    { x: 1060, y: 140, w: 320, h: 180, u: "http://srv/Items/4/Images/Primary", r: 6 },
+    {
+      x: 40,
+      y: 140,
+      w: 320,
+      h: 180,
+      u: "http://srv/Items/1/Images/Primary",
+      r: 6,
+    },
+    {
+      x: 380,
+      y: 140,
+      w: 320,
+      h: 180,
+      u: "http://srv/Items/2/Images/Primary",
+      r: 6,
+    },
+    {
+      x: 720,
+      y: 140,
+      w: 320,
+      h: 180,
+      u: "http://srv/Items/3/Images/Primary",
+      r: 6,
+    },
+    {
+      x: 1060,
+      y: 140,
+      w: 320,
+      h: 180,
+      u: "http://srv/Items/4/Images/Primary",
+      r: 6,
+    },
   ];
   const bodyJson = JSON.stringify({ items });
   const CH = 24576;
@@ -338,9 +366,12 @@ function visibleCard(env) {
   assert.strictEqual(overlay.children.length, 5, "1 title + 4 art tiles");
   const title = overlay.children.find((n) => n.textContent);
   assert(title && title.textContent === "Continue Watching");
-  const tile = overlay.children.find((n) => n.style.cssText.indexOf("url(") !== -1);
+  const tile = overlay.children.find(
+    (n) => n.style.cssText.indexOf("url(") !== -1,
+  );
   assert(
-    tile && tile.style.cssText.indexOf("http://srv/Items/1/Images/Primary") !== -1,
+    tile &&
+      tile.style.cssText.indexOf("http://srv/Items/1/Images/Primary") !== -1,
     "art tile carries the cached image URL",
   );
   assert.strictEqual(env.window.__shellIH.painted, 1);
@@ -363,7 +394,12 @@ function visibleCard(env) {
   );
 
   // ---- 4. hydration dismiss ----------------------------------------------------
-  env.setCards([visibleCard(env), visibleCard(env), visibleCard(env), visibleCard(env)]);
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
   env.advance(6400); // one watch tick past card hydration, before fade-out ends
   assert.strictEqual(env.window.__shellIH.dismissed, 1);
   assert.strictEqual(env.window.__shellIH.why, "hydrated");
@@ -419,7 +455,10 @@ function visibleCard(env) {
 {
   // no snapshot
   const env = makeEnv({
-    store: { jellyfin_credentials: CREDS, "jellyfin.shell.serverUrl": "http://srv" },
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
   });
   env.run();
   assert.strictEqual(findOverlay(env), null, "no snapshot → no overlay");
@@ -482,7 +521,10 @@ function visibleCard(env) {
 // ---- 10. capture: settle on home, write chunked snapshot --------------------------
 {
   const env = makeEnv({
-    store: { jellyfin_credentials: CREDS, "jellyfin.shell.serverUrl": "http://srv" },
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
     hash: "#/home.html",
   });
   env.run();
@@ -499,7 +541,13 @@ function visibleCard(env) {
   for (let i = 0; i < 4; i++) {
     const img = env.makeNode("IMG");
     img.src = "http://srv/Items/" + i + "/Images/Primary?tag=abc";
-    img.rect = { width: 320, height: 180, top: 140, bottom: 320, left: 40 + i * 340 };
+    img.rect = {
+      width: 320,
+      height: 180,
+      top: 140,
+      bottom: 320,
+      left: 40 + i * 340,
+    };
     media.push(img);
   }
   const dup = env.makeNode("IMG");
@@ -539,7 +587,11 @@ function visibleCard(env) {
     "non-http art excluded",
   );
   const titlesCaptured = snap.items.filter((it) => it.s).map((it) => it.s);
-  assert.deepStrictEqual(titlesCaptured, ["My Media"], "above-fold title only, trimmed");
+  assert.deepStrictEqual(
+    titlesCaptured,
+    ["My Media"],
+    "above-fold title only, trimmed",
+  );
 
   // round-trip: fresh boot paints from what capture wrote
   const env2 = makeEnv({ store: env.store });
@@ -550,7 +602,10 @@ function visibleCard(env) {
 // ---- 11. capture refuses thin results (< 4 images) --------------------------------
 {
   const env = makeEnv({
-    store: { jellyfin_credentials: CREDS, "jellyfin.shell.serverUrl": "http://srv" },
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
     hash: "#/home.html",
   });
   env.run();
@@ -567,19 +622,29 @@ function visibleCard(env) {
 // ---- 12. capture never fires off-home or unsettled ---------------------------------
 {
   const env = makeEnv({
-    store: { jellyfin_credentials: CREDS, "jellyfin.shell.serverUrl": "http://srv" },
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
     hash: "#/movies.html",
   });
   env.run();
   env.setCards([0, 1, 2, 3, 4, 5].map(() => visibleCard(env)));
   env.advance(20000);
-  assert.strictEqual(env.window.__shellIH.captured, 0, "off-home never captures");
+  assert.strictEqual(
+    env.window.__shellIH.captured,
+    0,
+    "off-home never captures",
+  );
 }
 
 // ---- 13. quota abort leaves no torn snapshot ----------------------------------------
 {
   const env = makeEnv({
-    store: { jellyfin_credentials: CREDS, "jellyfin.shell.serverUrl": "http://srv" },
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
     hash: "#/home.html",
     setThrows: true,
   });
@@ -589,7 +654,13 @@ function visibleCard(env) {
   for (let i = 0; i < 5; i++) {
     const img = env.makeNode("IMG");
     img.src = "http://srv/Items/" + i + "/img";
-    img.rect = { width: 320, height: 180, top: 140, bottom: 320, left: 40 + i * 340 };
+    img.rect = {
+      width: 320,
+      height: 180,
+      top: 140,
+      bottom: 320,
+      left: 40 + i * 340,
+    };
     media.push(img);
   }
   env.setMedia(media);

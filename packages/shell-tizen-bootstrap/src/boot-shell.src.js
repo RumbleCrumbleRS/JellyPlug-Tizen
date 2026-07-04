@@ -2378,8 +2378,10 @@
   // First paint records boot-phase ring mark "snap" (JEL-617 recorder).
   //
   // Dismiss (crossfade 400 ms): live home hydrated above-fold (>= 4
-  // visible .card rects in-viewport), any user input (keydown/mousedown/
-  // pointerdown, capture phase), a non-home route (login / selectserver /
+  // visible .card rects in-viewport), first remote keypress (keydown,
+  // capture phase — pointer/mouse listeners are forbidden by the
+  // playback-controls pin: seek/OSD clicks must pass through untouched),
+  // a non-home route (login / selectserver /
   // wizard), partial hydration stall (> 8 s after first card), or a 90 s
   // absolute cap. The watch tick also re-creates the overlay after
   // document.write wipes the DOM (getElementById re-entry guard makes the
@@ -2451,9 +2453,7 @@
       'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
       "if(!G.inputBound){G.inputBound=1;" +
       'var oi=function(){dismiss("input")};' +
-      'try{W.addEventListener("keydown",oi,!0)}catch(_){}' +
-      'try{W.addEventListener("mousedown",oi,!0)}catch(_){}' +
-      'try{W.addEventListener("pointerdown",oi,!0)}catch(_){}}' +
+      'try{W.addEventListener("keydown",oi,!0)}catch(_){}}' +
       "paint();" +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
@@ -2482,7 +2482,7 @@
       "if(!(r.width>=40&&r.height>=40&&r.bottom>0&&r.top<fold))continue;" +
       'var u="";' +
       'try{if(String(ns[i].tagName).toUpperCase()==="IMG")u=ns[i].currentSrc||ns[i].src||"";' +
-      "else{var m=/url\\((['\"]?)([^)]*?)\\1\\)/.exec(String(ns[i].style.backgroundImage||\"\"));if(m)u=m[2]}}catch(_){}" +
+      'else{var m=/url\\(([\'"]?)([^)]*?)\\1\\)/.exec(String(ns[i].style.backgroundImage||""));if(m)u=m[2]}}catch(_){}' +
       "if(!u||!/^https?:/.test(u)||u.length>600)continue;" +
       'var k=Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width);' +
       "if(seen[k])continue;" +
