@@ -22,12 +22,12 @@ snippet channel), on a legacy engine:
    (`MODERN_SYNTAX_RE`).
 4. **On-TV Babel fallback** — lazy-load the slim vendored `babel.min.js`
    (2.09 MB, JEL-620) and `Babel.transform(code, {targets:{chrome:"56"}, loose,
-   iterable assumptions})` on the main thread; verify with the oracle; cache.
+iterable assumptions})` on the main thread; verify with the oracle; cache.
 5. **Neutralize** (JEL-216) — if transform fails, the script node is inertized so
    raw modern syntax can never SyntaxError the concatenated document.
 
 After the JEL-616 rehaul (all children merged), the on-TV Babel pass no longer
-runs on the *steady-state* boot path: warm boots hit the `txc:` cache, cold boots
+runs on the _steady-state_ boot path: warm boots hit the `txc:` cache, cold boots
 hit the tx drop. Babel now runs only on **misses** — new/changed plugin bodies,
 servers whose drop is stale or absent, and dynamic scripts not covered at
 publish time. A full miss regresses to the measured 21–42 s class.
@@ -55,21 +55,25 @@ re-runs the builder. There is no automation and no alerting on the
 
 ## 3. Alternatives evaluated
 
-| Option | Verdict |
-| --- | --- |
+| Option                                                                                                                                                        | Verdict                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Device-native parse probe** — `new Function(src)` in try/catch: the TV's own parser is ground truth for "needs transpile" and for the post-transform oracle | **Adopt.** Kills the regex false-negative bug class and TX_EPOCH cache nukes; per-device optimal (an M69 panel transpiles less than the chrome-56 floor). Measured 2 MB corpus parse ≈ 40 ms in Node (~200–400 ms est. on TV silicon, slow paths only) vs ~2 ms regex — negligible against the Babel passes it gates/avoids. Spec guarantees eager SyntaxError (`CreateDynamicFunction` parses the body; early errors throw at construction). |
-| **Automate drop regeneration** | **Adopt.** Regenerate on release + on server content change (cron `--merge` run against `--web-index`); alert on sustained drop-miss counters. Turns the 21–42 s miss regression from "until a human notices" into a bounded window. |
-| swc/esbuild instead of Babel | esbuild cannot emit ES5; swc-wasm on-TV is unproven on M63 and only helps the (now rare) miss path. Offline, publish-time speed is irrelevant and byte-lockstep with the on-TV transform (`babelOptsKey`, hash equality) argues for keeping the same vendored Babel. **No.** |
-| Babel in a Web Worker | Keeps the main thread responsive but total time unchanged; worker+blob URL support on Tizen 5.0 WRT unverified. Marginal — only worth it if miss-path UX ever matters again. **Defer.** |
-| Server-side on-demand transpile endpoint (companion plugin / sidecar) | Terminal state — TV never transpiles even on misses. Real infra: a JS toolchain on the server, cache keyed like `txc:`. Superseded in cost/benefit by drop automation unless miss rates stay high. **Defer; revisit with counter data.** |
-| Pre-lowered fork of jellyfin-web (browserslist chrome 56) | Eliminates runtime transform entirely but means owning a web-client build forever and violates the plugin-agnostic policy (server plugins inject arbitrary JS regardless). **No.** |
+| **Automate drop regeneration**                                                                                                                                | **Adopt.** Regenerate on release + on server content change (cron `--merge` run against `--web-index`); alert on sustained drop-miss counters. Turns the 21–42 s miss regression from "until a human notices" into a bounded window.                                                                                                                                                                                                          |
+| swc/esbuild instead of Babel                                                                                                                                  | esbuild cannot emit ES5; swc-wasm on-TV is unproven on M63 and only helps the (now rare) miss path. Offline, publish-time speed is irrelevant and byte-lockstep with the on-TV transform (`babelOptsKey`, hash equality) argues for keeping the same vendored Babel. **No.**                                                                                                                                                                  |
+| Babel in a Web Worker                                                                                                                                         | Keeps the main thread responsive but total time unchanged; worker+blob URL support on Tizen 5.0 WRT unverified. Marginal — only worth it if miss-path UX ever matters again. **Defer.**                                                                                                                                                                                                                                                       |
+| Server-side on-demand transpile endpoint (companion plugin / sidecar)                                                                                         | Terminal state — TV never transpiles even on misses. Real infra: a JS toolchain on the server, cache keyed like `txc:`. Superseded in cost/benefit by drop automation unless miss rates stay high. **Defer; revisit with counter data.**                                                                                                                                                                                                      |
+| Pre-lowered fork of jellyfin-web (browserslist chrome 56)                                                                                                     | Eliminates runtime transform entirely but means owning a web-client build forever and violates the plugin-agnostic policy (server plugins inject arbitrary JS regardless). **No.**                                                                                                                                                                                                                                                            |
 
 ## 4. Recommended design: parse-probe detection
 
 ```js
 function parsesOnThisEngine(code) {
-  try { new Function(code); return true; }
-  catch (e) { return false; } // SyntaxError → this engine cannot parse it
+  try {
+    new Function(code);
+    return true;
+  } catch (e) {
+    return false;
+  } // SyntaxError → this engine cannot parse it
 }
 // detection:  needsTranspile(code) = !parsesOnThisEngine(code)
 // oracle:     accept a drop/Babel body only if parsesOnThisEngine(body)
@@ -84,7 +88,7 @@ Rollout shape (implementation ticket):
 - Kill switch `jellyfin.shell.parseProbeDisabled`, mirroring every other rehaul
   lever.
 - Regexes are kept offline in `build-tx-drop.mjs` as the conservative
-  *coverage* pre-filter (an offline builder cannot ask an M56 parser), and
+  _coverage_ pre-filter (an offline builder cannot ask an M56 parser), and
   initially on-device as the fallback; the 12-file lockstep burden shrinks to
   the builder + fallback once proven.
 - Known probe caveats, all acceptable: the Function wrapper legalizes top-level
@@ -101,5 +105,5 @@ Rollout shape (implementation ticket):
 - Regex scan of a 1.99 MB minified corpus: ~0.4 ms/pass (Node, this sandbox).
 - `new Function` full parse of the same corpus: ~40 ms/pass (Node); TV estimate
   ~5–10× → 200–400 ms across the whole plugin set, incurred only on slow paths.
-- On-TV Babel (prior art, JEL-131/616): ~50–200 ms *per plugin*, 21–42 s for the
+- On-TV Babel (prior art, JEL-131/616): ~50–200 ms _per plugin_, 21–42 s for the
   full 1.9 MB set on a 2019 panel — the thing both recommendations bound.
