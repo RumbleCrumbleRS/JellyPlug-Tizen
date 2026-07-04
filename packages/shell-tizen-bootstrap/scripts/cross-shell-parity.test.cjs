@@ -99,6 +99,7 @@ const CONFIG_XML = path.join(__dirname, "..", "src", "config.xml");
 // them (unlisted shared names are checked identical anyway; listing guards
 // against a one-sided rename/delete dropping the name out of the shared set).
 const EXPECTED_MIRRORED = [
+  "save",
   "withBootTimeout",
   "txFnv1a",
   "readBundlePatchState",
@@ -129,6 +130,8 @@ const EXPECTED_MIRRORED = [
   "injectQaBeacon",
   "bootProgressBody",
   "injectBootProgress",
+  "instantHomeBody",
+  "injectInstantHome",
   "jsiChannelDisabled",
   "jsiChannelPath",
   "jsiChannelMaxAge",
@@ -162,7 +165,7 @@ const EXPECTED_MIRRORED = [
   "showError",
   "injectConnectStylesheet",
   "attachConnectForm",
-  "bootstrap"
+  "bootstrap",
 ];
 
 // Functions that exist in both shells but legitimately differ. Every entry
@@ -174,75 +177,75 @@ const EXPECTED_MIRRORED = [
 // prove it, "drift" = KNOWN unreconciled divergence with a ticket.
 const INTENTIONAL_DIVERGENCES = [
   {
-    "name": "writeWebIndexCache",
-    "class": "cosmetic",
-    "why": "retail `!(indexOf(...) >= 0)` vs boot `indexOf(...) < 0` — semantically equal (indexOf never NaN) but esbuild rightly won't rewrite `!(x>=0)` to `x<0`; align text when either side is next touched",
-    "retail": "09ea8abe5fb3c8ff",
-    "boot": "ebedff5fe1cedae0"
+    name: "writeWebIndexCache",
+    class: "cosmetic",
+    why: "retail `!(indexOf(...) >= 0)` vs boot `indexOf(...) < 0` — semantically equal (indexOf never NaN) but esbuild rightly won't rewrite `!(x>=0)` to `x<0`; align text when either side is next touched",
+    retail: "09ea8abe5fb3c8ff",
+    boot: "ebedff5fe1cedae0",
   },
   {
-    "name": "resolveDeviceName",
-    "class": "cosmetic",
-    "why": "retail wraps assignment in `(x = v, x)` sequence where boot returns the bare assignment expression — same value, different tokens; align text when either side is next touched",
-    "retail": "96b484d0dddbb667",
-    "boot": "e29de17205594eed"
+    name: "resolveDeviceName",
+    class: "cosmetic",
+    why: "retail wraps assignment in `(x = v, x)` sequence where boot returns the bare assignment expression — same value, different tokens; align text when either side is next touched",
+    retail: "96b484d0dddbb667",
+    boot: "e29de17205594eed",
   },
   {
-    "name": "buildSeedScript",
-    "class": "hsb-feature",
-    "why": "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    "retail": "8a51ddfae2783272",
-    "boot": "1a9ace47f1de296d"
+    name: "buildSeedScript",
+    class: "hsb-feature",
+    why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
+    retail: "8a51ddfae2783272",
+    boot: "1a9ace47f1de296d",
   },
   {
-    "name": "buildDiagSeedScript",
-    "class": "hsb-feature",
-    "why": "boot HUD adds VB:/CSS: rows + pbl counter for its vendors-bundle/stylesheet caches, which retail does not have",
-    "retail": "9f95f0336dd725b3",
-    "boot": "65648377ffff16f9"
+    name: "buildDiagSeedScript",
+    class: "hsb-feature",
+    why: "boot HUD adds VB:/CSS: rows + pbl counter for its vendors-bundle/stylesheet caches, which retail does not have",
+    retail: "9f95f0336dd725b3",
+    boot: "65648377ffff16f9",
   },
   {
-    "name": "qaBeaconBody",
-    "class": "hsb-feature",
-    "why": "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body (JEL-628: no baked-in default beacon URL; jellyfin.qa.beaconUrl required)",
-    "retail": "41eab6ce5e73ed72",
-    "boot": "c233fabfa8e7bfd1"
+    name: "qaBeaconBody",
+    class: "hsb-feature",
+    why: "retail returns the __QA_BEACON_BODY__ build-substitution placeholder (stripped in prod by qa-seed-strip); boot inlines the full JEL-1971 beacon body (JEL-628: no baked-in default beacon URL; jellyfin.qa.beaconUrl required)",
+    retail: "41eab6ce5e73ed72",
+    boot: "c233fabfa8e7bfd1",
   },
   {
-    "name": "transpileLegacyScripts",
-    "class": "hsb-feature",
-    "why": "fast-path stability check counts boot-only pluginBabelLazy vs retail babelLazyTriggered — entangled with HSB lazy-babel; unify in shell-core extraction",
-    "retail": "59a159693c71a78d",
-    "boot": "4331928eaf0e5289"
+    name: "transpileLegacyScripts",
+    class: "hsb-feature",
+    why: "fast-path stability check counts boot-only pluginBabelLazy vs retail babelLazyTriggered — entangled with HSB lazy-babel; unify in shell-core extraction",
+    retail: "59a159693c71a78d",
+    boot: "4331928eaf0e5289",
   },
   {
-    "name": "transpileLegacyScriptsInner",
-    "class": "hsb-feature",
-    "why": "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    "retail": "a54675d8d5761528",
-    "boot": "f61a753964cad2e7"
+    name: "transpileLegacyScriptsInner",
+    class: "hsb-feature",
+    why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
+    retail: "a54675d8d5761528",
+    boot: "f61a753964cad2e7",
   },
   {
-    "name": "patchPlaybackBundles",
-    "class": "hsb-feature",
-    "why": "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
-    "retail": "62a5ed8218434b0f",
-    "boot": "fda5e5504252e1c3"
+    name: "patchPlaybackBundles",
+    class: "hsb-feature",
+    why: "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
+    retail: "62a5ed8218434b0f",
+    boot: "fda5e5504252e1c3",
   },
   {
-    "name": "maybeStringFastPath",
-    "class": "hsb-feature",
-    "why": "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
-    "retail": "bbd18216a03986be",
-    "boot": "4d4748d7ce7f7f5b"
+    name: "maybeStringFastPath",
+    class: "hsb-feature",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
+    retail: "576c5ee385bf6bd4",
+    boot: "cd5bffdf00bb220b",
   },
   {
-    "name": "loadRemoteWebClient",
-    "class": "hsb-feature",
-    "why": "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
-    "retail": "b2abcabb38fb60b0",
-    "boot": "0e14ea9af3a9ce82"
-  }
+    name: "loadRemoteWebClient",
+    class: "hsb-feature",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
+    retail: "235e6c091de65aa6",
+    boot: "6c0e399f8639a4bd",
+  },
 ];
 
 // Transpiler-critical consts marked "lockstep" in source comments. Compared

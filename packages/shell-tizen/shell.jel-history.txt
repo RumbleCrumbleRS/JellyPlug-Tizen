@@ -158,6 +158,9 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1970 silently ignored on consumer release-signed Tizen 5.0
 *JEL-126 compositor-driven boot progress indicator for the written
 *JEL-125 hung decomposition). This inline script runs at head parse
+*JEL-647 Instant-Home. Netflix paints a cached snapshot of the last
+*JEL-617 First paint records boot-phase ring mark "snap" recorder).
+*JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
 *JEL-178 caching honouring public.js's ?v= config-version query.
@@ -269,6 +272,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1980 inline body whenever present (raw or patched).
 *JEL-1971 beacon body comes last so it picks up the seed-installed
 *JEL-126 fast path is legacy-only by construction (bailed "modern"
+*JEL-647 instant-home overlay must survive the fast path too — the
 *JEL-1980 fast-path body-cache adoption — main.jellyfin
 *JEL-618 splice the cached channel body in last, immediately before
 *JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
@@ -289,6 +293,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1215 '__SHELL_VER__' is build-time substituted by
 *JEL-1971 append QA HTTP beacon script tag (no-op in prod
 *JEL-126 boot progress dots that survive the ~20 s main-thread
+*JEL-647 instant-home snapshot overlay (repaint + dismiss +
 *JEL-197 ensure the JS-Injector snippet channel (public.js) is
 *JEL-554 v29): run bundle patch + legacy transpile in parallel.
 *JEL-554 v32): Chromium 56 defer-script lifecycle bug.
@@ -300,5 +305,6 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-934 v51): #boot-root is `display:none` by default in
 *JEL-617 boot-phase mark — the shell's own connect form is now
 *JEL-63 pre-fill the saved server URL (if any) so the boot-failure
+*JEL-647 paint the cached home snapshot in the WIDGET document
 *JEL-555 skip the /System/Info/Public pre-flight on resume.
 *JEL-63 do NOT clear the saved server URL on a boot-time network
