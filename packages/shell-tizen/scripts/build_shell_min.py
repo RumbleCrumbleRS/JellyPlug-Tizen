@@ -75,6 +75,9 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
 # in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
 # the 80-line breadcrumb floor under the old cap.
+# JEL-647 raised it 147456 -> 163840 (160 KiB): the instant-home snapshot
+# overlay (instantHomeBody paint/dismiss/capture, mirrored in boot-shell)
+# grew the minified base to ~144.8 KiB, 852 B over the old cap.
 # JEL-625 raised it 131072 -> 147456 (144 KiB) and moved the breadcrumb
 # manifest out-of-band (shell.jel-history.txt): the committed blob had crept
 # to 3 B under the old cap, so the next non-trivial shell change failed the
@@ -91,7 +94,7 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # code, leaving >= SOFT_HEADROOM of room after the raise; never absorb the
 # bump silently in an unrelated change. The build warns (does not fail) when
 # headroom drops below SOFT_HEADROOM so the wall is visible one ticket early.
-HARD_CAP = 147456
+HARD_CAP = 163840
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
