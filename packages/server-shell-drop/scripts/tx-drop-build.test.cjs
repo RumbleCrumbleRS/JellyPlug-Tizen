@@ -14,13 +14,20 @@
 //            only JEL-417 shape, plain ES5) emits a manifest whose keys are
 //            the shells' hashes, whose bodies are oracle-clean, and skips
 //            ES5-safe sources; --merge keeps prior surviving entries.
+//   PART C — REGEN AUTOMATION (JEL-653): regen-tx-drop.sh run twice against
+//            a live local HTTP server proves the unattended contract — a
+//            changed plugin body yields a fresh manifest entry under its new
+//            source hash with no human action, prior entries survive the
+//            merge, TX_DROP_PRUNE_DAYS reaps aged-out bodies, and the
+//            manifest publish leaves no torn temp file.
 //
 // Run: node scripts/tx-drop-build.test.cjs
 //   or: pnpm --filter @jellyfin-tv/server-shell-drop test
 
 "use strict";
-const { execFileSync } = require("node:child_process");
+const { execFile, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
@@ -28,6 +35,7 @@ const { pathToFileURL } = require("node:url");
 
 const REPO = path.join(__dirname, "..", "..", "..");
 const BUILDER = path.join(__dirname, "build-tx-drop.mjs");
+const REGEN = path.join(__dirname, "regen-tx-drop.sh");
 const TV_SHELL = path.join(REPO, "packages", "shell-tizen", "src", "shell.js");
 const BOOT_SRC = path.join(
   REPO,
@@ -210,6 +218,115 @@ async function main() {
     merged.entries[hModern] === "tx/" + hModern + ".js" &&
       merged.entries[builder.txFnv1a(MODERN2)] != null,
   );
+
+  // ==========================================================================
+  // PART C — REGEN AUTOMATION (JEL-653)
+  // ==========================================================================
+  // A tiny in-process origin standing in for the live Jellyfin server: one
+  // non-bundle plugin script on /web/index.html plus a snippet-channel body.
+  // Generic fixture names only (plugin-agnostic repo policy, JEL-240).
+  let pluginBody = "var a = window.__pa ?? 'v1';\nconsole.log(a);\n";
+  const jsiBody = "var s = window.__snip ?? 1;\nconsole.log(s);\n";
+  const srv = http.createServer((req, res) => {
+    const u = String(req.url || "").split("?")[0];
+    if (u === "/web/index.html") {
+      res.setHeader("Content-Type", "text/html");
+      res.end(
+        '<script src="../plugins/alpha.js"></script>' +
+          '<script src="main.jellyfin.bundle.js"></script>',
+      );
+    } else if (u === "/plugins/alpha.js") {
+      res.end(pluginBody);
+    } else if (u === "/snippets/public.js") {
+      res.end(jsiBody);
+    } else {
+      res.statusCode = 404;
+      res.end();
+    }
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const origin = "http://127.0.0.1:" + srv.address().port;
+  const cronDrop = path.join(tmp, "cron-drop");
+  const regenEnv = Object.assign({}, process.env, {
+    TX_DROP_JSI_PATH: "/snippets/public.js",
+  });
+  // execFile, NOT execFileSync: the child fetches from the server hosted by
+  // THIS process — a sync wait would block the event loop and deadlock the
+  // child's requests against a server that can never respond.
+  const runRegen = (extraEnv) =>
+    new Promise((resolve, reject) => {
+      execFile(
+        "bash",
+        [REGEN, cronDrop, origin],
+        { env: Object.assign({}, regenEnv, extraEnv || {}) },
+        (err, stdout, stderr) =>
+          err ? reject(new Error(err.message + "\n" + stdout + stderr)) : resolve(stdout),
+      );
+    });
+
+  await runRegen();
+  const gen1 = JSON.parse(
+    fs.readFileSync(path.join(cronDrop, "tx-manifest.json"), "utf8"),
+  );
+  const hPlugin1 = builder.txFnv1a(pluginBody);
+  const hJsi = builder.txFnv1a(jsiBody);
+  check(
+    "regen publishes web-index plugin under its source hash",
+    gen1.entries[hPlugin1] === "tx/" + hPlugin1 + ".js",
+  );
+  check(
+    "regen publishes the snippet-channel body under its source hash",
+    gen1.entries[hJsi] === "tx/" + hJsi + ".js",
+  );
+  check(
+    "regen skips the jellyfin-web bundle (shell never feeds it to Babel)",
+    Object.keys(gen1.entries).length === 2,
+  );
+
+  // The success condition of JEL-653: a plugin-body change on the server
+  // results in a fresh drop entry on the next scheduled run, verified by
+  // hash lookup — no human action between the two runs.
+  pluginBody = "var a = window.__pa ?? 'v2-changed';\nconsole.log(a);\n";
+  await runRegen();
+  const gen2 = JSON.parse(
+    fs.readFileSync(path.join(cronDrop, "tx-manifest.json"), "utf8"),
+  );
+  const hPlugin2 = builder.txFnv1a(pluginBody);
+  check(
+    "changed plugin body yields a fresh entry under its new hash",
+    hPlugin2 !== hPlugin1 &&
+      gen2.entries[hPlugin2] === "tx/" + hPlugin2 + ".js",
+  );
+  check(
+    "prior-generation entry survives the --merge run (file still present)",
+    gen2.entries[hPlugin1] === "tx/" + hPlugin1 + ".js" &&
+      fs.existsSync(path.join(cronDrop, "tx", hPlugin1 + ".js")),
+  );
+  check(
+    "atomic publish leaves no torn manifest temp file",
+    !fs.existsSync(path.join(cronDrop, "tx-manifest.json.tmp")),
+  );
+
+  // TX_DROP_PRUNE_DAYS: age the dead generation's body past the window;
+  // live sources are rewritten (mtime refreshed) every run, so only the
+  // no-longer-served entry is reaped.
+  const oldSec = (Date.now() - 10 * 864e5) / 1000;
+  fs.utimesSync(path.join(cronDrop, "tx", hPlugin1 + ".js"), oldSec, oldSec);
+  await runRegen({ TX_DROP_PRUNE_DAYS: "7" });
+  const gen3 = JSON.parse(
+    fs.readFileSync(path.join(cronDrop, "tx-manifest.json"), "utf8"),
+  );
+  check(
+    "prune reaps the aged-out dead entry (body file and manifest key)",
+    !(hPlugin1 in gen3.entries) &&
+      !fs.existsSync(path.join(cronDrop, "tx", hPlugin1 + ".js")),
+  );
+  check(
+    "prune keeps live entries (rewritten every run)",
+    gen3.entries[hPlugin2] === "tx/" + hPlugin2 + ".js" &&
+      gen3.entries[hJsi] === "tx/" + hJsi + ".js",
+  );
+  srv.close();
 
   process.exitCode = failures ? 1 : 0;
   console.log(failures ? failures + " FAILURE(S)" : "all checks passed");

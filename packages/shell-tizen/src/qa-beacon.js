@@ -267,6 +267,29 @@
     } catch (e) {
       p.diagErrs = null;
     }
+    // JEL-653: tx-drop (JEL-621) health — misses are silent by design
+    // (fallback = slow on-TV Babel). stale=1 = manifest ok, zero hits,
+    // >=5 miss/reject/fail: a drop the regen automation stopped refreshing.
+    try {
+      var td = window.__shellTxDrop;
+      p.txDrop = td
+        ? {
+            ok: td.ok ? 1 : 0,
+            h: td.h || 0,
+            m: td.m || 0,
+            r: td.r || 0,
+            f: td.f || 0,
+            stale:
+              td.ok &&
+              !(td.h > 0) &&
+              (td.m || 0) + (td.r || 0) + (td.f || 0) >= 5
+                ? 1
+                : 0,
+          }
+        : null;
+    } catch (e) {
+      p.txDrop = null;
+    }
     try {
       p.spin = document.querySelector(
         ".docspinner, .mdlSpinner, .loading-spinner, .mdl-spinner",
