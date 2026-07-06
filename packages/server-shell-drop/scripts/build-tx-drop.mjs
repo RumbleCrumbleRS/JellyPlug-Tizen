@@ -47,9 +47,21 @@
  *   --babel P      path to babel.min.js (default: the repo's vendored
  *                  packages/shell-tizen/src/babel.min.js)
  *   --merge        keep existing manifest entries whose tx/ file survives
+ *   --strict-oracle  abort the whole build if any source's transform output
+ *                  fails the fully-lowered oracle. Default (off) skips just
+ *                  that source (device falls back to on-device Babel for it)
+ *                  and keeps publishing the rest — the resilient behavior the
+ *                  JEL-653 cron needs so one un-lowerable live plugin can't
+ *                  zero out the entire drop. Use --strict-oracle in
+ *                  release/CI validation where any non-lowerable source is a
+ *                  red flag worth failing on.
  *
  * Sources that don't trip the transpile PRE-check are skipped (the TV's
  * fast path inlines them raw; a drop entry would never be consulted).
+ * Sources whose transform output fails the oracle are skipped too (unless
+ * --strict-oracle): a manifest miss is safe (on-device Babel fallback),
+ * a wrong body never is — so an entry is only ever written for a body proven
+ * fully lowered.
  */
 
 import { createRequire } from "node:module";
@@ -123,6 +135,7 @@ function parseArgs(argv) {
     webIndexes: [],
     babel: DEFAULT_BABEL,
     merge: false,
+    strictOracle: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -132,6 +145,7 @@ function parseArgs(argv) {
     else if (a === "--web-index") args.webIndexes.push(argv[++i]);
     else if (a === "--babel") args.babel = argv[++i];
     else if (a === "--merge") args.merge = true;
+    else if (a === "--strict-oracle") args.strictOracle = true;
     else if (a.startsWith("--")) usageDie("unknown flag " + a);
     else if (!args.dropDir) args.dropDir = a;
     else usageDie("unexpected positional " + a);
@@ -277,6 +291,7 @@ async function main() {
 
   let lowered = 0;
   let skipped = 0;
+  let oracleSkipped = 0;
   for (const s of sources) {
     if (!PRECHECK_RE.test(s.text)) {
       skipped++;
@@ -286,20 +301,38 @@ async function main() {
     const hash = txFnv1a(s.text);
     const rel = "tx/" + hash + ".js";
     let out;
+    let failReason = null;
     try {
       out = Babel.transform(s.text, BABEL_OPTS).code;
     } catch (e) {
-      console.error("ERROR: babel failed on " + s.from + " — " + e.message);
-      process.exit(1);
+      failReason = "babel threw: " + e.message;
     }
-    if (typeof out !== "string" || !out.length || ORACLE_RE.test(out)) {
-      // Publishing a body the device oracle would reject (or worse, one it
-      // would accept but that still carries modern syntax) is a correctness
-      // hazard — fail the whole build loudly.
-      console.error(
-        "ERROR: transform output for " + s.from + " failed the lowered oracle",
+    if (!failReason && (typeof out !== "string" || !out.length || ORACLE_RE.test(out))) {
+      // The output is not provably fully-lowered ES5. Publishing it would be
+      // a correctness hazard, so this entry MUST NOT be written. But the
+      // device already handles a missing manifest entry safely: hash miss ->
+      // on-device Babel for that one source (the pre-JEL-621 baseline for it,
+      // no worse). So by default we skip this one source and keep publishing
+      // the rest — aborting the whole build here would zero out the entire
+      // drop and regress EVERY source to on-device Babel, which under the
+      // JEL-653 cron would happen on every tick the moment one live plugin
+      // stops fully lowering. --strict-oracle restores the old hard-fail for
+      // release/CI validation where any non-lowerable source is a red flag.
+      failReason = "transform output failed the lowered oracle";
+    }
+    if (failReason) {
+      if (args.strictOracle) {
+        console.error("ERROR: " + s.from + " — " + failReason);
+        process.exit(1);
+      }
+      oracleSkipped++;
+      // Drop any stale/merged entry for this source so we never keep serving
+      // a body that no longer lowers cleanly.
+      delete entries[hash];
+      console.warn(
+        "WARN: skip (on-device Babel fallback): " + s.from + " — " + failReason,
       );
-      process.exit(1);
+      continue;
     }
     await fs.writeFile(path.join(dropDir, rel), out, "utf8");
     entries[hash] = rel;
@@ -340,7 +373,9 @@ async function main() {
       "  lowered=" +
       lowered +
       "  skipped=" +
-      skipped,
+      skipped +
+      "  oracle-skipped=" +
+      oracleSkipped,
   );
 }
 
