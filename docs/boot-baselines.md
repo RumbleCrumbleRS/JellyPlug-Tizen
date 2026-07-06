@@ -63,7 +63,7 @@ the JEL-616 plan's primary targets.
 ## Baseline — Samsung Q60R (Tizen 5.0, Chromium 63), 2026-07-06 (JELA-9)
 
 Device: QN82Q60RAFXZA at 192.168.86.202. Server: production
-`https://puntneyflix.ddns.net`, saved server + saved login (auto-login to
+`https://REDACTED-SERVER.example`, saved server + saved login (auto-login to
 `#/home`). Shell: **baked boot-shell fallback** — hosted `/shell/` and
 `/shell/shell.js` both 404 on the server (re-confirmed at capture time,
 same as the 2026-07-02 QN90B finding). The baked shell **predates
@@ -100,12 +100,12 @@ generations.
 
 **Attribution of the ~16 s (avg of boots 1–3):**
 
-| slice                | ms     | share | what it is                                                                                         |
-| -------------------- | ------ | ----- | -------------------------------------------------------------------------------------------------- |
-| nav (launch → shell) | ~2000  | 12 %  | WebView spin-up + baked index parse                                                                 |
-| shell → dcl          | ~9500  | 60 %  | `/web/index.html` fetch (1.4 s) + document.write handoff + parse/eval of 485 KB main bundle + ~150 resources. Network is NOT the bottleneck (slowest chunk 699 ms) — this is main-thread parse/eval on the 2019 SoC. |
-| dcl → api            | ~350   | 2 %   | ApiClient init                                                                                      |
-| api → card           | ~4300  | 26 %  | home-sections API + DOM render + 70-snippet JSI channel execution                                   |
+| slice                | ms    | share | what it is                                                                                                                                                                                                           |
+| -------------------- | ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| nav (launch → shell) | ~2000 | 12 %  | WebView spin-up + baked index parse                                                                                                                                                                                  |
+| shell → dcl          | ~9500 | 60 %  | `/web/index.html` fetch (1.4 s) + document.write handoff + parse/eval of 485 KB main bundle + ~150 resources. Network is NOT the bottleneck (slowest chunk 699 ms) — this is main-thread parse/eval on the 2019 SoC. |
+| dcl → api            | ~350  | 2 %   | ApiClient init                                                                                                                                                                                                       |
+| api → card           | ~4300 | 26 %  | home-sections API + DOM render + 70-snippet JSI channel execution                                                                                                                                                    |
 
 **The 40 s (JELA-8) was NOT reproduced** in any of 4 boots, including the
 cold-cache one. Remaining candidates for the 40 s observation: (a) first

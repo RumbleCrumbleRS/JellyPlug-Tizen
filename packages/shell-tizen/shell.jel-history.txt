@@ -17,6 +17,9 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-354 the original denylist only screened ES2020+ tokens, but the
 *JEL-417 the brace-anchored object-spread alternatives above only cat
 *JEL-354 written RAW -> SyntaxError on M56 (the exact failure mode, n
+*JEL-651 JELA-11 (adopting §4): device-native parse probe. Both regex
+*JEL-354 JEL-417 missed token ships a raw SyntaxError to the TV , and
+*JEL-651 per device. Known caveats, accepted in the review: the Funct
 *JEL-26 used target chrome:63 + loose mode + the `assumptions` block
 *JEL-354 the Splide iterable/iterator throw on the M63. : the target
 *JEL-26 regress . The `assumptions` block is part of the transform o
