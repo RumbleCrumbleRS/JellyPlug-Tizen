@@ -187,6 +187,65 @@
   // correct — babel pass; strictly safer than running raw ES2018 on M56.
   var MODERN_PRECHECK_RE_SRC = MODERN_SYNTAX_RE_SRC + "|,\\s*\\.\\.\\.[\\w$]";
   var MODERN_PRECHECK_RE = new RegExp(MODERN_PRECHECK_RE_SRC);
+  // JELA-11 (adopting JEL-651 §4): device-native parse probe. Both regexes
+  // above only APPROXIMATE the real question — "can this engine parse this
+  // source?" — and every approximation gap has been a field incident: a
+  // missed token ships a raw SyntaxError to the TV (JEL-354, JEL-417) and
+  // each widening forces a TX_EPOCH bump that orphans every cached transpile
+  // on every TV in the field. The engine's own parser is ground truth:
+  // new Function(code) parses the body EAGERLY without executing it (early
+  // errors throw at construction), so a throw === this engine cannot parse
+  // it. Detection becomes per-device optimal (an M69 panel transpiles less
+  // than the chrome-56 floor), which is correct because the verdict is only
+  // consumed on this device and all transpile caches are content-addressed
+  // per device. Known caveats, accepted in the JEL-651 review: the Function
+  // wrapper legalizes top-level `return`, and each probe compiles + discards
+  // a code object (bounded — slow paths only, ~200-400 ms across a full
+  // 2 MB plugin set vs the 21-42 s Babel passes it gates).
+  // Capability-gated: a CSP/eval restriction makes the Function constructor
+  // itself throw, so availability is tested once at parse time with a
+  // trivial body — and re-tested independently by the seed script, because
+  // the post-document.write SERVER origin can carry a different CSP than
+  // the widget origin. When unavailable (or killswitched via the standard
+  // lever below), every call site falls back to the regex path unchanged;
+  // the regexes also remain the offline coverage pre-filter in
+  // build-tx-drop.mjs / jsi-minify-es5.mjs (an offline builder cannot ask
+  // an M56 parser).
+  var PARSE_PROBE_DISABLED_KEY = "jellyfin.shell.parseProbeDisabled";
+  function parseProbeDisabled() {
+    try {
+      return localStorage.getItem(PARSE_PROBE_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  var PARSE_PROBE_OK = (function () {
+    try {
+      new Function("1");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  })();
+  function parseProbeActive() {
+    return PARSE_PROBE_OK && !parseProbeDisabled();
+  }
+  // QA counters (read alongside __shellTx*): ok=constructor usable,
+  // n=probes run, tx=cannot-parse verdicts (detection hits + oracle rejects).
+  try {
+    window.__shellParseProbe = { ok: PARSE_PROBE_OK, n: 0, tx: 0 };
+  } catch (_) {}
+  function parsesOnThisEngine(code) {
+    var d = window.__shellParseProbe;
+    if (d) d.n++;
+    try {
+      new Function(code);
+      return true;
+    } catch (_) {
+      if (d) d.tx++;
+      return false;
+    }
+  }
   // Mirror of babel.transform options used by babelTranspile() and the
   // seed-script transpile(). Any divergence between them or between
   // releases changes this string and busts the cache.
@@ -1268,8 +1327,21 @@
       // `,\s*\.\.\.[\w$]` alternative that also flags interior object spread
       // `{a, ...b, c}`. Lockstep with the widget-side MODERN_PRECHECK_RE_SRC.
       "    var __modernRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await|,\\s*\\.\\.\\.[\\w$]/;",
-      '    function needsTx(code){return typeof code==="string"&&__modernRe.test(code);}',
-      '    function transpile(code){if(typeof window.Babel==="undefined")return null;try{return window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}}',
+      // JELA-11: seed-side device-native parse probe — lockstep with the
+      // widget-side parseProbeActive()/parsesOnThisEngine() (same probe, same
+      // killswitch key). Capability is re-tested HERE, not interpolated from
+      // the widget verdict, because this code runs on the post-document.write
+      // SERVER origin whose CSP can differ from the widget origin's.
+      '    var __ppOk=(function(){try{new Function("1");return true;}catch(_){return false;}})();',
+      '    function __ppOff(){try{return localStorage.getItem("jellyfin.shell.parseProbeDisabled")==="1";}catch(_){return false;}}',
+      "    function __ppOn(){return __ppOk&&!__ppOff();}",
+      "    try{window.__shellParseProbeSeed={ok:__ppOk,n:0,tx:0};}catch(_){}",
+      "    function __ppParses(code){var d=window.__shellParseProbeSeed;if(d)d.n++;try{new Function(code);return true;}catch(_){if(d)d.tx++;return false;}}",
+      '    function needsTx(code){if(typeof code!=="string")return false;if(__ppOn())return !__ppParses(code);return __modernRe.test(code);}',
+      // JELA-11: Babel output is probe-verified like the widget-side
+      // babelTranspile (no regex fallback — probe-less devices keep the
+      // pre-JELA-11 accept-anything-Babel-returned behavior).
+      '    function transpile(code){if(typeof window.Babel==="undefined")return null;var out;try{out=window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}if(typeof out==="string"&&__ppOn()&&!__ppParses(out))return null;return out;}',
       "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
       // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
@@ -1283,6 +1355,9 @@
       // above, which would false-positive on legal ES2015 `, ...x` array/
       // call spread that preset-env legitimately leaves in lowered output.
       "    var __oracleRe=/\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await/;",
+      // JELA-11: seed-side oracle mirrors the widget-side loweredBodyOk() —
+      // probe when available, strict __oracleRe token screen as fallback.
+      "    function __loweredOk(b){if(__ppOn())return __ppParses(b);return !__oracleRe.test(b);}",
       "    function __txFnv(s){var h=0x811c9dc5;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0;}return h.toString(36);}",
       "    function __txDropGet(code){",
       '      try{if(localStorage.getItem("jellyfin.shell.txDropDisabled")==="1")return Promise.resolve(null);}catch(_){}',
@@ -1290,7 +1365,7 @@
       "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
       '      var rel=d.entries[__txFnv(String(code||""))];',
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
-      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||__oracleRe.test(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
       "    }",
       // Async drop-in for the synchronous maybeTranspile at both dynamic
       // call sites (rewrite + srcPipeline): resolves to the same
@@ -2512,8 +2587,9 @@
   }
 
   function babelTranspile(src) {
+    var out;
     try {
-      return window.Babel.transform(src, {
+      out = window.Babel.transform(src, {
         presets: [
           // JEL-354: chrome:56 (runtime floor), not 63 — lowers all ES2018
           // syntax (object-spread, async generators) the Q60R Chromium-56
@@ -2534,6 +2610,24 @@
       } catch (_) {}
       return null;
     }
+    // JELA-11: same oracle as the drop path — never inline a Babel body this
+    // engine cannot parse (e.g. BigInt literals survive lowering by design;
+    // see plugin-syntax-transpile.test.cjs). Callers treat null as transform
+    // failure and neutralize, which contains the damage to one script.
+    // Probe-gated ON PURPOSE (no regex fallback here): pre-JELA-11 shells
+    // never oracle-checked Babel output, and probe-less devices must keep
+    // that behavior exactly.
+    if (
+      typeof out === "string" &&
+      parseProbeActive() &&
+      !parsesOnThisEngine(out)
+    ) {
+      try {
+        console.warn("shell: babel output failed parse probe, dropped");
+      } catch (_) {}
+      return null;
+    }
+    return out;
   }
 
   // JEL-405: when we XHR-fetch a plugin <script src> and inline it,
@@ -3590,8 +3684,9 @@
   // at all. localStorage caching downstream is unchanged, so bodies within
   // the 256 KB cap short-circuit before even the drop fetch on later boots.
   //   Safety: a drop body is accepted ONLY if the STRICT post-transpile
-  //   oracle (MODERN_SYNTAX_RE) finds no modern token, so an incompatible
-  //   or corrupt drop entry falls back to the on-device Babel path — never
+  //   oracle passes (loweredBodyOk — JELA-11 parse probe when available,
+  //   MODERN_SYNTAX_RE token screen as fallback), so an incompatible or
+  //   corrupt drop entry falls back to the on-device Babel path — never
   //   to raw modern source reaching the M56 parser. The manifest must also
   //   carry this shell's exact BABEL_OPTS_KEY so transform semantics (loose
   //   iterables, JEL-26 assumptions) match what the TV would produce.
@@ -3658,6 +3753,16 @@
     window.__shellTxDropReady = p;
     return p;
   }
+  // JELA-11: STRICT post-transform oracle. A pre-lowered drop body (and any
+  // on-TV Babel output — see babelTranspile) is accepted only if it actually
+  // parses on THIS engine; the MODERN_SYNTAX_RE token screen is the fallback
+  // when the probe is unavailable/disabled. The probe also retires the
+  // regex oracle's known false-positive class (modern-looking tokens inside
+  // string literals reading a correctly-lowered body as "still modern").
+  function loweredBodyOk(body) {
+    if (parseProbeActive()) return parsesOnThisEngine(body);
+    return !MODERN_SYNTAX_RE.test(body);
+  }
   function txDropResolve(code) {
     // Promise<loweredBody|null>. null means "no usable drop body" — the
     // caller falls back to the Babel slow path. Never rejects.
@@ -3681,7 +3786,7 @@
             if (
               typeof body !== "string" ||
               !body.length ||
-              MODERN_SYNTAX_RE.test(body)
+              !loweredBodyOk(body)
             ) {
               d.r++;
               return null;
@@ -3715,8 +3820,15 @@
   // the derived TX_VER hash.
   // JEL-417: the PRE-check gates on MODERN_PRECHECK_RE (broader — also catches
   // interior `, ...x` object spread), not the precise MODERN_SYNTAX_RE oracle.
+  // JELA-11: when the device-native parse probe is available (see
+  // PARSE_PROBE_OK top-of-IIFE) the engine's own parser answers instead —
+  // no false negatives by construction, no wasted Babel passes on regex
+  // false positives (`span1n`, tokens inside string literals). The regex
+  // pre-check is the capability/killswitch fallback.
   function needsTranspile(code) {
-    return typeof code === "string" && MODERN_PRECHECK_RE.test(code);
+    if (typeof code !== "string") return false;
+    if (parseProbeActive()) return !parsesOnThisEngine(code);
+    return MODERN_PRECHECK_RE.test(code);
   }
   // JEL-216: turn a modern-syntax external script we could not transpile into
   // an inert node so its raw `?.`/`??` can't SyntaxError the M63 engine (which

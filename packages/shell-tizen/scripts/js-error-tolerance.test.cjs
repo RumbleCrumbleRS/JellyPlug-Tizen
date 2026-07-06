@@ -356,8 +356,12 @@ for (const file of [
 //    crashing. (shell.js ~line 890.)
 // =====================================================================
 {
-  // Transcription of: function transpile(code){if(typeof window.Babel==="undefined")
-  //   return null;try{return window.Babel.transform(...).code;}catch(_){return null;}}
+  // Transcription of (JELA-11 shape): function transpile(code){if(typeof
+  //   window.Babel==="undefined")return null;var out;try{out=window.Babel
+  //   .transform(...).code;}catch(_){return null;}if(typeof out==="string"
+  //   &&__ppOn()&&!__ppParses(out))return null;return out;}
+  //   (probe verification exercised in parse-probe.test.cjs; here we pin the
+  //   never-throws contract, so the transcription omits the probe gate.)
   function makeTranspile(win) {
     return function transpile(code) {
       if (typeof win.Babel === "undefined") return null;
@@ -402,10 +406,11 @@ for (const file of [
     r2 === null,
   );
   check("transpile() returns transpiled code on success", r3 === "var x=1;");
-  // Source-of-record: the shipped helper actually catches and returns null.
+  // Source-of-record: the shipped helper actually catches and returns null
+  // (JELA-11: Babel output is additionally probe-verified before return).
   check(
     "shell.js transpile() wraps Babel.transform in try/catch → return null",
-    /function transpile\(code\)\{if\(typeof window\.Babel==="undefined"\)return null;try\{return window\.Babel\.transform\([\s\S]*?\)\.code;\}catch\(_\)\{return null;\}\}/.test(
+    /function transpile\(code\)\{if\(typeof window\.Babel==="undefined"\)return null;var out;try\{out=window\.Babel\.transform\([\s\S]*?\)\.code;\}catch\(_\)\{return null;\}if\(typeof out==="string"&&__ppOn\(\)&&!__ppParses\(out\)\)return null;return out;\}/.test(
       shellSrc,
     ),
   );
