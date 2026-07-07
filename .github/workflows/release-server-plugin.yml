@@ -144,6 +144,34 @@ jobs:
           git commit -m "server-plugin: publish v${VERSION} to plugin-repo manifest [skip ci]"
           git push origin HEAD:main
 
+      # JELA-31 (WS-E / C4): prove the release actually reached the live server.
+      # A publish only takes effect after the Jellyfin server auto-pulls the new
+      # plugin zip AND restarts (timing this workflow does not control), so the
+      # probe POLLS the live /shell/manifest.json until its sha256 == the sha256
+      # of the shell.min.js this release embedded, or the deadline passes.
+      #
+      # Gated on the `DEPLOY_VERIFY_URL` repo variable (Settings → Variables).
+      # Unset ⇒ skipped (default; keeps the personal server URL out of git,
+      # JEL-139). Set it and every dispatched release turns red if the bytes
+      # never went live. See docs/deploy-runbook.md §3.
+      - name: Verify propagation (sha-match probe)
+        if: vars.DEPLOY_VERIFY_URL != ''
+        env:
+          DEPLOY_VERIFY_URL: ${{ vars.DEPLOY_VERIFY_URL }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          tooling/ci/verify-shell-deploy.sh "$DEPLOY_VERIFY_URL" \
+            --poll --timeout 1800 --interval 30 --expect-version "$VERSION"
+
+      - name: Verify propagation skipped (no DEPLOY_VERIFY_URL)
+        if: vars.DEPLOY_VERIFY_URL == ''
+        run: |
+          echo "DEPLOY_VERIFY_URL repo variable is unset — skipping the live" \
+               "sha-match probe. Run tooling/ci/verify-shell-deploy.sh manually" \
+               "against the server, or set the variable to gate releases on it." \
+               "See docs/deploy-runbook.md §3."
+
       - name: Job summary
         if: always()
         env:
