@@ -142,6 +142,17 @@ You do **not** need a TV to exercise the bootstrap logic — it is plain web:
 node packages/shell-tizen-bootstrap/scripts/selftest.cjs
 ```
 
+Enable the commit-time guards (one-time, per clone) so a personal / dynamic-DNS
+home-server hostname can't slip into a commit (the JEL-139 class of leak):
+
+```sh
+git config core.hooksPath tooling/ci/githooks
+```
+
+This mirrors the push-time CI check but fails **before** the commit exists, so
+the leak never reaches history. Bypass a genuine false positive with
+`git commit --no-verify`.
+
 ### Repo layout
 
 ```

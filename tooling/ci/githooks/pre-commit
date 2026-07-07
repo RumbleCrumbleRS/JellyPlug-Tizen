@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# JELA-18 defense-in-depth: block a personal / dynamic-DNS home-server hostname
+# BEFORE it enters a commit (and thus git history). The push-time CI guard
+# (tooling/ci/check-no-personal-endpoints.sh) only fails AFTER a commit exists,
+# which is how JELA-9 leaked `*.ddns.net` into history — removing it there needs
+# a full history rewrite. This hook runs the same guard against the staged diff.
+#
+# Install (per clone): git config core.hooksPath tooling/ci/githooks
+# Bypass a genuine false positive: git commit --no-verify
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/tooling/ci/check-no-personal-endpoints.sh" --staged

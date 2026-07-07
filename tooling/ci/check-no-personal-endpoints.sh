@@ -25,6 +25,33 @@ cd "$(git rev-parse --show-toplevel)"
 # (reserved TLD, never resolves) so redacted fixtures pass.
 PATTERN='examplehost|[a-z0-9][a-z0-9.-]*\.(ddns\.net|duckdns\.org|hopto\.org|zapto\.org|sytes\.net|myftp\.(org|biz)|serveo\.net|dyndns\.(org|tv|info)|no-ip\.(org|biz|info|com)|ddnsfree\.com|loginto\.me)'
 
+# --staged mode (JELA-18): scan the STAGED diff instead of the committed tree,
+# so the pre-commit hook (tooling/githooks/pre-commit) can block the leak
+# BEFORE it ever enters a commit. JELA-9 slipped a dynamic-DNS hostname past
+# the push-time CI guard because CI only fails after the commit already exists
+# (and then lives in history forever, requiring a rewrite to remove). This mode
+# closes that window. It inspects only added ('+') lines in the staged changeset
+# and reuses the exact same PATTERN as the tree scan below — single source of
+# truth, no drift.
+if [[ "${1:-}" == "--staged" ]]; then
+  added=$(git diff --cached --no-color -U0 \
+            -- . ':(exclude)tooling/ci/check-no-personal-endpoints.sh' \
+          | grep -E '^\+' | grep -Ev '^\+\+\+' || true)
+  if [[ -n "$added" ]] && echo "$added" | grep -qiE "$PATTERN"; then
+    echo "ERROR: personal / dynamic-DNS server endpoint in STAGED changes (JEL-139 guard):" >&2
+    echo "$added" | grep -niE "$PATTERN" >&2
+    echo >&2
+    echo "This would enter git history if committed. Unstage it and replace with a" >&2
+    echo "reserved *.example placeholder (e.g. REDACTED-SERVER.example)." >&2
+    echo "Raw on-device capture evidence goes to the Paperclip issue, not git" >&2
+    echo "(see tooling/tv-validate/EVIDENCE-POLICY.md). To bypass in a genuine" >&2
+    echo "false-positive: git commit --no-verify (and fix the pattern in a PR)." >&2
+    exit 1
+  fi
+  echo "OK: no personal / dynamic-DNS endpoints in staged changes."
+  exit 0
+fi
+
 # git grep over tracked files only; -I skips binary blobs.
 if matches=$(git grep -nIiE "$PATTERN" -- . ':(exclude)tooling/ci/check-no-personal-endpoints.sh' 2>/dev/null); then
   echo "ERROR: personal / dynamic-DNS server endpoint found in tracked files:" >&2
