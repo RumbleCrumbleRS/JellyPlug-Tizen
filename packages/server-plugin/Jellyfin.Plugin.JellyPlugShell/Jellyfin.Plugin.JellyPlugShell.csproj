@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.JellyPlugShell</RootNamespace>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.0.0</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
+    <PackageReference Include="Jint" Version="4.11.0" />
+  </ItemGroup>
+
+  <!-- TV-facing shell assets: embedded straight from the shell-tizen package so
+       the plugin always serves the exact bytes the repo shipped/tested. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../shell-tizen/src/shell.min.js" Link="Resources/shell.min.js" LogicalName="JellyPlugShell.Resources.shell.min.js" />
+    <EmbeddedResource Include="../../shell-tizen/src/babel.min.js" Link="Resources/babel.min.js" LogicalName="JellyPlugShell.Resources.babel.min.js" />
+  </ItemGroup>
+
+  <!-- Server-side transform engine: the official @babel/standalone UMD at the
+       exact version the vendored slim build was cut from (@babel/core 7.29.7,
+       see the shell-tizen babel.min.js header). The slim chrome56 esbuild
+       bundle needs native generators and does not run under Jint; the UMD
+       build is ES5-compiled and does. Fetched at build time (pinned URL +
+       sha256), never committed — see FetchBabelStandalone below. -->
+  <PropertyGroup>
+    <BabelStandaloneVersion>7.29.7</BabelStandaloneVersion>
+    <BabelStandaloneSha256>7f55bd5c3efadeaa83d4de97dc91da8bf0733789801cf28b9273c4284739798e</BabelStandaloneSha256>
+    <BabelStandaloneDir>$(MSBuildThisFileDirectory).cache/</BabelStandaloneDir>
+    <BabelStandalonePath>$(BabelStandaloneDir)babel-standalone-$(BabelStandaloneVersion).min.js</BabelStandalonePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(BabelStandalonePath)" Link="Resources/babel-transform.min.js" LogicalName="JellyPlugShell.Resources.babel-transform.min.js" />
+  </ItemGroup>
+
+  <Target Name="FetchBabelStandalone" BeforeTargets="PrepareForBuild" Condition="!Exists('$(BabelStandalonePath)')">
+    <DownloadFile SourceUrl="https://unpkg.com/@babel/standalone@$(BabelStandaloneVersion)/babel.min.js" DestinationFolder="$(BabelStandaloneDir)" DestinationFileName="babel-standalone-$(BabelStandaloneVersion).min.js" />
+  </Target>
+
+  <Target Name="VerifyBabelStandalone" AfterTargets="FetchBabelStandalone" BeforeTargets="PrepareForBuild">
+    <GetFileHash Files="$(BabelStandalonePath)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="BabelStandaloneHashed" />
+    </GetFileHash>
+    <Error Condition="'%(BabelStandaloneHashed.FileHash)' != '$(BabelStandaloneSha256)'" Text="babel-standalone download hash mismatch: got %(BabelStandaloneHashed.FileHash), expected $(BabelStandaloneSha256)" />
+  </Target>
+
+</Project>

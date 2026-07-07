@@ -1,0 +1,4 @@
+Jellyfin.Plugin.JellyPlugShell/bin/
+Jellyfin.Plugin.JellyPlugShell/obj/
+Jellyfin.Plugin.JellyPlugShell/.cache/
+dist/
