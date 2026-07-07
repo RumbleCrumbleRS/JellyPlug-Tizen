@@ -76,3 +76,8 @@ Release flow: `package-plugin.sh` → create GitHub release
 runs the exact recipe above on an ubuntu runner and pushes the manifest bump to
 `main`, so a subscribed server autoUpdates. Dispatch-only; re-running a
 published version is a no-op.
+
+**Ship / verify / roll back:** the full reversible runbook — forward path,
+rollback (before _and_ after a server auto-updates), and the automated
+post-publish sha-match propagation probe (`tooling/ci/verify-shell-deploy.sh`) —
+lives in [`docs/deploy-runbook.md`](../../docs/deploy-runbook.md) (JELA-31).
