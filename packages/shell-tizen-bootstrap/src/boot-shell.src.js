@@ -2486,22 +2486,45 @@
       'try{if(localStorage.getItem("jellyfin.shell.instantHomeDisabled")==="1")return}catch(_){}' +
       'var W=window,MK="jellyfin.shell.instantHome",OID="__shell_instant_home";' +
       "var G=W.__shellIH;" +
-      'if(!G)G=W.__shellIH={gen:0,painted:0,paintMs:0,dismissed:0,why:"",dismissMs:0,captured:0,capMs:0,items:0,err:0};' +
+      'if(!G)G=W.__shellIH={gen:0,painted:0,paintMs:0,dismissed:0,why:"",dismissMs:0,captured:0,capMs:0,items:0,err:0,skeleton:0,snapAgeMs:-1};' +
       "var gen=++G.gen;" +
       "var t0=+new Date();" +
       "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
       'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
       'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
+      // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
+      // library never paints forever; operator-tunable via
+      // localStorage["jellyfin.shell.instantHomeMaxAgeMs"] (any positive ms;
+      // e.g. restore the old 7 d = 604800000) without a shell release. An
+      // expired snapshot falls through to the first-boot skeleton below, so
+      // the paint is bounded-fresh yet never blank.
+      'function maxAge(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeMaxAgeMs"),10);if(v>0)return v}catch(_){}return 172800000}' +
+      // JELA-32 (WS-B): first-boot skeleton killswitch (independent of the
+      // master instantHomeDisabled) so the placeholder can be turned off while
+      // real-snapshot repaint stays on.
+      'function skOff(){try{return localStorage.getItem("jellyfin.shell.instantHomeSkeletonDisabled")==="1"}catch(_){return!1}}' +
+      // JELA-32 (WS-B): synthetic above-fold placeholder (title bar + two card
+      // rows w/ row labels) sized to the current viewport, painted ONLY when
+      // authed and no valid snapshot exists (first-ever boot, expired, corrupt
+      // or server-mismatch) so the very first launch is never blank. Content-
+      // free (sk-tiles carry no library data), so it is server-agnostic and is
+      // never itself captured.
+      "function skel(){var vw=W.innerWidth||1920,vh=W.innerHeight||1080,it=[],mx=Math.round(vw*.035),gp=Math.round(vw*.014);" +
+      "it.push({x:mx,y:Math.round(vh*.06),w:Math.round(vw*.34),h:Math.round(vh*.05),sk:1,r:6});" +
+      "var cols=6,cw=Math.round((vw-2*mx-(cols-1)*gp)/cols),chh=Math.round(cw*.56),y0=Math.round(vh*.18),rg=chh+Math.round(vh*.1),r,c;" +
+      "for(r=0;r<2;r++){var ry=y0+r*rg;it.push({x:mx,y:ry-Math.round(vh*.045),w:Math.round(vw*.16),h:Math.round(vh*.03),sk:1,r:4});" +
+      "for(c=0;c<cols;c++)it.push({x:mx+c*(cw+gp),y:ry,w:cw,h:chh,sk:1,r:6})}return it}" +
       "function readSnap(){try{" +
       'var m=JSON.parse(localStorage.getItem(MK)||"null");' +
       "if(!m||m.v!==1||!m.n||m.n>40)return null;" +
       "if(m.srv&&m.srv!==srv())return null;" +
-      "if(!m.ts||+new Date()-m.ts>604800000)return null;" +
+      "if(!m.ts)return null;" +
+      "var age=+new Date()-m.ts;if(age>maxAge())return null;" +
       'var s="",i;' +
       'for(i=0;i<m.n;i++){var c=localStorage.getItem(MK+"."+i);if(c==null)return null;s+=c}' +
       "var d=JSON.parse(s);" +
       "if(!d||!d.items||d.items.length<4)return null;" +
-      "d.w=m.w||1920;d.h=m.h||1080;" +
+      "d.w=m.w||1920;d.h=m.h||1080;d.age=age;" +
       "return d}catch(_){return null}}" +
       "function dismiss(why){" +
       "if(G.dismissed)return;" +
@@ -2512,9 +2535,10 @@
       "var de=document.documentElement;" +
       "if(!de||!de.appendChild)return;" +
       "if(!authed())return;" +
-      "var d=readSnap();" +
-      "if(!d)return;" +
-      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,rx=vw/d.w,ry=vh/d.h;" +
+      "var d=readSnap(),sk=0;" +
+      "if(!d){if(skOff())return;d={items:skel(),age:-1};sk=1}" +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080;" +
+      "d.w=d.w||vw;d.h=d.h||vh;var rx=vw/d.w,ry=vh/d.h;" +
       'var e=document.createElement("div");' +
       "e.id=OID;" +
       'e.setAttribute("aria-hidden","true");' +
@@ -2522,12 +2546,13 @@
       "for(var i=0;i<d.items.length;i++){" +
       'var it=d.items[i],n=document.createElement("div");' +
       'var cs="position:absolute;left:"+Math.round(it.x*rx)+"px;top:"+Math.round(it.y*ry)+"px;width:"+Math.round(it.w*rx)+"px;height:"+Math.round(it.h*ry)+"px;";' +
-      'if(it.u){cs+="background:#1f1f1f url(\\""+String(it.u).replace(/["\\\\]/g,"")+"\\") center center no-repeat;background-size:cover;border-radius:"+((it.r|0)||4)+"px"}' +
+      'if(it.sk){cs+="background:#1c1c1c;border-radius:"+((it.r|0)||6)+"px"}' +
+      'else if(it.u){cs+="background:#1f1f1f url(\\""+String(it.u).replace(/["\\\\]/g,"")+"\\") center center no-repeat;background-size:cover;border-radius:"+((it.r|0)||4)+"px"}' +
       'else{n.textContent=it.s||"";cs+="color:#ccc;font:500 "+Math.round((it.fs||26)*ry)+"px/1.25 sans-serif;white-space:nowrap;overflow:hidden"}' +
       "n.style.cssText=cs;" +
       "e.appendChild(n)}" +
       "de.appendChild(e);" +
-      'if(!G.painted){G.painted=1;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase("snap")}catch(_){}}' +
+      'if(!G.painted){G.painted=1;G.skeleton=sk;G.snapAgeMs=d.age;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase("snap")}catch(_){}}' +
       "}catch(_){G.err++}}" +
       'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
       // JELA-22 (JEL-647): window scroll offset, so capture only snapshots the

@@ -461,7 +461,7 @@ function visibleCard(env) {
   assert.strictEqual(env.window.__shellIH, undefined);
 }
 {
-  // no snapshot
+  // JELA-32: no snapshot (first-ever boot) → non-blank skeleton placeholder
   const env = makeEnv({
     store: {
       jellyfin_credentials: CREDS,
@@ -469,10 +469,43 @@ function visibleCard(env) {
     },
   });
   env.run();
-  assert.strictEqual(findOverlay(env), null, "no snapshot → no overlay");
+  const overlay = findOverlay(env);
+  assert(overlay, "first boot with no snapshot → skeleton overlay painted");
+  assert.strictEqual(env.window.__shellIH.skeleton, 1, "flagged as skeleton");
+  assert.strictEqual(env.window.__shellIH.snapAgeMs, -1, "skeleton age sentinel");
+  assert(overlay.children.length >= 8, "skeleton has multiple placeholder tiles");
+  // skeleton is content-free: never carries a library image/section URL
+  assert(
+    overlay.children.every((n) => n.style.cssText.indexOf("url(") === -1),
+    "skeleton tiles carry no library data",
+  );
+  assert(
+    overlay.style.cssText.indexOf("pointer-events:none") !== -1,
+    "skeleton never intercepts input",
+  );
+  assert.strictEqual(overlay.attrs["aria-hidden"], "true");
+  assert(env.marks.indexOf("snap") !== -1, "skeleton still records the ring mark");
 }
 {
-  // unauthenticated
+  // JELA-32: skeleton killswitch → first boot stays blank (snapshot repaint
+  // still works; only the placeholder is suppressed)
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+      "jellyfin.shell.instantHomeSkeletonDisabled": "1",
+    },
+  });
+  env.run();
+  assert.strictEqual(
+    findOverlay(env),
+    null,
+    "skeleton killswitch → no first-boot overlay",
+  );
+}
+{
+  // unauthenticated → no overlay at all (not even a skeleton: unauthed boots
+  // land on login, never home)
   const store = makeSnapshotStore();
   delete store.jellyfin_credentials;
   const env = makeEnv({ store });
@@ -480,26 +513,55 @@ function visibleCard(env) {
   assert.strictEqual(findOverlay(env), null, "unauthed → no overlay");
 }
 {
-  // stale (> 7 days)
-  const env = makeEnv({ store: makeSnapshotStore({ ts: 1 }), now: 604800100 });
+  // JELA-32: expired snapshot (older than the bounded max-age) → falls back to
+  // the skeleton so a stale library never paints, yet the boot is not blank
+  const env = makeEnv({ store: makeSnapshotStore({ ts: 1 }), now: 172800100 });
   env.run();
-  assert.strictEqual(findOverlay(env), null, "stale snapshot → no overlay");
+  const overlay = findOverlay(env);
+  assert(overlay, "expired snapshot → skeleton fallback (not blank)");
+  assert.strictEqual(env.window.__shellIH.skeleton, 1, "expired → skeleton");
 }
 {
-  // server mismatch
+  // JELA-32: within the bounded max-age → the real snapshot still paints
+  const env = makeEnv({ store: makeSnapshotStore({ ts: 1 }), now: 172799000 });
+  env.run();
+  assert(findOverlay(env), "snapshot within max-age paints");
+  assert.strictEqual(env.window.__shellIH.skeleton, 0, "real snapshot, not skeleton");
+  assert.strictEqual(
+    env.window.__shellIH.snapAgeMs,
+    172798999,
+    "painted snapshot age recorded",
+  );
+}
+{
+  // JELA-32: operator override of the max-age (restore the legacy 7-day bound)
+  // via localStorage — a 3-day-old snapshot that would expire under the 48h
+  // default still paints
+  const store = makeSnapshotStore({ ts: 1 });
+  store["jellyfin.shell.instantHomeMaxAgeMs"] = "604800000";
+  const env = makeEnv({ store, now: 259200000 });
+  env.run();
+  assert(findOverlay(env), "override widens max-age → older snapshot still paints");
+  assert.strictEqual(env.window.__shellIH.skeleton, 0);
+}
+{
+  // server mismatch → skeleton (the old snapshot is for a different server;
+  // the content-free placeholder is server-agnostic and safe to show)
   const env = makeEnv({
     store: makeSnapshotStore({ metaSrv: "http://other" }),
   });
   env.run();
-  assert.strictEqual(findOverlay(env), null, "server mismatch → no overlay");
+  assert(findOverlay(env), "server mismatch → skeleton");
+  assert.strictEqual(env.window.__shellIH.skeleton, 1);
 }
 {
-  // corrupt chunk
+  // corrupt chunk → skeleton (unreadable snapshot never paints torn content)
   const store = makeSnapshotStore();
   store[MK + ".0"] = "{not json";
   const env = makeEnv({ store });
   env.run();
-  assert.strictEqual(findOverlay(env), null, "corrupt snapshot → no overlay");
+  assert(findOverlay(env), "corrupt snapshot → skeleton");
+  assert.strictEqual(env.window.__shellIH.skeleton, 1);
 }
 {
   // localStorage throwing never breaks boot
