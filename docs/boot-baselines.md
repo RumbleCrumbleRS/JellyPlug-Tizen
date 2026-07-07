@@ -316,6 +316,86 @@ resolution of record in **JELA-24** (closed `done`, child spike JELA-27).
 The only lever with headroom is JELA-24 Lever-1 (a bespoke non-SPA home
 paint), carried as the deferred JELA-8 follow-up; it is not re-opened here.
 
+## JELA-34 — Two-device standing baseline (WS-D): capture recipe
+
+Nearly all perf evidence above is Q60R (Tizen 5.0, Chromium 63). From
+JELA-34 on, perf claims must generalize: **record a QN90B (Tizen 6.5,
+Chromium 85) row alongside every future Q60R claim**, captured with the
+recipe below. The recipe needs no wired bench TV — it reuses the JELA-30
+(WS-C) self-report so any fielded panel reports itself.
+
+**A. Standing self-report (primary; any panel, no sdb/CDP).**
+
+1. **Arm (one-time per panel, server-side):** a Tizen-gated JS-Injector
+   snippet (`JellyPlug — diag-beacon arm (JELA-34 standing baseline)`)
+   sets `localStorage["jellyfin.shell.diagBeacon"]="1"` on every Tizen
+   boot. The beacon gate runs in the written document's `<head>` before
+   the JSI channel executes, so **arming takes effect on the boot _after_
+   the flag lands** — boot N arms, boot N+1 reports.
+2. **Report (every armed boot):** the shell's JELA-30 beacon POSTs the
+   persisted 10-boot `bootPhases` ring + `__shellTx*` counters to
+   `POST {server}/shell/diag` once `home`/`card` lands (60 s cap). Prior
+   boots ride along and the server dedupes by (id, boot ts), so a boot
+   that died mid-way is reported by the next healthy one.
+3. **Read:** `GET {server}/shell/diag/report` (elevated API token) —
+   per-device latest ring + fleet phase medians. Devices appear as an
+   opaque id (`jellyfin.shell.diagId` hash) + shell `ver`; map id→panel
+   by boot timestamps or by driving a known boot.
+
+**B. Per-boot counter probe (parse-probe / tx-cache confirm).** The
+beacon payload carries tx counters but not `__shellParseProbe`; for
+engine-behavior confirms a temp Tizen-gated JSI snippet
+(`ZZ — JELA-34 parse-probe confirm (TEMP)`) posts one line per boot —
+Tizen + engine version parsed from the UA, `__shellParseProbe`,
+`__shellParseProbeSeed`, `__shellTxCacheHits/Misses`, `__shellTxDoCount`,
+`__shellDiag.stats.transpiled`, `nav/dcl/api/card`, and
+`__shellDiagBeacon` state — to an ntfy topic (configured server-side in
+the snippet; kept out of git). Fires at `card` or 90 s, once per boot.
+Disable the snippet when the confirm is done; the arm snippet stays.
+
+**C. Driving boots.** Bench Q60R: `sdb connect 192.168.86.202`, then
+`sdb shell 0 kill JelShellTV`, ~8 s, `sdb shell 0 execute
+JelShellTV.Jellyfin` (JELA-36 recipe if the transport wedges). Unwired
+panels (QN90B): natural household boots — the standing beacon captures
+them; no session is needed.
+
+**D. Wired fallback.** The JELA-9/JELA-7 CDP method (`sdb shell 0 debug
+…`, poll `window.__shellT` over `Runtime.evaluate`) stays the fallback
+for counters the beacon/probe don't carry and for pre-ring shell
+generations.
+
+### Refresh — Q60R (Chromium 63), 2026-07-07, recipe A+B end-to-end
+
+Hosted shell sha `6c7dfd4a…` (v1.0.2.0 bytes; shell version string still
+reads `1.0.75` — sha is the source of truth). Three driven boots
+(`0 kill`/`0 execute`, non-debug):
+
+| boot         | nav  | dcl  | api  | card | parse-probe / seed | tx (hit/miss/do) | transpiled | beacon POST        |
+| ------------ | ---- | ---- | ---- | ---- | ------------------ | ---------------- | ---------- | ------------------ |
+| 1 (arm boot) | 1378 | 3029 | 3383 | 8342 | ok 10/0 · ok 6/6   | 56/2/2           | 0          | — (arms this boot) |
+| 2            | 2246 | 2684 | 2989 | 9400 | ok 9/0 · ok 8/6    | 56/0/2           | 0          | sent, http 200     |
+| 3            | 2150 | 2485 | 3012 | 7607 | ok 9/0 · ok 4/3    | 56/0/1           | 0          | sent, http 200     |
+
+Server-side `GET /shell/diag/report` after boot 2: `Devices 1`,
+`TotalRings 10` (full ring adopted in one POST), phase medians
+`dcl 3906 / api 4352.5 / home 5726 / card 9119.5 / snap 157` — the
+JELA-21 warm class reproduced through the standing pipeline. Chromium-63
+control row for the parse-probe confirm: 0 transpiles, 56/56 warm
+tx-cache hits, probe accepts everything raw — unchanged.
+
+### Refresh — QN90B (Chromium 85): armed, rows pending first natural boot
+
+The QN90B is not sdb-reachable (only `.202` answers on the QA /24), so
+its rows arrive via recipe A/B on the panel's next natural JellyPlug
+boot: the arm snippet + counter probe are live server-side, and the
+hosted `/shell/` channel now serves v1.0.2.0 (the 2026-07-02 baseline
+above pre-dates the hosted drop — that boot fell back to the baked HSB
+v2.0.16 shell with no ring/beacon). Expected on Chromium 85: parse-probe
+accepts ES2018+ raw (`tx 0`, `transpiled 0`) and warm tx-cache hits at
+Q60R parity. Append the rows + the Chromium-85 parse-probe verdict here
+when the first armed boot reports; until then Chromium-85 behavior is
+**unconfirmed**.
+
 ## Rules
 
 - Re-measure with the same TV, same server, same snippet-channel size when
