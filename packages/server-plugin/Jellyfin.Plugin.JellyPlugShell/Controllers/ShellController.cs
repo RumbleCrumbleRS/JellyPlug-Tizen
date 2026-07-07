@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,11 +19,18 @@ public class ShellController : ControllerBase
 {
     private static readonly Regex HashRe = new("^[0-9a-z]{1,13}$", RegexOptions.ECMAScript);
 
-    private readonly ShellDropService _drop;
+    // A boot beacon is tiny (an ~10-entry ring of numbers). Refuse anything
+    // that could not plausibly be one so a hostile POST can't stream a large
+    // body through the sanitizer.
+    private const int MaxDiagBodyBytes = 64 * 1024;
 
-    public ShellController(ShellDropService drop)
+    private readonly ShellDropService _drop;
+    private readonly DiagIngestService _diag;
+
+    public ShellController(ShellDropService drop, DiagIngestService diag)
     {
         _drop = drop;
+        _diag = diag;
     }
 
     [HttpGet("manifest.json")]
@@ -77,5 +85,82 @@ public class ShellController : ControllerBase
         // Content-addressed: same hash always means same bytes.
         Response.Headers.CacheControl = "public, max-age=31536000, immutable";
         return PhysicalFile(path, "application/javascript");
+    }
+
+    /// <summary>
+    /// JELA-30 (WS-C): ingest an opt-in per-boot diag beacon (the shell's
+    /// bootPhases ring + __shellTx* counters). Anonymous like the rest of
+    /// /shell/ — a TV posts this before login, exactly as it fetches the shell
+    /// assets. Opt-in lives on the TV (the shell only posts when
+    /// localStorage["jellyfin.shell.diagBeacon"]==="1"); an operator can also
+    /// refuse all ingest server-side via the plugin config. The body is fully
+    /// re-sanitized in DiagIngestService — nothing here trusts its shape.
+    ///
+    /// text/plain is accepted alongside application/json so a shell running on
+    /// a widget origin can post without tripping a CORS preflight; the body is
+    /// parsed as JSON regardless of the declared content type.
+    /// </summary>
+    [HttpPost("diag")]
+    [Consumes("application/json", "text/plain")]
+    public async Task<IActionResult> PostDiag()
+    {
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        if (config.DisableDiagIngest)
+        {
+            return NotFound(); // ingest turned off by the operator
+        }
+
+        byte[] body;
+        using (var ms = new MemoryStream())
+        {
+            // Bounded copy: stop reading past the cap instead of buffering an
+            // attacker-controlled stream.
+            var buffer = new byte[8192];
+            int read;
+            while ((read = await Request.Body.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+            {
+                if (ms.Length + read > MaxDiagBodyBytes)
+                {
+                    return StatusCode(413); // payload too large
+                }
+
+                ms.Write(buffer, 0, read);
+            }
+
+            body = ms.ToArray();
+        }
+
+        if (body.Length == 0)
+        {
+            return BadRequest();
+        }
+
+        int accepted;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            accepted = _diag.Ingest(doc.RootElement, config.DiagMaxRings);
+        }
+        catch (JsonException)
+        {
+            return BadRequest();
+        }
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { ok = true, accepted });
+    }
+
+    /// <summary>
+    /// JELA-30 (WS-C): read-side view over the aggregated rings — the boot
+    /// health of every opted-in fielded TV, readable over HTTP without an sdb
+    /// session or power-cycle. Admin-only (device timing data is operator
+    /// telemetry), unlike the anonymous ingest.
+    /// </summary>
+    [HttpGet("diag/report")]
+    [Authorize(Policy = "RequiresElevation")]
+    public IActionResult GetDiagReport()
+    {
+        Response.Headers.CacheControl = "no-store";
+        return new JsonResult(_diag.BuildReport());
     }
 }

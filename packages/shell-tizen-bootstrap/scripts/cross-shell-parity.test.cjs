@@ -235,15 +235,15 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "maybeStringFastPath",
     class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
-    retail: "576c5ee385bf6bd4",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. JELA-30: retail additionally splices the opt-in diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not)",
+    retail: "1dc618f231b5b16c",
     boot: "cd5bffdf00bb220b",
   },
   {
     name: "loadRemoteWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
-    retail: "235e6c091de65aa6",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. JELA-30: retail additionally injects the opt-in diag-beacon script into the written document",
+    retail: "7948375d689ad9d1",
     boot: "6c0e399f8639a4bd",
   },
 ];
