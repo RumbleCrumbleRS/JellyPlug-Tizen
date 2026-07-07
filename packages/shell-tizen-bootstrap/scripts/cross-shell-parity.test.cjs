@@ -236,15 +236,15 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "maybeStringFastPath",
     class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype).",
-    retail: "f5c200504edb82a6",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype) and the JELA-30 diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not).",
+    retail: "930ca917ebe420c3",
     boot: "cd5bffdf00bb220b",
   },
   {
     name: "loadRemoteWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) in the written document.",
-    retail: "cf8d30b70b7dab93",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document.",
+    retail: "22df2dab273144bf",
     boot: "6c0e399f8639a4bd",
   },
   {

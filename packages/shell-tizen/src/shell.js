@@ -3355,6 +3355,84 @@
     );
   }
 
+  // JELA-30 (WS-C/C3): opt-in boot-ring diag beacon. Posts the persisted
+  // JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* counters
+  // to the server-plugin's POST /shell/diag, so an operator can read a fielded
+  // TV's boot health over HTTP — no sdb session, no CDP, no power-cycle (the
+  // recurring cost across JELA-13/21/26/27).
+  //
+  // OPT-IN, default OFF: inert unless localStorage['jellyfin.shell.diagBeacon']
+  // === '1' (settable on-device via the QA overlay localStorage seeds or the
+  // JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
+  //
+  // Redaction / egress (JEL-139, WS-F folded into JELA-30): the payload is
+  // built ONLY from (a) the numeric bootPhases ring records, (b) numeric
+  // __shellTx* counters, (c) the __SHELL_VER__ version string already inside
+  // each ring record, and (d) an OPAQUE device id — an fnv1a-base36 hash of a
+  // once-generated random seed persisted at jellyfin.shell.diagId; never the
+  // DUID/serial/MAC, so the id is unlinkable to hardware or account. The
+  // serverUrl is used as the POST TARGET only and never appears in the body:
+  // the beacon reports the user's own server TO that same server (zero
+  // third-party egress). The server re-sanitizes everything anyway
+  // (DiagIngestService whitelists + extracts; nothing here is trusted).
+  //
+  // Send discipline: one POST per boot (armed latch on window — survives the
+  // document.write handoff), fired from a 3 s poll once the current boot's
+  // home/card mark lands (so the freshest ring record and tx counters are
+  // filled in) or at a 60 s cap for boots that never reach home. Prior boots'
+  // completed records ride along every time; the server dedupes by (id, boot
+  // ts) keeping the most complete copy, so re-posting is free and a boot that
+  // died mid-way is reported by the NEXT healthy boot. A failed POST is not
+  // retried this boot for the same reason. Content-Type text/plain keeps the
+  // POST a CORS "simple request" from the file:// widget origin (the
+  // controller parses the body as JSON regardless).
+  //
+  // Injected into the WRITTEN document only (DOMParser path + string fast
+  // path): the widget document's timers may not survive document.open, and a
+  // boot that never reaches the written document has no reachable server to
+  // post to anyway. Body constraints: ES5 only, every step try/caught, no
+  // "</script" literal (the fast path splices it as HTML).
+  function diagBeaconPostBody() {
+    return (
+      "(function(){try{" +
+      'try{if(localStorage.getItem("jellyfin.shell.diagBeacon")!=="1")return}catch(_){return}' +
+      "var W=window;" +
+      "if(W.__shellDiagBeaconArmed)return;W.__shellDiagBeaconArmed=1;" +
+      "var st=W.__shellDiagBeacon={sent:0,http:0,tries:0,err:0};" +
+      'function base(){try{return String(localStorage.getItem("jellyfin.shell.serverUrl")||"").replace(/\\/+$/,"")}catch(_){return""}}' +
+      "function oid(){try{" +
+      'var IK="jellyfin.shell.diagId";var v=localStorage.getItem(IK)||"";' +
+      "if(/^[0-9a-z]{6,24}$/.test(v))return v;" +
+      'var s=String(Math.random())+":"+(+new Date())+":"+String(Math.random());' +
+      "var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0}" +
+      "v=h.toString(36)+(+new Date()).toString(36);" +
+      "localStorage.setItem(IK,v);return v" +
+      '}catch(_){return""}}' +
+      "function payload(){try{" +
+      'var ring=JSON.parse(localStorage.getItem("jellyfin.shell.bootPhases")||"[]");' +
+      "if(!ring||!ring.length)return null;" +
+      "var d=W.__shellTxDrop||{};" +
+      "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
+      "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
+      "if(!p.id)return null;return p" +
+      "}catch(_){st.err++;return null}}" +
+      "function send(){if(st.sent)return;var b=base();var p=payload();if(!b||!p)return;st.sent=1;" +
+      "try{var x=new XMLHttpRequest();" +
+      'x.open("POST",b+"/shell/diag",!0);' +
+      'x.setRequestHeader("Content-Type","text/plain");' +
+      "x.onreadystatechange=function(){try{if(x.readyState===4)st.http=x.status}catch(_){}};" +
+      "x.send(JSON.stringify(p))}catch(_){st.err++}}" +
+      "var t0=+new Date();" +
+      "var iv=setInterval(function(){try{" +
+      "st.tries++;" +
+      "if(st.sent){clearInterval(iv);return}" +
+      "var ph=W.__shellPhases||{};" +
+      "if(ph.card||ph.home||+new Date()-t0>60000){send();clearInterval(iv)}" +
+      "}catch(_){st.err++}},3000);" +
+      "}catch(_){}})();"
+    );
+  }
+
   // JELA-29: mirror of injectInstantHome for the Direct-Home prototype. Same
   // three injection sites (widget doc, DOMParser path, string fast path) so the
   // opt-in overlay survives document.write; a no-op unless directHome=1.
@@ -3363,6 +3441,16 @@
     dhTag.setAttribute("data-shell-direct-home", "1");
     dhTag.textContent = directHomeBody();
     doc.head.appendChild(dhTag);
+  }
+
+  // JELA-30: written-document injector (DOMParser path; the string fast path
+  // splices the same body). No-op unless diagBeacon==='1' — gate is inside
+  // the body so injection stays unconditional and cheap.
+  function injectDiagBeaconPost(doc) {
+    var dbTag = doc.createElement("script");
+    dbTag.setAttribute("data-shell-diag-beacon", "1");
+    dbTag.textContent = diagBeaconPostBody();
+    doc.head.appendChild(dbTag);
   }
 
   // JEL-197: shell-side JS-Injector snippet channel (parent JEL-196).
@@ -5075,6 +5163,11 @@
     // JELA-29: opt-in Direct-Home prototype (no-op unless directHome=1).
     var directHomeTag =
       '<script data-shell-direct-home="1">' + directHomeBody() + "</script>";
+    // JELA-30: opt-in boot-ring diag beacon (no-op unless diagBeacon==='1').
+    var diagBeaconTag =
+      '<script data-shell-diag-beacon="1">' +
+      diagBeaconPostBody() +
+      "</script>";
     var injected =
       '<script data-shell-diag="1">' +
       diagBody +
@@ -5091,7 +5184,8 @@
       beaconTag +
       progressTag +
       instantHomeTag +
-      directHomeTag;
+      directHomeTag +
+      diagBeaconTag;
     var insertAt = headIdx + 6;
     var patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     // Init bundle counters so HUD reads consistent values whether or
@@ -5541,6 +5635,9 @@
         // JELA-29: opt-in Direct-Home render prototype (no-op unless
         // directHome=1) — see directHomeBody().
         injectDirectHome(doc);
+        // JELA-30: opt-in boot-ring diag beacon posts the JEL-617 ring +
+        // tx counters to POST /shell/diag (no-op unless diagBeacon==='1').
+        injectDiagBeaconPost(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through
         // the tizen-compat firewall (idempotent vs a server-injected copy).
