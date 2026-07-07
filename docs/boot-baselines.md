@@ -279,6 +279,43 @@ Notes:
   build. Raw per-boot counter JSON is on the JELA-14 issue thread (kept out
   of git per the JEL-139 no-server-URL guard).
 
+## JELA-23 — headline correction + parse/eval perf scoping (2026-07-07)
+
+Follow-up split off from JELA-21 Step-4 QA. Two asks, both now resolved
+against the installed-WGT ring above and the JELA-24 floor decision.
+
+**Ask 1 — correct the "~4.5 s warm boot / 4.5 s for every new install"
+headline. DECISION: ADOPTED.** The measurement of record for a real
+installed signed-WGT warm boot is **~9–11 s launch→home-usable / ~6–7 s
+launch→home-route** (JELA-21 ring, rows 3–5 + `execute` row). The "4.5 s"
+figure is retired as a CDP-injection artifact (it measured the harness, not
+the shell — ~4.1–4.5 s for _both_ old and new shells; see the JELA-21
+timing-acceptance note above). This does **not** weaken the serverless win:
+vs the old baked shell's 13.6–21.5 s _every_ boot it is a durable ~35–55 %
+improvement **and** removes the per-boot re-transpile tax entirely (0 Babel
+passes, 56/56 tx-cache hits warm). Corrected number to quote going forward:
+**~9–11 s warm, single-digit-second _usable_ home is follow-up perf, not a
+regression.**
+
+**Ask 2 — scope perf follow-up for the bundle parse/eval slice. OUTCOME: no
+new perf issue warranted; the slice is the JELA-24-accepted floor.**
+
+| lever (from the JELA-23 ask)                            | state                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| bundle-body inline cache (`__shellMainBundleLSAdopted`) | **already shipped + adopted warm** (JEL-1980). The ~485 KB `main.jellyfin.bundle.js` body is inlined from localStorage, so the `<script src>` **fetch is skipped** on warm boots. This removes network cost, **not** the main-thread parse/eval of that inlined body. |
+| snapshot / pre-parse (V8 code cache)                    | Chromium-63 WebView on Tizen 5.0 exposes no code-cache/snapshot hook the shell can drive; = JELA-24 **Lever-1** (bespoke lightweight home-render), scoped weeks-large with ~0 interactive gain, **deferred/unbuilt**.                                                 |
+| trim the plugin / JSI channel                           | = JELA-24 **Lever-2 (~0 ms removable)** and **Lever-3 (no idle-deferrable ≥ 500 ms shell block)** — already exhausted; none of the residual ~9 s is shell-layer cost.                                                                                                 |
+
+Residual `launch→home-usable` decomposes (JELA-9/21 attribution) as
+`nav` (~1–1.5 s WebView spin-up) + `shell→dcl` (~3–4 s parse/eval of the
+inlined bundle + ~150 resources) + `api→card` (~4–5 s home-sections RTT +
+first-card DOM render) — all browser-native / server-side on a 2019 M63 SoC,
+none in JellyPlug's shell/transpile/cache layer, which JELA-21 proved warm-
+free. This is the **architecture/hardware floor** already accepted as the
+resolution of record in **JELA-24** (closed `done`, child spike JELA-27).
+The only lever with headroom is JELA-24 Lever-1 (a bespoke non-SPA home
+paint), carried as the deferred JELA-8 follow-up; it is not re-opened here.
+
 ## Rules
 
 - Re-measure with the same TV, same server, same snippet-channel size when
