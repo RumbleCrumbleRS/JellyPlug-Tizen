@@ -116,6 +116,66 @@ ships the hosted `/shell/` drop, the JEL-617 ring will record real
 after-power-on boots persistently and the ring can be read on the next
 session to close this question.
 
+## Baseline — Samsung Q60R, _installed_ signed WGT bootstrap-v2.0.20 (JELA-21)
+
+Device: QN82Q60RAFXZA (Tizen 5.0, Chromium 63), same panel and server as
+the JELA-9 baseline above. Server redacted (`https://REDACTED-SERVER.example`),
+saved server + saved login (auto-login to `#/home`).
+
+**This is the first acceptance of the real _installed_ signed artifact.** The
+JELA-10 A/B used CDP shell-injection; here the signed retail
+`JellyPlug.wgt` from the internal-repo Release `bootstrap-v2.0.20`
+(config version `2.0.20`, `__hsbState` label `2.0.20-ac3`) was pushed and
+installed with `vd_appinstall`, then boot-cycled for real. The bootstrap
+fetched the hosted shell `shell.min.js` v1.0.75 from `${server}/shell/`
+(`__hsbState.fallback = null`, `errors: []`); the baked WGT shell is the
+fallback. Captured with the JELA-7 CDP procedure (`sdb shell 0 debug
+JelShellTV.Jellyfin`, poll `window.__shellT`); the last row is a real
+`sdb shell 0 execute` (non-debug) launch read back from the persisted
+`bootPhases` ring.
+
+All ms are deltas from the shell IIFE entry (`__shellT0`) except `nav`
+(WebView launch → shell entry). `launch→home-usable` = `nav + card`.
+
+| boot                         | nav  | dcl  | api  | home | card  | launch→home-usable | tx cache         | parse-probe (widget / seed) |
+| ---------------------------- | ---- | ---- | ---- | ---- | ----- | ------------------ | ---------------- | --------------------------- |
+| 1 — cold (tx cache cleared)  | 454  | 3916 | 4246 | 5492 | 8806  | **9.3 s**          | miss 57, do 53   | ok 17/3, seed 111/107       |
+| 2 — cache-priming rebuild    | 2031 | 3092 | 3552 | 5401 | 25241 | **27.3 s**         | hit 4, do 54     | ok 7/0                      |
+| 3 — warm                     | 1290 | 4386 | 4704 | 6015 | 10097 | **11.4 s**         | **hit 56**, do 1 | ok 7/0                      |
+| 4 — warm                     | 1560 | 2926 | 3280 | 4613 | 7472  | **9.0 s**          | **hit 56**, do 1 | ok 7/0                      |
+| 5 — warm                     | 739  | 3157 | 3695 | 5180 | 8362  | **9.1 s**          | **hit 56**, do 3 | ok 7/0                      |
+| warm — real `execute` launch | 1435 | 3398 | 3778 | 5204 | 8716  | **10.2 s**         | (ring)           | —                           |
+
+**Counter acceptance — PASS (matches the JELA-10 A/B counter-for-counter):**
+
+- Warm boots do **0 Babel passes**: `__shellParseProbe` `ok 7/0`, `__shellDiag.stats.transpiled = 0`. The parse-probe path accepts every plugin script raw on Chromium 63.
+- Warm tx-cache is **56/56 hits** (`__shellTxCacheHits = 56`), `txDo` 1–3 (residual `babel.min.js` prime only).
+- The cold boot reproduces the A/B `jela11_cold` signature: `__shellParseProbe` `ok 17/3`, seed probe re-transpiles the plugin set (`111/107`) to rebuild the tx cache, `txMiss 57 / txDo 53`.
+- The **~27 s cache-priming first boot** is reproduced (boot 2, 27.3 s launch→home-usable while `txDo 54` rebuilds the cache), after which boots settle into the warm class.
+
+**Timing acceptance — improvement CONFIRMED, but the "~4.5 s warm class"
+does NOT reproduce on real device boots.**
+
+- Real installed **warm** boots land at **~9–11 s launch→home-usable**
+  (first card) / **~6–7 s launch→home-route**. Vs the old baked shell's
+  13.6–21.5 s _every_ boot (which re-transpiled every launch), this is a
+  durable ~35–55 % win AND it removes the per-boot transpile tax entirely
+  — the real JELA-11/16 deliverable.
+- The **4.5 s** figure is a measurement artifact of the JELA-10
+  CDP-injection method, which skips the WebView `nav` phase + the hosted
+  `shell.min.js` fetch and starts from an already-settled page. The A/B's
+  own data shows injection produced ~4.1–4.5 s for **both** the old
+  (`pre11_warm` card 4133) and new (`jela11_warm` card 4543) shells — i.e.
+  it measured the injection harness, not the shell.
+- Debug-launch overhead was ruled out as the cause: a real non-debug
+  `execute` launch (last row, card 8716 ms) sits mid-range of the
+  debug-launched boots, so ~9 s is the true production warm number.
+- Remaining launch→home-usable cost is dominated by main-thread parse/eval
+  of the web-client bundle on the 2019 SoC plus the hosted-shell fetch —
+  neither of which the parse-probe/tx-cache work targets. Closing the gap
+  to a single-digit-second _usable_ home is follow-up perf work, not a
+  regression.
+
 ## Rules
 
 - Re-measure with the same TV, same server, same snippet-channel size when
