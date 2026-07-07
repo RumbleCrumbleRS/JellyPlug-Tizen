@@ -69,3 +69,10 @@ https://raw.githubusercontent.com/RumbleCrumbleRS/JellyPlug-Tizen/main/plugin-re
 Release flow: `package-plugin.sh` → create GitHub release
 `server-plugin-v<ver>` with the zip asset → splice
 `dist/manifest-version-entry.json` into `plugin-repo/manifest.json` → merge.
+
+**CI release (no local dotnet needed, JELA-26):** bump `<Version>` in the
+`.csproj`, then run the **release-server-plugin** workflow from the Actions tab
+(`workflow_dispatch`, `confirm_version` must match the `.csproj` version). It
+runs the exact recipe above on an ubuntu runner and pushes the manifest bump to
+`main`, so a subscribed server autoUpdates. Dispatch-only; re-running a
+published version is a no-op.
