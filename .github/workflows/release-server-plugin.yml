@@ -1,0 +1,159 @@
+# Release: build + publish the JellyPlug Shell Jellyfin **server plugin**
+# (the C# `Jellyfin.Plugin.JellyPlugShell`, JELA-15) straight from CI.
+#
+# Why this exists (JELA-26): the documented release recipe in
+# packages/server-plugin/README.md needs a local `dotnet` box —
+#   package-plugin.sh -> gh release create -> splice plugin-repo/manifest.json
+# — which no unattended agent heartbeat has. That made the *only* way to ship a
+# server-plugin change (e.g. the JELA-22 Instant-Home scroll gate baked into
+# the embedded shell.min.js) a manual dev-machine chore. This workflow_dispatch
+# runs the exact same recipe on an ubuntu runner (which ships the .NET SDK), so
+# cutting a release is one click from the Actions tab.
+#
+# Unlike the .wgt (release-tizen.yml), this plugin is an UNSIGNED zip of managed
+# DLLs served from the public repo's plugin-repository manifest — it needs none
+# of the TIZEN_* signing secrets, so it runs fine on the public repo.
+#
+# What it does:
+#   1. Reads <Version> from the .csproj (single source of truth).
+#   2. `dotnet publish` + package-plugin.sh -> dist/jellyplug-shell_<ver>.zip
+#      (also downloads the sha256-pinned @babel/standalone at build time).
+#   3. Creates GitHub release `server-plugin-v<ver>` with the zip asset.
+#   4. Idempotently splices dist/manifest-version-entry.json (with the real md5)
+#      into plugin-repo/manifest.json and pushes it to main, so a subscribed
+#      Jellyfin server autoUpdates itself to the new plugin.
+#
+# Safety: dispatch-only (never auto-runs). `confirm_version` must match the
+# .csproj <Version> or the run stops before publishing, so a stale tab can't
+# ship the wrong bytes. Re-running for an already-published version is a no-op
+# (release + manifest steps are guarded).
+
+name: release-server-plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_version:
+        description: "Version to release — must equal <Version> in the .csproj (e.g. 1.0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-server-plugin
+  cancel-in-progress: false
+
+jobs:
+  build-publish:
+    name: build + publish server plugin
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PROJ_DIR: packages/server-plugin/Jellyfin.Plugin.JellyPlugShell
+      CSPROJ: packages/server-plugin/Jellyfin.Plugin.JellyPlugShell/Jellyfin.Plugin.JellyPlugShell.csproj
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full ref (not detached) so we can commit the manifest bump to main.
+          ref: main
+
+      - name: Resolve + confirm version
+        id: ver
+        run: |
+          set -euo pipefail
+          version="$(grep -oE '<Version>[0-9.]+</Version>' "$CSPROJ" | grep -oE '[0-9.]+')"
+          if [[ -z "$version" ]]; then
+            echo "::error::could not read <Version> from $CSPROJ" >&2
+            exit 1
+          fi
+          echo "Resolved csproj <Version>=$version"
+          if [[ "${{ inputs.confirm_version }}" != "$version" ]]; then
+            echo "::error::confirm_version='${{ inputs.confirm_version }}' does not match csproj <Version>='$version'." >&2
+            echo "::error::Bump the .csproj first (or pass the matching version) — refusing to publish mismatched bytes." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=server-plugin-v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Guard — release tag must not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Release ${{ steps.ver.outputs.tag }} already exists. Bump <Version> for a new release." >&2
+            exit 1
+          fi
+          echo "No existing release ${{ steps.ver.outputs.tag }} — proceeding."
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build + package plugin zip
+        run: |
+          set -euo pipefail
+          packages/server-plugin/scripts/package-plugin.sh
+          echo "=== dist ==="
+          ls -la packages/server-plugin/dist
+          echo "=== manifest version entry ==="
+          cat packages/server-plugin/dist/manifest-version-entry.json
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          zip="packages/server-plugin/dist/jellyplug-shell_${VERSION}.zip"
+          test -f "$zip"
+          gh release create "$TAG" "$zip" \
+            --title "JellyPlug Shell server plugin v${VERSION}" \
+            --notes "Automated server-plugin release (release-server-plugin.yml). Embeds the current \`packages/shell-tizen/src/shell.min.js\`. Subscribed servers autoUpdate from plugin-repo/manifest.json."
+
+      - name: Splice manifest entry + push to main (idempotent)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" <<'PY'
+          import json, sys, pathlib
+          version = sys.argv[1]
+          manifest_path = pathlib.Path("plugin-repo/manifest.json")
+          entry = json.loads(pathlib.Path("packages/server-plugin/dist/manifest-version-entry.json").read_text())
+          manifest = json.loads(manifest_path.read_text())
+          plugin = manifest[0]
+          versions = plugin.setdefault("versions", [])
+          if any(v.get("version") == version for v in versions):
+              print(f"manifest already carries {version} — no change")
+              sys.exit(0)
+          # Newest first (Jellyfin picks the highest compatible; order is cosmetic
+          # but keep it descending for readability).
+          versions.insert(0, entry)
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          print(f"inserted {version} into {manifest_path}")
+          PY
+          if git diff --quiet -- plugin-repo/manifest.json; then
+            echo "manifest.json unchanged — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugin-repo/manifest.json
+          git commit -m "server-plugin: publish v${VERSION} to plugin-repo manifest [skip ci]"
+          git push origin HEAD:main
+
+      - name: Job summary
+        if: always()
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          {
+            echo "## server-plugin release"
+            echo ""
+            echo "- version: \`${VERSION}\`"
+            echo "- tag: \`${TAG}\`"
+            echo "- manifest: \`plugin-repo/manifest.json\` (subscribed servers autoUpdate)"
+          } >> "$GITHUB_STEP_SUMMARY"
