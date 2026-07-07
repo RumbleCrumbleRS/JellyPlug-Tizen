@@ -3185,6 +3185,11 @@
       'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
+      // JELA-33 (A3 fusion): the live Direct-Home grid replaces the static
+      // crossfade — the snapshot hands off the moment the grid paints. In the
+      // baked boot-shell __shellDH never exists, so this is a structural no-op
+      // there (kept byte-identical for the cross-shell mirror guard).
+      'if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed){dismiss("dh");clearInterval(wIv);return}' +
       "paint();" +
       "var n=folds();" +
       'if(n>=4){dismiss("hydrated");clearInterval(wIv);return}' +
@@ -3265,18 +3270,47 @@
   // gate: how much of the warm-live ~9 s launch->first-card floor is removable
   // by skipping the bundle parse/eval on the M63 SoC.
   //
-  // A1 scope = paint only, NOT navigation: the cards are a non-interactive
-  // overlay; the SPA still boots underneath and this crossfades away the moment
-  // the live home hydrates (>=4 .card) or on first user input — the SAME
-  // dismiss contract as instantHomeBody(). The two overlays are independent
-  // (different id / higher z-index) so a measurement run can enable either or
-  // both; full SPA is always the fallback.
+  // JELA-33 (WS-A/C2, A2+A3 — C1/JELA-29 A1 gate returned GO): the overlay is
+  // now NAVIGABLE and fused with Instant-Home.
+  //
+  // A2 — navigation. The grid keeps item Ids alongside art URLs and paints a
+  // synthetic focus ring (outline on the focused tile; still divs only, no
+  // tabbables — keys arrive via the same capture-phase window keydown the A1
+  // dismiss used). While the overlay is painted:
+  //   Left/Right/Up/Down (37/39/38/40)  move focus (clamped), mark G.navved
+  //   Enter (13)                        open item: SPA routed via
+  //                                     location.hash="#/details?id=..&serverId=.."
+  //                                     then dismiss("open") — jellyfin-web
+  //                                     honors the initial hash when it boots
+  //   MediaPlay/PlayPause (415/10252)   same as Enter + G.playIntent: a bounded
+  //                                     20 s poll clicks the details page's
+  //                                     .btnPlay once it hydrates (best-effort)
+  //   Back (10009/461/27)               dismiss("back") — reveals the SPA
+  //   any other key                     dismiss("input") NOT eaten (A1 escape
+  //                                     hatch; SPA still sees the key)
+  // Handled keys are preventDefault+stopPropagation'd so the booting SPA never
+  // double-acts on them; when the overlay is absent/empty the handler returns
+  // WITHOUT eating, so non-home flows and playback keys pass through untouched.
+  // Once G.navved, SPA hydration no longer auto-dismisses (the user is driving
+  // the grid; Enter/Back/route are the exits) and the 90 s idle cap stretches
+  // to a 15 min absolute cap. Un-navigated boots keep the exact A1 contract:
+  // crossfade on >=4 .card hydration / route / 90 s.
+  //
+  // A3 — Instant-Home fusion. The cached snapshot stays the 0-RTT first paint;
+  // this grid fades in OVER it (opacity 0->1 .3s on first creation, opaque
+  // #101010 above the snapshot's z-index) and instantHomeBody's watch tick
+  // dismisses the snapshot with why:"dh" the moment G.painted is set — the
+  // static crossfade-to-SPA is replaced by snapshot->live-grid->SPA.
   //
   // Timing readout (no CDP needed): launch->first-real-card is recorded as
   // window.__shellDH.firstCardMs AND as the "dhcard" boot-phase (persisted in
   // the jellyfin.shell.bootPhases ring), so a >=3-boot A1 measurement is
-  // readable from the SAME channel the SPA "card" phase uses. window.__shellDH
-  // also carries {fetchMs, sections, cards, err, http:{path:status}, why}.
+  // readable from the SAME channel the SPA "card" phase uses. The focus ring
+  // is painted in the same repaint that records dhcard, so dhcard IS the
+  // "navigable card" mark for the JELA-33 G1 gate (mirrored as G.navReadyMs);
+  // Enter records the "dhopen" phase + G.{opened,openId,openMs,playIntent}.
+  // window.__shellDH also carries {fetchMs, sections, cards, err,
+  // http:{path:status}, why, focusR, focusC, navved, played}.
   //
   // A0 spike (verified 2026-07-07 against the live 10.11.11 server): the
   // standalone handoff is serverUrl=localStorage['jellyfin.shell.serverUrl'],
@@ -3300,12 +3334,12 @@
       'try{if(localStorage.getItem("jellyfin.shell.directHome")!=="1")return}catch(_){return}' +
       'var W=window,OID="__shell_direct_home";' +
       "var G=W.__shellDH;" +
-      'if(!G)G=W.__shellDH={gen:0,enabled:1,fetched:0,painted:0,fetchMs:0,firstCardMs:0,cards:0,sections:0,err:0,dismissed:0,why:"",dismissMs:0,rows:[],http:{}};' +
+      'if(!G)G=W.__shellDH={gen:0,enabled:1,fetched:0,painted:0,fetchMs:0,firstCardMs:0,navReadyMs:0,cards:0,sections:0,err:0,dismissed:0,why:"",dismissMs:0,rows:[],http:{},grid:[],shown:0,fadeDone:0,focusR:-1,focusC:0,navved:0,opened:0,openId:"",openMs:0,playIntent:0,played:0};' +
       "var gen=++G.gen;" +
       "var t0=+new Date();" +
       "var T0=W.__shellT0||t0;" +
       'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
-      'function creds(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return null;var p=JSON.parse(c);var s=p&&p.Servers&&p.Servers[0];if(!s||!s.AccessToken||!s.UserId)return null;return{t:s.AccessToken,u:s.UserId,a:(s.ManualAddress||s.LocalAddress||"")}}catch(_){return null}}' +
+      'function creds(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return null;var p=JSON.parse(c);var s=p&&p.Servers&&p.Servers[0];if(!s||!s.AccessToken||!s.UserId)return null;return{t:s.AccessToken,u:s.UserId,sid:String(s.Id||""),a:(s.ManualAddress||s.LocalAddress||"")}}catch(_){return null}}' +
       "var cr=creds();var base=srv()||(cr&&cr.a)||'';" +
       'if(!cr||!base){G.why="nocreds";return}' +
       'base=String(base).replace(/\\/+$/,"");' +
@@ -3313,30 +3347,71 @@
       'function dismiss(why){if(G.dismissed)return;G.dismissed=1;G.why=why;G.dismissMs=+new Date()-T0;try{var e=el0();if(e){e.style.opacity="0";setTimeout(function(){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}},400)}}catch(_){}}' +
       'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<8;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
       'function imgUrl(it){try{var id=it.Id,tag=it.ImageTags&&it.ImageTags.Primary;if(!tag&&it.SeriesId){id=it.SeriesId;tag=it.SeriesPrimaryImageTag}if(!id)return"";var u=base+"/Items/"+id+"/Images/Primary?fillHeight=330&quality=90"+(tag?("&tag="+tag):"");return u.replace(/["\'()\\\\\\s]/g,"")}catch(_){return""}}' +
+      // JELA-33 A2: synthetic focus ring — pure style on the focused tile, so
+      // the overlay stays divs-only/no-tabbables and never steals DOM focus.
+      'function ring(){try{var R=G.grid,i,j;for(i=0;i<R.length;i++)for(j=0;j<R[i].length;j++){var n=R[i][j].el;if(!n||!n.style)continue;if(i===G.focusR&&j===G.focusC){n.style.outline="4px solid #00a4dc";n.style.outlineOffset="-4px"}else{n.style.outline="";n.style.outlineOffset=""}}}catch(_){G.err++}}' +
       "function repaint(){try{" +
       "if(G.dismissed||!G.rows.length)return;" +
       "var de=document.documentElement;if(!de||!de.appendChild)return;" +
       "var e=el0();if(e&&e.__n===G.rows.length)return;" +
       "if(e){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}}" +
       'e=document.createElement("div");e.id=OID;e.setAttribute("aria-hidden","true");' +
-      'e.style.cssText="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2147483100;background:#101010;pointer-events:none;overflow:hidden;opacity:1;transition:opacity .3s;font-family:sans-serif";' +
-      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,y=64,painted=0,r,i;" +
+      'e.style.cssText="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2147483100;background:#101010;pointer-events:none;overflow:hidden;opacity:"+(G.fadeDone?"1":"0")+";transition:opacity .3s;font-family:sans-serif";' +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,y=64,painted=0,r,i;G.grid=[];" +
       "for(r=0;r<G.rows.length;r++){var row=G.rows[r],its=row.items||[];if(!its.length)continue;" +
       'var tt=document.createElement("div");tt.textContent=row.title||"";' +
       'tt.style.cssText="position:absolute;left:48px;top:"+y+"px;color:#e8e8e8;font:600 28px sans-serif;white-space:nowrap;overflow:hidden";' +
       "e.appendChild(tt);y+=44;" +
-      "var x=48,cw=210,ch=310,gap=16;" +
-      "for(i=0;i<its.length;i++){var u=its[i];if(!u)continue;" +
+      "var x=48,cw=210,ch=310,gap=16,ge=[];" +
+      "for(i=0;i<its.length;i++){var u=its[i];if(!u||!u.u)continue;" +
       'var c=document.createElement("div");' +
-      'c.style.cssText="position:absolute;left:"+x+"px;top:"+y+"px;width:"+cw+"px;height:"+ch+"px;border-radius:6px;background:#1f1f1f url("+u+") center center no-repeat;background-size:cover";' +
-      "e.appendChild(c);x+=cw+gap;painted++;if(x+cw>vw)break}" +
+      'c.style.cssText="position:absolute;left:"+x+"px;top:"+y+"px;width:"+cw+"px;height:"+ch+"px;border-radius:6px;background:#1f1f1f url("+u.u+") center center no-repeat;background-size:cover";' +
+      'e.appendChild(c);ge.push({el:c,id:u.id||""});x+=cw+gap;painted++;if(x+cw>vw)break}' +
+      "if(ge.length)G.grid.push(ge);" +
       "y+=ch+36;if(y>vh)break}" +
       "e.__n=G.rows.length;de.appendChild(e);" +
-      'if(painted){G.cards=painted;if(!G.painted){G.painted=1;G.firstCardMs=+new Date()-T0;try{W.__shellPhase&&W.__shellPhase("dhcard")}catch(_){}}}' +
+      // JELA-33 A3: the grid fades in over the Instant-Home snapshot beneath
+      // (0-RTT first paint -> live grid crossfade). One-shot timer armed on
+      // the first creation; it flips whatever the NEWEST overlay is (rows
+      // arriving mid-fade rebuild it) and later rebuilds reappear opaque.
+      'if(!G.shown){G.shown=1;setTimeout(function(){try{G.fadeDone=1;var f=el0();if(f&&!G.dismissed)f.style.opacity="1"}catch(_){}},30)}' +
+      "if(G.grid.length){if(G.focusR<0){G.focusR=0;G.focusC=0}else{if(G.focusR>=G.grid.length)G.focusR=G.grid.length-1;if(G.focusC>=G.grid[G.focusR].length)G.focusC=G.grid[G.focusR].length-1}ring()}" +
+      'if(painted){G.cards=painted;if(!G.painted){G.painted=1;G.firstCardMs=+new Date()-T0;G.navReadyMs=G.firstCardMs;try{W.__shellPhase&&W.__shellPhase("dhcard")}catch(_){}}}' +
       "}catch(_){G.err++}}" +
-      "function addRow(title,items){try{if(G.dismissed||!items||!items.length)return;var urls=[],i;for(i=0;i<items.length&&urls.length<12;i++){var u=imgUrl(items[i]);if(u)urls.push(u)}if(!urls.length)return;G.rows.push({title:title,items:urls});G.sections++;repaint()}catch(_){G.err++}}" +
+      'function addRow(title,items){try{if(G.dismissed||!items||!items.length)return;var os=[],i;for(i=0;i<items.length&&os.length<12;i++){var u=imgUrl(items[i]);if(u)os.push({u:u,id:String(items[i].Id||"")})}if(!os.length)return;G.rows.push({title:title,items:os});G.sections++;repaint()}catch(_){G.err++}}' +
       'function get(path,cb){try{var x=new XMLHttpRequest();x.open("GET",base+path,!0);x.setRequestHeader("X-Emby-Token",cr.t);x.setRequestHeader("Accept","application/json");x.onreadystatechange=function(){if(x.readyState===4){try{G.http[path]=x.status}catch(_){}if(x.status>=200&&x.status<300){var d=null;try{d=JSON.parse(x.responseText)}catch(_){}cb(d)}else{cb(null)}}};x.send()}catch(_){G.err++;try{cb(null)}catch(__){}}}' +
-      'if(!G.inputBound){G.inputBound=1;try{W.addEventListener("keydown",function(){dismiss("input")},!0)}catch(_){}}' +
+      // JELA-33 A2: D-pad navigation + open/play. Handled keys are eaten so
+      // the SPA booting underneath never double-acts; anything unhandled keeps
+      // the A1 dismiss-and-pass-through escape hatch.
+      "function eat(ev){try{ev&&ev.preventDefault&&ev.preventDefault();ev&&ev.stopPropagation&&ev.stopPropagation()}catch(_){}}" +
+      "function nav(k){try{var R=G.grid;if(!R.length)return;var r=G.focusR<0?0:G.focusR,c=G.focusC<0?0:G.focusC;" +
+      "if(k===37){if(c>0)c--}else if(k===39){if(c<R[r].length-1)c++}else if(k===38){if(r>0)r--}else if(k===40){if(r<R.length-1)r++}" +
+      "if(c>=R[r].length)c=R[r].length-1;if(c<0)c=0;" +
+      "G.focusR=r;G.focusC=c;G.navved=1;ring()}catch(_){G.err++}}" +
+      // Best-effort play: once the SPA hydrates the details route we sent it
+      // to, click its primary .btnPlay exactly once (bounded 20 s, abandons if
+      // the user routed elsewhere). Failure degrades to the details page.
+      "function armPlay(id){try{var t1=+new Date(),pIv=setInterval(function(){try{" +
+      "if(+new Date()-t1>20000){clearInterval(pIv);return}" +
+      'var h="";try{h=String(location.hash||"")}catch(_){}' +
+      "if(h.indexOf(id)===-1){clearInterval(pIv);return}" +
+      'var b=document.querySelector&&document.querySelector(".btnPlay");' +
+      "if(b&&!b.disabled){clearInterval(pIv);G.played=1;try{b.click()}catch(_){}}" +
+      "}catch(_){G.err++}},700)}catch(_){G.err++}}" +
+      "function open(play){try{var R=G.grid;if(G.focusR<0||!R[G.focusR])return;var it=R[G.focusR][G.focusC];if(!it||!it.id)return;" +
+      "G.opened=1;G.openId=it.id;G.openMs=+new Date()-T0;if(play)G.playIntent=1;" +
+      'try{location.hash="#/details?id="+encodeURIComponent(it.id)+(cr.sid?"&serverId="+encodeURIComponent(cr.sid):"")}catch(_){}' +
+      'try{W.__shellPhase&&W.__shellPhase("dhopen")}catch(_){}' +
+      'dismiss(play?"play":"open");' +
+      "if(play)armPlay(it.id)}catch(_){G.err++}}" +
+      "function onKey(ev){try{if(G.dismissed)return;if(!el0()||!G.grid.length){return}" +
+      "var k=(ev&&(ev.keyCode||ev.which))||0;" +
+      "if(k===37||k===38||k===39||k===40){eat(ev);nav(k);return}" +
+      "if(k===13){eat(ev);open(0);return}" +
+      "if(k===415||k===10252){eat(ev);open(1);return}" +
+      'if(k===10009||k===461||k===27){eat(ev);dismiss("back");return}' +
+      'dismiss("input")}catch(_){G.err++}}' +
+      'if(!G.inputBound){G.inputBound=1;try{W.addEventListener("keydown",onKey,!0)}catch(_){}}' +
       "if(!G.fetched){G.fetched=1;G.fetchMs=+new Date()-T0;" +
       'get("/Users/"+cr.u+"/Items/Resume?Limit=12&MediaTypes=Video&Recursive=true&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Continue Watching",d&&d.Items)});' +
       'get("/Shows/NextUp?UserId="+cr.u+"&Limit=16&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Next Up",d&&d.Items)});' +
@@ -3345,10 +3420,13 @@
       "repaint();" +
       "var wIv=setInterval(function(){try{" +
       "if(G.gen!==gen||G.dismissed){clearInterval(wIv);return}" +
-      'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
+      // JELA-33 A2: once the user is driving the grid (navved) the SPA
+      // hydrating underneath must not yank it away — Enter/Back/route are the
+      // exits; the idle 90 s cap stretches to a 15 min absolute cap.
+      'var age=+new Date()-t0;if(age>900000||(age>90000&&!G.navved)){dismiss("cap");clearInterval(wIv);return}' +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
-      'if(folds()>=4){dismiss("hydrated");clearInterval(wIv);return}' +
+      'if(!G.navved&&folds()>=4){dismiss("hydrated");clearInterval(wIv);return}' +
       "repaint();" +
       "}catch(_){G.err++}},700);" +
       "}catch(_){}})();"
