@@ -7,6 +7,6 @@
   "scripts": {
     "emit-manifest": "python3 scripts/emit_manifest.py",
     "build-tx-drop": "node scripts/build-tx-drop.mjs",
-    "test": "node scripts/tx-drop-build.test.cjs && node scripts/jsi-minify.test.cjs"
+    "test": "node scripts/tx-drop-build.test.cjs && node scripts/jsi-minify.test.cjs && node scripts/emit-manifest-version.test.cjs"
   }
 }

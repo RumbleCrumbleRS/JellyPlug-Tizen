@@ -32,12 +32,23 @@ def extract_shell_version(shell_min: Path) -> str:
     # build_shell_min.py inlines the running shell version via __SHELL_VER__
     # placeholder. Reading the first localStorage seed/version probe should
     # always carry that string verbatim somewhere in the head bytes.
-    m = re.search(r'shellVer\s*[:=]\s*"([0-9][0-9A-Za-z.\-]*)"', text)
-    if m:
-        return m.group(1)
-    m = re.search(r'"version"\s*:\s*"([0-9][0-9A-Za-z.\-]*)"', text)
-    if m:
-        return m.group(1)
+    #
+    # The literal appears in several minified forms depending on which
+    # feature emits it earliest in the head bytes; try them in order of
+    # specificity. JEL-617's boot-phase ring made `ver:"X"` (the ring
+    # record) the first version literal in minified output, which the
+    # original two patterns below did not match — so the manifest silently
+    # shipped version "unknown" for every current shell (this ticket).
+    patterns = (
+        r'shellVer\s*[:=]\s*"([0-9][0-9A-Za-z.\-]*)"',
+        r'"version"\s*:\s*"([0-9][0-9A-Za-z.\-]*)"',
+        r'\bver\s*:\s*"([0-9][0-9A-Za-z.\-]*)"',   # JEL-617 boot-phase ring record
+        r'_VER\s*=\s*"([0-9][0-9A-Za-z.\-]*)"',    # BUNDLE_CACHE_VER / WEB_CACHE_VER constants
+    )
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            return m.group(1)
     return "unknown"
 
 
