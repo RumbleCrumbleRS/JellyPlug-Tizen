@@ -3404,14 +3404,24 @@
       'try{W.__shellPhase&&W.__shellPhase("dhopen")}catch(_){}' +
       'dismiss(play?"play":"open");' +
       "if(play)armPlay(it.id)}catch(_){G.err++}}" +
-      "function onKey(ev){try{if(G.dismissed)return;if(!el0()||!G.grid.length){return}" +
+      "function onKey(ev){try{if(G.gen!==gen)return;if(G.dismissed)return;if(!el0()||!G.grid.length){return}" +
       "var k=(ev&&(ev.keyCode||ev.which))||0;" +
       "if(k===37||k===38||k===39||k===40){eat(ev);nav(k);return}" +
       "if(k===13){eat(ev);open(0);return}" +
       "if(k===415||k===10252){eat(ev);open(1);return}" +
       'if(k===10009||k===461||k===27){eat(ev);dismiss("back");return}' +
       'dismiss("input")}catch(_){G.err++}}' +
-      'if(!G.inputBound){G.inputBound=1;try{W.addEventListener("keydown",onKey,!0)}catch(_){}}' +
+      // JELA-33 G1 fix: document.open() (the SPA index handoff) wipes ALL
+      // window listeners, and this body re-runs once per written document
+      // (gen++), so the keydown bind must be per-run, not once-per-G. The old
+      // persistent G.inputBound gate left post-swap boots with a painted grid
+      // and DEAD keys (a navved overlay could then sit for the full 15 min
+      // cap; measured on the Q60R: swap lands ~1-3 s after T0, i.e. before a
+      // real user's first keypress). One body run per document means no
+      // same-window double-bind; the gen guard in onKey turns any
+      // engine-quirk survivor listener inert instead of double-acting.
+      // G.inputBound stays as a bind-count diagnostic.
+      'G.inputBound=(G.inputBound||0)+1;try{W.addEventListener("keydown",onKey,!0)}catch(_){}' +
       "if(!G.fetched){G.fetched=1;G.fetchMs=+new Date()-T0;" +
       'get("/Users/"+cr.u+"/Items/Resume?Limit=12&MediaTypes=Video&Recursive=true&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Continue Watching",d&&d.Items)});' +
       'get("/Shows/NextUp?UserId="+cr.u+"&Limit=16&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Next Up",d&&d.Items)});' +

@@ -363,6 +363,13 @@ function makeEnv(opts) {
         XHR,
       );
     },
+    // Simulates the document.open()/write() SPA index handoff: the window
+    // object survives but ALL its event listeners are wiped along with the
+    // whole DOM; the written document then re-executes the injected body.
+    swapDoc() {
+      for (const k in listeners) delete listeners[k];
+      documentElement.children.length = 0;
+    },
     advance(toMs) {
       for (;;) {
         let nextTimer = null;
@@ -839,6 +846,46 @@ function authedStore() {
     0,
     "nothing to dismiss, SPA owns the key",
   );
+}
+
+// ---- 20. A2: keys still work after the document.open handoff (gen re-run) ----
+// document.open() wipes ALL window listeners together with the DOM; the
+// written document then re-executes the body (gen 2). The old once-per-G
+// inputBound gate skipped the rebind there, leaving post-swap boots with a
+// painted grid but dead keys (Q60R G1 QA, 2026-07-07: the swap lands ~1-3 s
+// after T0, before a real user's first keypress). The bind is per-run now.
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const G = env.window.__shellDH;
+  env.fire("keydown", { keyCode: 39 });
+  assert.strictEqual(G.focusC, 1, "pre-swap nav works");
+  env.swapDoc();
+  env.run();
+  assert.strictEqual(G.gen, 2, "same G, second generation");
+  assert.strictEqual(G.inputBound, 2, "keydown rebound by the gen-2 run");
+  assert(overlayOf(env), "overlay recreated by the gen-2 run");
+  const ev = env.fire("keydown", { keyCode: 40 });
+  assert.strictEqual(ev.defaultPrevented, 1, "post-swap key still eaten");
+  assert.strictEqual(G.focusR, 1, "post-swap nav still moves focus");
+  env.fire("keydown", { keyCode: 13 });
+  assert.strictEqual(G.opened, 1, "post-swap Enter still opens");
+  assert.strictEqual(G.dismissed, 1, "open dismissed the grid");
+}
+
+// ---- 21. A2: a survivor stale-gen listener is inert (no double-nav) ----------
+// If an engine ever leaves the old listener alive across the handoff, the
+// per-run rebind would make two live listeners; the gen guard in onKey must
+// keep the stale one from double-acting.
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const G = env.window.__shellDH;
+  env.documentElement.children.length = 0; // DOM wiped, listeners survive
+  env.run();
+  assert.strictEqual(G.inputBound, 2, "two live listeners");
+  env.fire("keydown", { keyCode: 40 });
+  assert.strictEqual(G.focusR, 1, "one keypress moves focus exactly one row");
 }
 
 console.log("direct-home.test.cjs: all assertions passed");
