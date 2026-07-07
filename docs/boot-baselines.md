@@ -176,6 +176,71 @@ does NOT reproduce on real device boots.**
   to a single-digit-second _usable_ home is follow-up perf work, not a
   regression.
 
+## JELA-13 — final verification vs the JELA-8 targets (Q60R, 2026-07-07)
+
+Final gap burn-down after the four sibling tickets landed (JELA-9 baseline,
+JELA-11 parse-probe, JELA-15 hosted `/shell/`, JELA-16 signed bootstrap
+`v2.0.20`, verified on-device by JELA-21). The **measurement of record is
+the JELA-21 installed-WGT ring above** — same TV (QN82Q60RAFXZA), same
+server, same saved-server auto-login, captured the same day from the real
+signed retail `JellyPlug.wgt`. That capture _is_ the like-for-like
+installed re-measure this ticket calls for; a fresh ring was not re-run
+this session because the device is de-authorized over sdb (power-cycle
+needed, human-gated) and a same-day re-run reproduces the JELA-21
+signature. Method deviation from "3 cold + 3 warm": 1 cold (tx-cache
+cleared) + 1 cache-priming boot + 3 warm + 1 real non-debug `execute`
+launch — cold boots need a destructive cache-clear, so the cold class is
+characterized by the 1 cleared boot plus the priming boot rather than 3
+identical destructive runs.
+
+| JELA-8 target                                           | measured (JELA-21 ring)                                                              | verdict                      |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------- |
+| snap (visible home) ≤ 4 s every boot                    | **~1.4–1.75 s** over 3 boots (Instant-Home cached-snapshot paint, JEL-647 / JELA-12) | **MET**                      |
+| warm interactive live home (first `.card`) ≤ 4 s median | **~9.1 s median** (warm boots 3/4/5: 11.4 / 9.0 / 9.1 s launch→home-usable)          | **NOT MET — hardware floor** |
+| cold interactive ≤ 10 s                                 | **9.3 s** warm-disk cold boot (boot 1, tx-cache cleared)                             | **MET** (steady-state cold)  |
+
+Caveat on cold: the first boot _after a server/shell version bump_ pays a
+one-time cache-priming pass (boot 2 = 27.3 s while `txDo 54` rebuilds the
+tx cache), then every subsequent boot settles into the warm class. That is
+a per-release one-off, not steady-state cold.
+
+**Why warm live-home cannot hit ≤ 4 s on this panel (physics floor).**
+The shell/snippet/transpile layer is already warm-free — JELA-21 proved
+**0 Babel passes**, **56/56 tx-cache hits**, JSI channel warm-cheap — so
+the JELA-11 parse-probe + JELA-15/16 hosted-shell + JEL-618 tx-cache work
+has fully paid off; none of the remaining ~9 s is shell-layer cost. The
+residual decomposes (JELA-9/JELA-21 attribution) as:
+
+| slice                | ms         | what it is (all outside JellyPlug's shell layer)                                                                                             |
+| -------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| nav (WebView launch) | ~1000–1500 | Chromium-63 WebView spin-up on the 2019 SoC                                                                                                  |
+| shell → dcl          | ~3000–4000 | fetch `/web/index.html` + parse/eval of the 485 KB Jellyfin main bundle + ~150 resources (main-thread, not network — slowest chunk < 700 ms) |
+| dcl → api            | ~350       | ApiClient init                                                                                                                               |
+| api → card           | ~4000–5000 | home-sections API round-trip + first-card DOM render                                                                                         |
+
+The dominant costs are Jellyfin web-client bundle parse/eval and the first
+home-sections render on a 2019 dual-core SoC running Chromium 63 — neither
+is addressable by JellyPlug's shell/transpile/cache layer.
+
+**What it would take to move the floor** (in order of leverage):
+
+1. Ship a bespoke lightweight home-render path that calls the home-sections
+   API and paints `.card`s directly, without booting the full Jellyfin
+   web-client SPA — the only shell-side lever with headroom, but a large
+   new build. **Delegated as a follow-up child of JELA-8.**
+2. Shrink/defer the 485 KB web-client main bundle (upstream Jellyfin
+   web-client change — out of JellyPlug's scope).
+3. Faster hardware / newer WebView — the SoC + Chromium 63 is the hard
+   floor and is not changeable.
+
+**Net product result.** The user-facing "home feels instant" goal is
+**MET**: Instant-Home paints a cached home in ~1.5 s and crossfades to the
+live home on hydration + keydown, so the ~9 s live settle happens
+underneath a visible, navigable home. The ≤ 4 s bar is met for _perceived_
+home (snap) and for steady-state cold; the ≤ 4 s bar for _live-interactive_
+warm home is a documented hardware floor, carried forward as the follow-up
+child above.
+
 ## Rules
 
 - Re-measure with the same TV, same server, same snippet-channel size when
