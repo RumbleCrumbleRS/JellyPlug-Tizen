@@ -357,7 +357,15 @@ Disable the snippet when the confirm is done; the arm snippet stays.
 `sdb shell 0 kill JelShellTV`, ~8 s, `sdb shell 0 execute
 JelShellTV.Jellyfin` (JELA-36 recipe if the transport wedges). Unwired
 panels (QN90B): natural household boots — the standing beacon captures
-them; no session is needed.
+them; no session is needed. When the panel is **powered on**, boots can
+also be driven remotely with no sdb and no on-TV action via Samsung's
+REST API on `:8001` (works even when sdb is refused — the QN90B pins
+`developerIP` to a different host, so its sdb port drops us):
+`GET http://{tv}:8001/api/v2/` identifies the panel (model, power,
+developerIP); `POST http://{tv}:8001/api/v2/applications/JelShellTV.Jellyfin`
+launches; `DELETE` on the same URL closes (poll the `GET` until
+`running:false` before relaunching). Exercised end-to-end for the
+QN90B refresh below.
 
 **D. Wired fallback.** The JELA-9/JELA-7 CDP method (`sdb shell 0 debug
 …`, poll `window.__shellT` over `Runtime.evaluate`) stays the fallback
@@ -383,18 +391,43 @@ JELA-21 warm class reproduced through the standing pipeline. Chromium-63
 control row for the parse-probe confirm: 0 transpiles, 56/56 warm
 tx-cache hits, probe accepts everything raw — unchanged.
 
-### Refresh — QN90B (Chromium 85): armed, rows pending first natural boot
+### Refresh — QN90B (Chromium 85), 2026-07-07, recipe A+B+C end-to-end
 
-The QN90B is not sdb-reachable (only `.202` answers on the QA /24), so
-its rows arrive via recipe A/B on the panel's next natural JellyPlug
-boot: the arm snippet + counter probe are live server-side, and the
-hosted `/shell/` channel now serves v1.0.2.0 (the 2026-07-02 baseline
-above pre-dates the hosted drop — that boot fell back to the baked HSB
-v2.0.16 shell with no ring/beacon). Expected on Chromium 85: parse-probe
-accepts ES2018+ raw (`tx 0`, `transpiled 0`) and warm tx-cache hits at
-Q60R parity. Append the rows + the Chromium-85 parse-probe verdict here
-when the first armed boot reports; until then Chromium-85 behavior is
-**unconfirmed**.
+Hosted shell sha `6c7dfd4a…` (v1.0.2.0 bytes; version string reads
+`1.0.75`). First hosted-shell boots on this panel — the 2026-07-02
+baseline above ran the baked HSB v2.0.16 fallback with no ring/beacon.
+Three boots driven via the recipe-C REST channel (`:8001`
+`POST/DELETE applications/…`; the panel's sdb pins `developerIP` to
+another host, so REST is the QN90B driving channel of record). UA
+parses as Tizen 6.5 / engine `85.0.4183.93`:
+
+| boot         | nav  | dcl  | api  | card  | parse-probe / seed | tx (hit/miss/do) | transpiled | beacon POST        |
+| ------------ | ---- | ---- | ---- | ----- | ------------------ | ---------------- | ---------- | ------------------ |
+| 1 (arm boot) | 1076 | 3557 | 3910 | 13823 | ok 0/0 · not run   | 0/0/0            | 0          | — (arms this boot) |
+| 2            | 685  | 2909 | 3309 | 11276 | ok 0/0 · not run   | 0/0/0            | 0          | sent, http 200     |
+| 3            | 264  | 3962 | 4338 | 12898 | ok 0/0 · not run   | 0/0/0            | 0          | sent, http 200     |
+
+Server-side `GET /shell/diag/report` after boot 2: `Devices 2` — the
+QN90B appears as opaque id `jwnkwjmrb4yvfu` with ring
+`dcl 2909 / api 3309 / home 4168 / snap 152`. The standing pipeline now
+carries both panels; every future claim quotes both device rows from
+this endpoint.
+
+**Chromium-85 parse-probe verdict — confirmed, better than expected.**
+The modern-engine fast path doesn't just accept probes raw, it skips
+probing entirely: `__shellParseProbe {ok, n:0, tx:0}` (zero probes
+run), seed probe never engages (`undefined`), and the tx-cache is
+fully quiescent — `0` hits / `0` misses / `0` transpiles across all
+three boots. Chromium 85 parses every plugin script natively, so the
+one-time ~27 s tx-cache priming boot the Q60R paid does not exist on
+this panel, and there is no cache to go stale. No misbehavior found.
+
+**Timing reading (not a regression claim):** `home` lands ~4.2 s and
+Instant-Home `snap` at ~150 ms — perceived boot is snappy from boot 2
+on. `card` (last SPA card render) ran 11.3–13.8 s in this window vs
+5.9–14.5 s across the 2026-07-02 baked-shell boots — overlapping
+ranges, different shells, three boots each; the standing beacon will
+settle the warm class from natural household boots.
 
 ## Rules
 
