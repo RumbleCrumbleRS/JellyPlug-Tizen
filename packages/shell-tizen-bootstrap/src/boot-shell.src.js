@@ -2568,6 +2568,11 @@
       'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
+      // JELA-33 (A3 fusion): the live Direct-Home grid replaces the static
+      // crossfade — the snapshot hands off the moment the grid paints. In the
+      // baked boot-shell __shellDH never exists, so this is a structural no-op
+      // there (kept byte-identical for the cross-shell mirror guard).
+      'if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed){dismiss("dh");clearInterval(wIv);return}' +
       "paint();" +
       "var n=folds();" +
       'if(n>=4){dismiss("hydrated");clearInterval(wIv);return}' +

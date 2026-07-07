@@ -439,6 +439,38 @@ function visibleCard(env) {
   assert.strictEqual(env.window.__shellIH.why, "route");
 }
 
+// ---- 6b. JELA-33 A3 fusion: live Direct-Home grid replaces the crossfade ---------
+// When the (shell.js-only, opt-in) Direct-Home grid paints, the snapshot hands
+// off to it instead of waiting for SPA hydration. In the baked boot-shell
+// __shellDH never exists, so the branch is a structural no-op there — this
+// case pins both sides of that contract.
+{
+  const env = makeEnv({ store: makeSnapshotStore() });
+  env.run();
+  assert(findOverlay(env), "snapshot painted");
+  env.window.__shellDH = { painted: 1, dismissed: 0 };
+  env.advance(1500);
+  assert.strictEqual(env.window.__shellIH.why, "dh");
+  assert.strictEqual(env.window.__shellIH.dismissed, 1);
+  env.advance(3000);
+  assert.strictEqual(
+    findOverlay(env),
+    null,
+    "snapshot gone under the live grid",
+  );
+}
+{
+  const env = makeEnv({ store: makeSnapshotStore() });
+  env.run();
+  env.window.__shellDH = { painted: 0, dismissed: 0 };
+  env.advance(3000);
+  assert.strictEqual(
+    env.window.__shellIH.dismissed,
+    0,
+    "an unpainted Direct-Home state must not steal the snapshot",
+  );
+}
+
 // ---- 7. 90 s absolute cap -------------------------------------------------------
 {
   const env = makeEnv({ store: makeSnapshotStore() });
@@ -472,8 +504,15 @@ function visibleCard(env) {
   const overlay = findOverlay(env);
   assert(overlay, "first boot with no snapshot → skeleton overlay painted");
   assert.strictEqual(env.window.__shellIH.skeleton, 1, "flagged as skeleton");
-  assert.strictEqual(env.window.__shellIH.snapAgeMs, -1, "skeleton age sentinel");
-  assert(overlay.children.length >= 8, "skeleton has multiple placeholder tiles");
+  assert.strictEqual(
+    env.window.__shellIH.snapAgeMs,
+    -1,
+    "skeleton age sentinel",
+  );
+  assert(
+    overlay.children.length >= 8,
+    "skeleton has multiple placeholder tiles",
+  );
   // skeleton is content-free: never carries a library image/section URL
   assert(
     overlay.children.every((n) => n.style.cssText.indexOf("url(") === -1),
@@ -484,7 +523,10 @@ function visibleCard(env) {
     "skeleton never intercepts input",
   );
   assert.strictEqual(overlay.attrs["aria-hidden"], "true");
-  assert(env.marks.indexOf("snap") !== -1, "skeleton still records the ring mark");
+  assert(
+    env.marks.indexOf("snap") !== -1,
+    "skeleton still records the ring mark",
+  );
 }
 {
   // JELA-32: skeleton killswitch → first boot stays blank (snapshot repaint
@@ -526,7 +568,11 @@ function visibleCard(env) {
   const env = makeEnv({ store: makeSnapshotStore({ ts: 1 }), now: 172799000 });
   env.run();
   assert(findOverlay(env), "snapshot within max-age paints");
-  assert.strictEqual(env.window.__shellIH.skeleton, 0, "real snapshot, not skeleton");
+  assert.strictEqual(
+    env.window.__shellIH.skeleton,
+    0,
+    "real snapshot, not skeleton",
+  );
   assert.strictEqual(
     env.window.__shellIH.snapAgeMs,
     172798999,
@@ -541,7 +587,10 @@ function visibleCard(env) {
   store["jellyfin.shell.instantHomeMaxAgeMs"] = "604800000";
   const env = makeEnv({ store, now: 259200000 });
   env.run();
-  assert(findOverlay(env), "override widens max-age → older snapshot still paints");
+  assert(
+    findOverlay(env),
+    "override widens max-age → older snapshot still paints",
+  );
   assert.strictEqual(env.window.__shellIH.skeleton, 0);
 }
 {

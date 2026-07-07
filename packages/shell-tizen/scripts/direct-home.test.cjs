@@ -20,11 +20,27 @@
  *     window.__shellDH.firstCardMs + "dhcard" boot-phase recorded once
  *   - gating: missing creds / missing server => why "nocreds", no fetch
  *   - document.write survival: DOM wiped, watch tick repaints from cached rows
- *   - dismiss: >=4 .card hydration, first user input, login/selectserver
- *     route, 90 s absolute cap; crossfade + removal
+ *   - dismiss: >=4 .card hydration, unhandled user input, login/selectserver
+ *     route, 90 s idle cap; crossfade + removal
  *   - re-injection idempotency: second copy bumps gen, does not re-fetch,
  *     stale-generation interval self-cancels
  *   - all three injection sites present (widget doc, DOMParser path, fast path)
+ *
+ * JELA-33 (WS-A/C2, A2+A3) additions:
+ *   - focus: first repaint focuses (0,0) and paints the synthetic outline
+ *     ring (still divs only — no DOM focus, no tabbables)
+ *   - D-pad: 37/39/38/40 move focus with clamping, are eaten
+ *     (preventDefault+stopPropagation), mark navved, never dismiss
+ *   - open: Enter (13) routes the SPA via location.hash
+ *     "#/details?id=..&serverId=..", records dhopen + openMs, dismiss("open")
+ *   - play: 415/10252 open with playIntent and a bounded poll that clicks the
+ *     hydrated details page's .btnPlay exactly once
+ *   - back: 10009/461/27 dismiss("back"), eaten
+ *   - unhandled keys keep the A1 contract: dismiss("input"), NOT eaten
+ *   - navved suppresses the hydration dismiss and stretches the 90 s idle cap
+ *     to a 15 min absolute cap
+ *   - A3 fusion: overlay's first creation fades in (opacity 0 -> 1) over the
+ *     Instant-Home snapshot; rebuilds reappear opaque (no re-fade)
  */
 "use strict";
 const fs = require("fs");
@@ -76,6 +92,10 @@ assert(
   "overlay must not create tabbables",
 );
 assert(body.indexOf("X-Emby-Token") !== -1, "auth header present");
+assert(
+  body.indexOf("#/details?id=") !== -1,
+  "JELA-33 A2: open-item wired to the SPA details route",
+);
 // All three injection sites.
 assert(
   text.indexOf("injectDirectHome(document)") !== -1,
@@ -190,6 +210,7 @@ function makeEnv(opts) {
 
   const documentElement = makeNode("HTML");
   let cards = [];
+  let playBtn = null;
   function byId(node, id) {
     if (node.id === id) return node;
     for (const c of node.children) {
@@ -210,6 +231,10 @@ function makeEnv(opts) {
       sel = String(sel);
       if (sel === ".card") return cards;
       return [];
+    },
+    querySelector(sel) {
+      if (String(sel) === ".btnPlay") return playBtn;
+      return null;
     },
   };
 
@@ -296,8 +321,21 @@ function makeEnv(opts) {
     setCards(list) {
       cards = list;
     },
-    fire(type) {
-      (listeners[type] || []).forEach((fn) => fn({ type }));
+    setPlayButton(b) {
+      playBtn = b;
+    },
+    // Returns the synthetic event so tests can assert eaten (preventDefault /
+    // stopPropagation) vs passed-through keys.
+    fire(type, props) {
+      const e = Object.assign({ type, defaultPrevented: 0, stopped: 0 }, props);
+      e.preventDefault = () => {
+        e.defaultPrevented = 1;
+      };
+      e.stopPropagation = () => {
+        e.stopped = 1;
+      };
+      (listeners[type] || []).forEach((fn) => fn(e));
+      return e;
     },
     run() {
       new Function(
@@ -448,7 +486,30 @@ function authedStore() {
     1,
     "dhcard recorded exactly once",
   );
+  // JELA-33 A3: first creation fades in over the Instant-Home snapshot.
+  assert(
+    overlay.style.cssText.indexOf("opacity:0") !== -1,
+    "first paint starts transparent (crossfade over the snapshot)",
+  );
+  env.advance(100);
+  assert.strictEqual(overlay.style.opacity, "1", "faded in");
   assert.strictEqual(env.timers.size, 1, "one watch interval armed");
+  // JELA-33 A2: navigable at dhcard — grid + focus ring painted immediately.
+  const G = env.window.__shellDH;
+  assert.strictEqual(G.grid.length, 3, "3 grid rows tracked");
+  assert.strictEqual(G.focusR, 0, "initial focus row 0");
+  assert.strictEqual(G.focusC, 0, "initial focus col 0");
+  assert.strictEqual(
+    G.grid[0][0].el.style.outline,
+    "4px solid #00a4dc",
+    "focus ring painted on the first card",
+  );
+  assert.strictEqual(G.grid[0][0].id, "cw1", "item id carried on the grid");
+  assert.strictEqual(
+    G.navReadyMs,
+    G.firstCardMs,
+    "nav-ready coincides with dhcard",
+  );
 }
 
 // ---- 3. gating: missing creds / server --------------------------------------
@@ -510,13 +571,15 @@ function authedStore() {
   assert.strictEqual(overlayOf(env), null, "overlay removed after fade");
 }
 
-// ---- 6. dismiss: input -------------------------------------------------------
+// ---- 6. dismiss: unhandled input (A1 escape hatch, NOT eaten) -----------------
 {
   const env = makeEnv({ store: authedStore() });
   env.run();
   assert(overlayOf(env));
-  env.fire("keydown");
+  const ev = env.fire("keydown", { keyCode: 66 });
   assert.strictEqual(env.window.__shellDH.why, "input");
+  assert.strictEqual(ev.defaultPrevented, 0, "unhandled key passes through");
+  assert.strictEqual(ev.stopped, 0, "unhandled key not stopped");
   env.advance(1000);
   assert.strictEqual(overlayOf(env), null, "overlay gone after input");
 }
@@ -600,6 +663,182 @@ function authedStore() {
   assert.strictEqual(headChildren.length, 1);
   assert.strictEqual(headChildren[0].attrs["data-shell-direct-home"], "1");
   assert.strictEqual(headChildren[0].textContent, body);
+}
+
+// ---- 12. A2: D-pad navigation, clamping, eaten keys ---------------------------
+// Grid from fixtures: row0 Continue Watching (2 cards), row1 Next Up (1 card),
+// row2 Latest Movies (2 cards).
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const G = env.window.__shellDH;
+  const ev = env.fire("keydown", { keyCode: 39 });
+  assert.strictEqual(G.focusC, 1, "right moves focus");
+  assert.strictEqual(ev.defaultPrevented, 1, "nav key eaten (preventDefault)");
+  assert.strictEqual(ev.stopped, 1, "nav key eaten (stopPropagation)");
+  assert.strictEqual(G.navved, 1, "navved marked");
+  assert.strictEqual(G.dismissed, 0, "nav never dismisses");
+  assert.strictEqual(G.grid[0][0].el.style.outline, "", "ring left old card");
+  assert.strictEqual(
+    G.grid[0][1].el.style.outline,
+    "4px solid #00a4dc",
+    "ring moved to the new card",
+  );
+  env.fire("keydown", { keyCode: 39 });
+  assert.strictEqual(G.focusC, 1, "right clamps at row end");
+  env.fire("keydown", { keyCode: 40 });
+  assert.strictEqual(G.focusR, 1, "down moves row");
+  assert.strictEqual(G.focusC, 0, "col clamped to shorter row");
+  env.fire("keydown", { keyCode: 40 });
+  env.fire("keydown", { keyCode: 40 });
+  assert.strictEqual(G.focusR, 2, "down clamps at last row");
+  env.fire("keydown", { keyCode: 38 });
+  assert.strictEqual(G.focusR, 1, "up moves row");
+  env.fire("keydown", { keyCode: 37 });
+  env.fire("keydown", { keyCode: 37 });
+  assert.strictEqual(G.focusC, 0, "left clamps at 0");
+}
+
+// ---- 13. A2: Enter opens the focused item via the SPA hash route --------------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const G = env.window.__shellDH;
+  const ev = env.fire("keydown", { keyCode: 13 });
+  assert.strictEqual(ev.defaultPrevented, 1, "enter eaten");
+  assert.strictEqual(G.opened, 1);
+  assert.strictEqual(G.openId, "cw1");
+  assert(G.openMs >= 0, "openMs recorded");
+  assert.strictEqual(
+    env.location.hash,
+    "#/details?id=cw1&serverId=s1",
+    "SPA routed to the item details (serverId carried)",
+  );
+  assert.strictEqual(G.why, "open");
+  assert.strictEqual(G.playIntent, 0, "plain open has no play intent");
+  assert(env.marks.indexOf("dhopen") !== -1, "dhopen boot-phase recorded");
+  env.advance(1000);
+  assert.strictEqual(overlayOf(env), null, "overlay gone after open");
+}
+
+// ---- 14. A2: play key opens with playIntent and clicks .btnPlay once ----------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const G = env.window.__shellDH;
+  env.fire("keydown", { keyCode: 415 });
+  assert.strictEqual(G.why, "play");
+  assert.strictEqual(G.playIntent, 1);
+  assert.strictEqual(env.location.hash, "#/details?id=cw1&serverId=s1");
+  env.advance(3000);
+  assert.strictEqual(G.played, 0, "no click before the details page hydrates");
+  let clicks = 0;
+  env.setPlayButton({
+    disabled: false,
+    click() {
+      clicks++;
+    },
+  });
+  env.advance(6000);
+  assert.strictEqual(G.played, 1, "played once the button appeared");
+  assert.strictEqual(clicks, 1, "clicked exactly once");
+  env.advance(40000);
+  assert.strictEqual(clicks, 1, "poll cleared after the click");
+}
+
+// ---- 15. A2: play poll abandons when the user routes elsewhere ----------------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  env.fire("keydown", { keyCode: 10252 });
+  env.location.hash = "#/home.html";
+  let clicks = 0;
+  env.setPlayButton({
+    disabled: false,
+    click() {
+      clicks++;
+    },
+  });
+  env.advance(25000);
+  assert.strictEqual(clicks, 0, "no click after the user routed away");
+  assert.strictEqual(env.window.__shellDH.played, 0);
+}
+
+// ---- 16. A2: Back dismisses to the SPA, eaten ---------------------------------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  const ev = env.fire("keydown", { keyCode: 10009 });
+  assert.strictEqual(env.window.__shellDH.why, "back");
+  assert.strictEqual(ev.defaultPrevented, 1, "back eaten");
+  assert.strictEqual(env.location.hash, "", "back does not route");
+  env.advance(1000);
+  assert.strictEqual(overlayOf(env), null, "overlay gone after back");
+}
+
+// ---- 17. A2: navved suppresses hydration dismiss; caps stretch ----------------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  env.fire("keydown", { keyCode: 39 });
+  env.setCards([0, 1, 2, 3].map(() => visibleCard(env)));
+  env.advance(5000);
+  assert.strictEqual(
+    env.window.__shellDH.dismissed,
+    0,
+    "SPA hydration must not yank the grid from under the user",
+  );
+  env.advance(91000);
+  assert.strictEqual(
+    env.window.__shellDH.dismissed,
+    0,
+    "90 s idle cap suspended while navved",
+  );
+  env.advance(901000);
+  assert.strictEqual(env.window.__shellDH.why, "cap");
+  assert.strictEqual(
+    env.window.__shellDH.dismissed,
+    1,
+    "15 min absolute cap still fires",
+  );
+}
+
+// ---- 18. A2: focus survives a document.write wipe + repaint -------------------
+{
+  const env = makeEnv({ store: authedStore() });
+  env.run();
+  env.fire("keydown", { keyCode: 39 });
+  const G = env.window.__shellDH;
+  assert.strictEqual(G.focusC, 1);
+  env.documentElement.children.length = 0;
+  env.advance(1500);
+  assert(overlayOf(env), "repainted after wipe");
+  assert.strictEqual(G.focusC, 1, "focus position preserved across rebuild");
+  assert.strictEqual(
+    G.grid[0][1].el.style.outline,
+    "4px solid #00a4dc",
+    "ring reapplied on the rebuilt overlay",
+  );
+  const ov = overlayOf(env);
+  assert(
+    ov.style.cssText.indexOf("opacity:1") !== -1,
+    "rebuild reappears opaque (no re-fade)",
+  );
+}
+
+// ---- 19. A2: keys pass through untouched when nothing is painted --------------
+{
+  const env = makeEnv({ store: authedStore(), responses: {} });
+  env.run();
+  assert.strictEqual(overlayOf(env), null, "nothing painted (all fetches 404)");
+  const ev = env.fire("keydown", { keyCode: 39 });
+  assert.strictEqual(ev.defaultPrevented, 0, "no overlay -> key not eaten");
+  assert.strictEqual(ev.stopped, 0);
+  assert.strictEqual(
+    env.window.__shellDH.dismissed,
+    0,
+    "nothing to dismiss, SPA owns the key",
+  );
 }
 
 console.log("direct-home.test.cjs: all assertions passed");
