@@ -23,6 +23,9 @@
  *     background-image tiles, http(s)-only, rect-dedupe, >= 4 images
  *     required, chunked write with meta LAST, quota abort leaves no torn
  *     snapshot; round-trip repaint from a captured snapshot
+ *   - capture scroll gate (JELA-22): only snapshots at window scrollY <= 8 px
+ *     (pristine above-fold); a scrolled-down home never captures until the
+ *     user returns to the top
  *   - all three injection sites present (widget doc, DOMParser path,
  *     string fast path)
  */
@@ -244,6 +247,8 @@ function makeEnv(opts) {
   const window = {
     innerWidth: 1920,
     innerHeight: 1080,
+    // JELA-22: window scroll offset the capture gate reads via scy().
+    pageYOffset: opts.scrollY || 0,
     __shellT0: opts.now || 0,
     addEventListener(t, fn) {
       (listeners[t] = listeners[t] || []).push(fn);
@@ -280,6 +285,9 @@ function makeEnv(opts) {
     store,
     marks,
     location,
+    setScroll(y) {
+      window.pageYOffset = y;
+    },
     setCards(list) {
       cards = list;
     },
@@ -635,6 +643,81 @@ function visibleCard(env) {
     env.window.__shellIH.captured,
     0,
     "off-home never captures",
+  );
+}
+
+// ---- 12b. JELA-22: capture is pinned to the pristine above-fold (scrollY~0) ---------
+// A settled home that is scrolled down must NOT be snapshotted (it would bake a
+// mid-page card row like "Adventure" into the boot overlay); once scrolled back
+// to the pristine top the very next stable window captures.
+function settleHome(env) {
+  env.setCards([0, 1, 2, 3, 4, 5].map(() => visibleCard(env)));
+  const t1 = env.makeNode("H2");
+  t1.textContent = "Continue Watching";
+  t1.rect = { width: 300, height: 40, top: 80, bottom: 120, left: 40 };
+  env.setTitles([t1]);
+  const media = [];
+  for (let i = 0; i < 5; i++) {
+    const img = env.makeNode("IMG");
+    img.src = "http://srv/Items/" + i + "/Images/Primary";
+    img.rect = {
+      width: 320,
+      height: 180,
+      top: 140,
+      bottom: 320,
+      left: 40 + i * 340,
+    };
+    media.push(img);
+  }
+  env.setMedia(media);
+}
+{
+  // scrolled down the whole time → never captures
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
+    hash: "#/home.html",
+    scrollY: 400,
+  });
+  env.run();
+  settleHome(env);
+  env.advance(30000);
+  assert.strictEqual(
+    env.window.__shellIH.captured,
+    0,
+    "scrolled home never captures (no mid-page snapshot)",
+  );
+  assert(!(MK in env.store), "no snapshot written while scrolled");
+
+  // scroll back to the pristine top → next stable window captures
+  env.setScroll(0);
+  env.advance(35000);
+  assert.strictEqual(
+    env.window.__shellIH.captured,
+    1,
+    "capture fires once scrolled back to scrollY~0",
+  );
+  assert(MK in env.store, "pristine above-fold snapshot written");
+}
+{
+  // small residual scroll within tolerance (<= 8 px) still captures
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
+    hash: "#/home.html",
+    scrollY: 8,
+  });
+  env.run();
+  settleHome(env);
+  env.advance(8000);
+  assert.strictEqual(
+    env.window.__shellIH.captured,
+    1,
+    "scrollY within 8 px tolerance still counts as pristine top",
   );
 }
 

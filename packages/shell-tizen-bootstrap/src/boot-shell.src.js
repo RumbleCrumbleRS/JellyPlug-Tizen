@@ -2463,8 +2463,12 @@
   // repaint idempotent and free on every other tick).
   //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
-  // #/home with >= 5 above-fold cards stable across two consecutive ticks
-  // and our own overlay gone (so it never snapshots itself). Serializes
+  // #/home with >= 5 above-fold cards stable across two consecutive ticks,
+  // window scrollY <= 8 px (JELA-22: only ever snapshot the pristine
+  // above-fold — the hero spotlight + first card row — never a scrolled-down
+  // row like "Adventure", so the boot overlay always matches the settled,
+  // unscrolled home the live client paints into), and our own overlay gone
+  // (so it never snapshots itself). Serializes
   // above-fold .sectionTitle text + all visible img/background-image art
   // (http(s) only, deduped by rect) into localStorage, chunked at 24 KiB,
   // hard-capped at 300 KiB, meta written LAST and removed on any write
@@ -2526,6 +2530,9 @@
       'if(!G.painted){G.painted=1;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase("snap")}catch(_){}}' +
       "}catch(_){G.err++}}" +
       'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
+      // JELA-22 (JEL-647): window scroll offset, so capture only snapshots the
+      // pristine above-fold (scrollY~0) and never a scrolled-down card row.
+      "function scy(){try{var y=W.pageYOffset;if(y==null){var de=document.documentElement;y=de&&de.scrollTop}return+y||0}catch(_){return 0}}" +
       "if(!G.inputBound){G.inputBound=1;" +
       'var oi=function(){dismiss("input")};' +
       'try{W.addEventListener("keydown",oi,!0)}catch(_){}}' +
@@ -2543,6 +2550,7 @@
       "}catch(_){G.err++}},700);" +
       "function capture(){try{" +
       "if(el0())return;" +
+      "if(scy()>8)return;" +
       "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,fold=vh*1.05,items=[],i,r;" +
       'var ts=document.querySelectorAll(".sectionTitle");' +
       "for(i=0;i<ts.length;i++){r=ts[i].getBoundingClientRect();" +
@@ -2583,6 +2591,7 @@
       "if(+new Date()-t0>300000){clearInterval(cIv);return}" +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("home")===-1){st=0;ln=-1;return}' +
+      "if(scy()>8){st=0;ln=-1;return}" +
       "var n=folds();" +
       "if(n<5){st=0;ln=n;return}" +
       "if(n===ln)st++;else{st=0;ln=n}" +
