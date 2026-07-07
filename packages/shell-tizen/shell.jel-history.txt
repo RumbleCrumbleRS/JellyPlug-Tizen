@@ -163,6 +163,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-125 hung decomposition). This inline script runs at head parse
 *JEL-647 Instant-Home. Netflix paints a cached snapshot of the last
 *JEL-617 First paint records boot-phase ring mark "snap" recorder).
+*JEL-647 JELA-22 : window scroll offset, so capture only snapshots th
 *JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
