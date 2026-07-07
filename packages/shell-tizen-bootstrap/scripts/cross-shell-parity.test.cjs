@@ -165,7 +165,6 @@ const EXPECTED_MIRRORED = [
   "showError",
   "injectConnectStylesheet",
   "attachConnectForm",
-  "bootstrap",
 ];
 
 // Functions that exist in both shells but legitimately differ. Every entry
@@ -173,8 +172,10 @@ const EXPECTED_MIRRORED = [
 // fails CI, forcing the "did you mirror this?" question at review time.
 // `class` is documentation: "hsb-feature" = boot-shell-only capability the
 // retail shell intentionally lacks (usually blocked on the 128 KiB
-// shell.min.js cap), "cosmetic" = semantically equal but esbuild cannot
-// prove it, "drift" = KNOWN unreconciled divergence with a ticket.
+// shell.min.js cap), "retail-feature" = hosted-shell-only capability the
+// baked boot fallback intentionally lacks, "cosmetic" = semantically equal
+// but esbuild cannot prove it, "drift" = KNOWN unreconciled divergence with
+// a ticket.
 const INTENTIONAL_DIVERGENCES = [
   {
     name: "writeWebIndexCache",
@@ -235,16 +236,23 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "maybeStringFastPath",
     class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only",
-    retail: "576c5ee385bf6bd4",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype).",
+    retail: "f5c200504edb82a6",
     boot: "cd5bffdf00bb220b",
   },
   {
     name: "loadRemoteWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems",
-    retail: "235e6c091de65aa6",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) in the written document.",
+    retail: "cf8d30b70b7dab93",
     boot: "6c0e399f8639a4bd",
+  },
+  {
+    name: "bootstrap",
+    class: "retail-feature",
+    why: "retail injects the JELA-29 Direct-Home measurement prototype (injectDirectHome, opt-in via jellyfin.shell.directHome=1) into the widget document; the baked boot fallback is not the measurement target and deliberately omits it",
+    retail: "aa2d3e5ab9a377a2",
+    boot: "4b72f5f74e5fa5fc",
   },
 ];
 

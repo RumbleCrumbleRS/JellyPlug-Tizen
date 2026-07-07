@@ -3254,6 +3254,117 @@
     doc.head.appendChild(ihTag);
   }
 
+  // JELA-29 (WS-A / JELA-24 Lever 1): Direct-Home render prototype.
+  //
+  // OPT-IN measurement prototype (default OFF). When
+  // localStorage['jellyfin.shell.directHome']==='1' AND the boot is an authed
+  // saved-server auto-login, this paints REAL home-section cards (Continue
+  // Watching / Next Up / Latest) fetched straight from the Jellyfin API with
+  // the stored AccessToken — BEFORE/without the full web-client SPA bundle
+  // parsing+executing. It exists to answer the JELA-24 Lever-1 measurement
+  // gate: how much of the warm-live ~9 s launch->first-card floor is removable
+  // by skipping the bundle parse/eval on the M63 SoC.
+  //
+  // A1 scope = paint only, NOT navigation: the cards are a non-interactive
+  // overlay; the SPA still boots underneath and this crossfades away the moment
+  // the live home hydrates (>=4 .card) or on first user input — the SAME
+  // dismiss contract as instantHomeBody(). The two overlays are independent
+  // (different id / higher z-index) so a measurement run can enable either or
+  // both; full SPA is always the fallback.
+  //
+  // Timing readout (no CDP needed): launch->first-real-card is recorded as
+  // window.__shellDH.firstCardMs AND as the "dhcard" boot-phase (persisted in
+  // the jellyfin.shell.bootPhases ring), so a >=3-boot A1 measurement is
+  // readable from the SAME channel the SPA "card" phase uses. window.__shellDH
+  // also carries {fetchMs, sections, cards, err, http:{path:status}, why}.
+  //
+  // A0 spike (verified 2026-07-07 against the live 10.11.11 server): the
+  // standalone handoff is serverUrl=localStorage['jellyfin.shell.serverUrl'],
+  // token+userId=jellyfin_credentials.Servers[0].{AccessToken,UserId}, auth
+  // header X-Emby-Token; GET /Users/{u}/Items/Resume, /Shows/NextUp,
+  // /UserViews (+ /Users/{u}/Items/Latest?ParentId=) all 401 without the token
+  // and 200 with it; /Items/{id}/Images/Primary is public (no token) so card
+  // art paints directly. No ApiClient dependency — the bundle need not run.
+  //
+  // Body constraints (identical to instantHomeBody): ES5 only (pre-polyfill
+  // Chromium 56/63), no "</script" literal, every section try/caught, divs
+  // only (no tabbables), overlay pointer-events:none + aria-hidden.
+  // Opt-in/kill switch: localStorage['jellyfin.shell.directHome'] (='1' ON).
+  // shell.js-only: the hosted /shell/ the TV loads is this file's min; the
+  // baked bootstrap fallback is not the measurement target, so directHome is
+  // deliberately NOT mirrored into boot-shell.src.js (cross-shell-parity only
+  // guards names SHARED by both shells).
+  function directHomeBody() {
+    return (
+      "(function(){try{" +
+      'try{if(localStorage.getItem("jellyfin.shell.directHome")!=="1")return}catch(_){return}' +
+      'var W=window,OID="__shell_direct_home";' +
+      "var G=W.__shellDH;" +
+      'if(!G)G=W.__shellDH={gen:0,enabled:1,fetched:0,painted:0,fetchMs:0,firstCardMs:0,cards:0,sections:0,err:0,dismissed:0,why:"",dismissMs:0,rows:[],http:{}};' +
+      "var gen=++G.gen;" +
+      "var t0=+new Date();" +
+      "var T0=W.__shellT0||t0;" +
+      'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
+      'function creds(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return null;var p=JSON.parse(c);var s=p&&p.Servers&&p.Servers[0];if(!s||!s.AccessToken||!s.UserId)return null;return{t:s.AccessToken,u:s.UserId,a:(s.ManualAddress||s.LocalAddress||"")}}catch(_){return null}}' +
+      "var cr=creds();var base=srv()||(cr&&cr.a)||'';" +
+      'if(!cr||!base){G.why="nocreds";return}' +
+      'base=String(base).replace(/\\/+$/,"");' +
+      "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
+      'function dismiss(why){if(G.dismissed)return;G.dismissed=1;G.why=why;G.dismissMs=+new Date()-T0;try{var e=el0();if(e){e.style.opacity="0";setTimeout(function(){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}},400)}}catch(_){}}' +
+      'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<8;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
+      'function imgUrl(it){try{var id=it.Id,tag=it.ImageTags&&it.ImageTags.Primary;if(!tag&&it.SeriesId){id=it.SeriesId;tag=it.SeriesPrimaryImageTag}if(!id)return"";var u=base+"/Items/"+id+"/Images/Primary?fillHeight=330&quality=90"+(tag?("&tag="+tag):"");return u.replace(/["\'()\\\\\\s]/g,"")}catch(_){return""}}' +
+      "function repaint(){try{" +
+      "if(G.dismissed||!G.rows.length)return;" +
+      "var de=document.documentElement;if(!de||!de.appendChild)return;" +
+      "var e=el0();if(e&&e.__n===G.rows.length)return;" +
+      "if(e){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}}" +
+      'e=document.createElement("div");e.id=OID;e.setAttribute("aria-hidden","true");' +
+      'e.style.cssText="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2147483100;background:#101010;pointer-events:none;overflow:hidden;opacity:1;transition:opacity .3s;font-family:sans-serif";' +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,y=64,painted=0,r,i;" +
+      "for(r=0;r<G.rows.length;r++){var row=G.rows[r],its=row.items||[];if(!its.length)continue;" +
+      'var tt=document.createElement("div");tt.textContent=row.title||"";' +
+      'tt.style.cssText="position:absolute;left:48px;top:"+y+"px;color:#e8e8e8;font:600 28px sans-serif;white-space:nowrap;overflow:hidden";' +
+      "e.appendChild(tt);y+=44;" +
+      "var x=48,cw=210,ch=310,gap=16;" +
+      "for(i=0;i<its.length;i++){var u=its[i];if(!u)continue;" +
+      'var c=document.createElement("div");' +
+      'c.style.cssText="position:absolute;left:"+x+"px;top:"+y+"px;width:"+cw+"px;height:"+ch+"px;border-radius:6px;background:#1f1f1f url("+u+") center center no-repeat;background-size:cover";' +
+      "e.appendChild(c);x+=cw+gap;painted++;if(x+cw>vw)break}" +
+      "y+=ch+36;if(y>vh)break}" +
+      "e.__n=G.rows.length;de.appendChild(e);" +
+      'if(painted){G.cards=painted;if(!G.painted){G.painted=1;G.firstCardMs=+new Date()-T0;try{W.__shellPhase&&W.__shellPhase("dhcard")}catch(_){}}}' +
+      "}catch(_){G.err++}}" +
+      "function addRow(title,items){try{if(G.dismissed||!items||!items.length)return;var urls=[],i;for(i=0;i<items.length&&urls.length<12;i++){var u=imgUrl(items[i]);if(u)urls.push(u)}if(!urls.length)return;G.rows.push({title:title,items:urls});G.sections++;repaint()}catch(_){G.err++}}" +
+      'function get(path,cb){try{var x=new XMLHttpRequest();x.open("GET",base+path,!0);x.setRequestHeader("X-Emby-Token",cr.t);x.setRequestHeader("Accept","application/json");x.onreadystatechange=function(){if(x.readyState===4){try{G.http[path]=x.status}catch(_){}if(x.status>=200&&x.status<300){var d=null;try{d=JSON.parse(x.responseText)}catch(_){}cb(d)}else{cb(null)}}};x.send()}catch(_){G.err++;try{cb(null)}catch(__){}}}' +
+      'if(!G.inputBound){G.inputBound=1;try{W.addEventListener("keydown",function(){dismiss("input")},!0)}catch(_){}}' +
+      "if(!G.fetched){G.fetched=1;G.fetchMs=+new Date()-T0;" +
+      'get("/Users/"+cr.u+"/Items/Resume?Limit=12&MediaTypes=Video&Recursive=true&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Continue Watching",d&&d.Items)});' +
+      'get("/Shows/NextUp?UserId="+cr.u+"&Limit=16&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(d){addRow("Next Up",d&&d.Items)});' +
+      'get("/UserViews?userId="+cr.u,function(d){var v=d&&d.Items;if(!v||!v.length)return;var pv=null,i;for(i=0;i<v.length;i++){var ct=v[i].CollectionType;if(ct==="movies"||ct==="tvshows"){pv=v[i];break}}if(!pv)pv=v[0];get("/Users/"+cr.u+"/Items/Latest?ParentId="+pv.Id+"&Limit=16&EnableImageTypes=Primary&Fields=PrimaryImageAspectRatio",function(l){addRow("Latest "+(pv.Name||""),l)})});' +
+      "}" +
+      "repaint();" +
+      "var wIv=setInterval(function(){try{" +
+      "if(G.gen!==gen||G.dismissed){clearInterval(wIv);return}" +
+      'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
+      'var h="";try{h=String(location.hash||"")}catch(_){}' +
+      'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
+      'if(folds()>=4){dismiss("hydrated");clearInterval(wIv);return}' +
+      "repaint();" +
+      "}catch(_){G.err++}},700);" +
+      "}catch(_){}})();"
+    );
+  }
+
+  // JELA-29: mirror of injectInstantHome for the Direct-Home prototype. Same
+  // three injection sites (widget doc, DOMParser path, string fast path) so the
+  // opt-in overlay survives document.write; a no-op unless directHome=1.
+  function injectDirectHome(doc) {
+    var dhTag = doc.createElement("script");
+    dhTag.setAttribute("data-shell-direct-home", "1");
+    dhTag.textContent = directHomeBody();
+    doc.head.appendChild(dhTag);
+  }
+
   // JEL-197: shell-side JS-Injector snippet channel (parent JEL-196).
   // The Tizen shell bakes its own connect-form body and, once connected,
   // document.writes the server's /web/index.html. The JellyPlug snippets
@@ -4961,6 +5072,9 @@
     // the body makes the duplicate injection idempotent).
     var instantHomeTag =
       '<script data-shell-instant-home="1">' + instantHomeBody() + "</script>";
+    // JELA-29: opt-in Direct-Home prototype (no-op unless directHome=1).
+    var directHomeTag =
+      '<script data-shell-direct-home="1">' + directHomeBody() + "</script>";
     var injected =
       '<script data-shell-diag="1">' +
       diagBody +
@@ -4976,7 +5090,8 @@
       "</script>" +
       beaconTag +
       progressTag +
-      instantHomeTag;
+      instantHomeTag +
+      directHomeTag;
     var insertAt = headIdx + 6;
     var patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     // Init bundle counters so HUD reads consistent values whether or
@@ -5423,6 +5538,9 @@
         // JEL-647: instant-home snapshot overlay (repaint + dismiss +
         // capture) in the written document — see instantHomeBody().
         injectInstantHome(doc);
+        // JELA-29: opt-in Direct-Home render prototype (no-op unless
+        // directHome=1) — see directHomeBody().
+        injectDirectHome(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through
         // the tizen-compat firewall (idempotent vs a server-injected copy).
@@ -5578,6 +5696,12 @@
       // document.open. No-op unless authed with a fresh snapshot.
       try {
         injectInstantHome(document);
+      } catch (_) {}
+      // JELA-29: opt-in Direct-Home prototype in the widget document too;
+      // the written document re-injects the same body (no-op unless
+      // directHome=1). Cached rows survive document.open via window.__shellDH.
+      try {
+        injectDirectHome(document);
       } catch (_) {}
       // JEL-555: skip the /System/Info/Public pre-flight on resume.
       // loadRemoteWebClient fetches index.html + config.json anyway; if
