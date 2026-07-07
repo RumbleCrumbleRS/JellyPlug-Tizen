@@ -241,6 +241,44 @@ home (snap) and for steady-state cold; the ≤ 4 s bar for _live-interactive_
 warm home is a documented hardware floor, carried forward as the follow-up
 child above.
 
+## JELA-14 — JEL-651 residual on-device gates verified (Q60R, 2026-07-07)
+
+The two JEL-651 gates that could only be checked with a JELA-11 shell
+**running on the panel** are now closed. Device QN82Q60RAFXZA (Tizen 5.0,
+Chromium 63), installed signed WGT `bootstrap-v2.0.20` (`__hsbState`
+`2.0.20-ac3`) serving hosted shell `shell.min.js` v1.0.75
+(`fallback: null`, `errors: []`) — the JELA-11 parse-probe build. Read live
+over the JELA-7 CDP procedure (`sdb shell 0 debug JelShellTV.Jellyfin`,
+`Runtime.evaluate` via node global `WebSocket`) across probe-on, killswitch,
+and probe-restored boots. The de-authorized-over-sdb state noted in JELA-13
+had cleared for this session; `0` verbs and `kill`/`debug` all responded.
+
+| gate (JEL-651 test plan)                             | measured on the live JELA-11 shell                                                                                                                                                                                                                                                                                   | verdict  |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| JEL-617 boot-phase ring persists across boots        | `jellyfin.shell.bootPhases` holds the last 10 boots (`ts/nav/snap/dcl/api/home/card`), survives session gaps and appends each new boot                                                                                                                                                                               | **PASS** |
+| `__shellParseProbe` `{ok, n>0, tx sane}`             | probe-on boots: `{ok:true, n:7, tx:0}`; `__shellParseProbeSeed` `{ok:true, n:3–6, tx:3–6}`                                                                                                                                                                                                                           | **PASS** |
+| `__shellTxDrop {h,m,r,f}` — no oracle-reject storm   | `{h:0, m:1–2, r:0, f:0}` every boot — **r stays 0** (no oracle reject), `f:0` (no drop fetch fail)                                                                                                                                                                                                                   | **PASS** |
+| skip-rate rises on M63 (ES2018 fast-path raw)        | `parseProbe.tx = 0 / n = 7` (0 % transpiled) + `__shellDiag.stats.transpiled = 0`; tx-cache `hits 56 / misses 1` (only `babel.min.js`), `txDoCount 1`                                                                                                                                                                | **PASS** |
+| killswitch smoke: `parseProbeDisabled=1` → probe off | probe-off boot: `__shellParseProbe {ok:true, n:0, tx:0}` **and** `__shellParseProbeSeed {ok:true, n:0, tx:0}` — both probes never invoked, `needsTranspile` falls to the `MODERN_PRECHECK_RE` regex path; boot healthy (card 8949 ms, warm class), `transpiled 0`; restoring the key returned the probe path (`n:7`) | **PASS** |
+
+Notes:
+
+- The shell exposes `__shellTxDoCount`/`__shellTxCacheHits`/
+  `__shellTxCacheMisses` but **not** a populated `__shellTxSkipCount`
+  (`undefined` at runtime in v1.0.75). The skip signal the JEL-651 plan
+  expected to "rise" is read instead from `parseProbe.tx = 0 of n` and
+  `diag.transpiled = 0` — i.e. **100 % of probed plugin scripts fast-path
+  raw** on this Chromium-63 panel, which is the predicted rise.
+- The killswitch path is the source-level branch
+  `needsTranspile(code) = parseProbeActive() ? !parsesOnThisEngine(code) : MODERN_PRECHECK_RE.test(code)`;
+  with `parseProbeDisabled=1`, `parseProbeActive()` is false so
+  `parsesOnThisEngine` (the only site that bumps `__shellParseProbe.n`) is
+  never called — hence `n:0` is the correct, expected killswitch reading.
+- Boot-phase deltas on these boots match the JELA-21 ring (warm card
+  7.5–10.5 s, snap ~0.1–0.5 s); no ring regression from the parse-probe
+  build. Raw per-boot counter JSON is on the JELA-14 issue thread (kept out
+  of git per the JEL-139 no-server-URL guard).
+
 ## Rules
 
 - Re-measure with the same TV, same server, same snippet-channel size when
