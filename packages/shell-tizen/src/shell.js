@@ -3355,7 +3355,11 @@
       // HTTP-cache warm under the boot cover.
       // localStorage['jellyfin.shell.chunkWarm'] = '1' fires bounded-parallel
       // (4-wide: Chromium 56 allows 6 connections/origin — two stay free so
-      // the live page's own requests are never starved) same-origin GETs for
+      // the live page's own requests are never starved) server-origin GETs
+      // (JELA-47: keyed on srv()'s ASSET origin, never the page origin — the
+      // production Tizen app runs at file:///index.html, which made the old
+      // page-origin guard permanently false on-device; every queued URL is
+      // absolutized against srv() and cross-origin URLs are dropped) for
       // the lazy webpack chunks/CSS + stable-path plugin assets jellyfin-web
       // requests discovery-serially later in the boot (JELA-42 WS-0 list), so
       // a COLD boot's WAN waterfall collapses into the overlay window. Warm
@@ -3386,7 +3390,13 @@
       "function cwStart(cw,wr){try{" +
       "cw.started=1;cw.wpc=1;" +
       "var q=[],seen={},pend=0;" +
-      "function add(u2){if(u2&&!seen[u2]){seen[u2]=1;q.push(u2)}}" +
+      // JELA-47: queue ABSOLUTE URLs only. Root-relative paths get srv()'s
+      // origin (cwo) prefixed — the file:// page would otherwise resolve
+      // them to dead file:/// URLs; already-absolute URLs (webpack auto
+      // publicPath on the file:// deployment) must sit on cwo's origin;
+      // anything else (cross-origin, protocol-relative, path-relative) is
+      // dropped — never a cross-origin warm, never a guessed base.
+      'function add(u2){u2=String(u2||"");var a2="";if(u2.charAt(0)==="/"&&u2.charAt(1)!=="/")a2=cwo+u2;else if(u2.indexOf(cwo+"/")===0)a2=u2;if(a2&&!seen[a2]){seen[a2]=1;q.push(a2)}}' +
       'var p="";try{p=String(wr.p||"")}catch(_){}' +
       "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
       'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
@@ -3405,7 +3415,11 @@
       "while(pend<4&&q.length){" +
       "var u3=q.shift();" +
       'if(la===null){la=[];try{var es=document.querySelectorAll("script[src],link[href],script[data-shell-transpiled-from]");for(var li=0;li<es.length;li++){var ea=es[li];if(ea&&ea.getAttribute)la.push(String(ea.getAttribute("src")||ea.getAttribute("href")||ea.getAttribute("data-shell-transpiled-from")||""))}}catch(_){}}' +
-      "var hit=0;for(var hi=0;hi<la.length;hi++){if(la[hi].indexOf(u3)>=0){hit=1;break}}" +
+      // JELA-47: match tags on the server-relative path — page tags carry
+      // absolute URLs on the file:// deployment and root-relative ones on
+      // same-origin pages; every queued URL is cwo+path, so slicing cwo off
+      // matches both attr shapes.
+      "var u5=u3.slice(cwo.length),hit=0;for(var hi=0;hi<la.length;hi++){if(la[hi].indexOf(u5)>=0){hit=1;break}}" +
       "if(hit){cw.sk++;continue}" +
       "(function(u4){pend++;" +
       'W.fetch(u4,{credentials:"omit"}).then(function(rs){if(!rs.ok)throw 0;return rs.text()}).then(function(){pend--;cw.f++;fin();pump()},function(){pend--;cw.e++;fin();pump()})' +
@@ -3415,7 +3429,14 @@
       "pump()" +
       "}catch(_){G.err++}}" +
       'if(flg("jellyfin.shell.chunkWarm")&&typeof W.fetch==="function"){try{' +
-      'var cwo=!1;try{var cm=/^https?:\\/\\/[^\\/]+/.exec(srv()||"");cwo=!!cm&&String(location.protocol)+"//"+String(location.host)===cm[0]}catch(_){}' +
+      // JELA-47: gate on the ASSET origin — cwo = srv()'s scheme://host[:port]
+      // (empty/unparseable serverUrl keeps the warm inert). The page origin is
+      // irrelevant: the production app boots at file:///index.html and
+      // fetch() from there to srv()'s https origin works (ACAO via the Cache
+      // Headers plugin, verified on-device in JELA-45). The old
+      // page-origin===srv-origin comparison was permanently false on file://
+      // and left the warm inert in production (unit jsdom origin masked it).
+      'var cwo="";try{var cm=/^https?:\\/\\/[^\\/]+/.exec(srv()||"");if(cm)cwo=cm[0]}catch(_){}' +
       "if(cwo){" +
       "var cw0=W.__shellCW;" +
       'if(!cw0)cw0=W.__shellCW={on:1,started:0,q:0,f:0,e:0,sk:0,st:"",done:0,ms:-1,wpc:0};' +

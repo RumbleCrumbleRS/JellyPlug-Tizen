@@ -8,8 +8,15 @@
  * overlay lifecycle) and drives it through a virtual clock + DOM stub +
  * controllable fetch, pinning:
  *   - default OFF: no flag -> no __shellCW state, zero fetches
- *   - origin gate: srv() origin must match the document origin (the widget
- *     document never warms; only the server-origin documents do)
+ *   - origin gate (JELA-47): warming is keyed on srv()'s ASSET origin — a
+ *     missing/unparseable serverUrl is inert; the PAGE origin is irrelevant
+ *     (the production Tizen app boots at file:///index.html — the old
+ *     page-origin===srv-origin guard was permanently false there and left
+ *     the warm inert on-device, masked by the http test origin here)
+ *   - absolute URLs: every warm fetch hits cwo+path — root-relative paths
+ *     are absolutized against srv()'s origin (a file:// page would resolve
+ *     them to dead file:/// URLs); absolute publicPath URLs must sit on
+ *     srv()'s origin, cross-origin ones are dropped (never a foreign warm)
  *   - live URL resolution: fake-chunk push into webpackChunk* captures
  *     __webpack_require__; p + u(id)/miniCssF(id) resolve the WS-0 chunk-id
  *     seed; ids missing from the live maps ("undefined" in the stringified
@@ -211,7 +218,8 @@ function makeEnv(opts) {
   const store = Object.assign(
     {
       jellyfin_credentials: CREDS,
-      "jellyfin.shell.serverUrl": opts.srv || "http://srv",
+      "jellyfin.shell.serverUrl":
+        opts.srv !== undefined ? opts.srv : "http://srv",
     },
     opts.flagOff ? {} : { "jellyfin.shell.chunkWarm": "1" },
     opts.store || {},
@@ -319,13 +327,15 @@ function makeEnv(opts) {
 }
 
 // webpack runtime stub: u()/miniCssF() stringify missing map entries with
-// "undefined" exactly like the real minified runtime does.
-function makeWebpack(env, jsMap, cssMap) {
+// "undefined" exactly like the real minified runtime does. publicPath
+// defaults to root-relative "/web/"; the file:// deployment sees webpack's
+// auto publicPath as an ABSOLUTE URL (pass pubPath to pin that shape).
+function makeWebpack(env, jsMap, cssMap, pubPath) {
   return {
     push(chunk) {
       assert(Array.isArray(chunk) && chunk.length === 3, "fake chunk shape");
       chunk[2]({
-        p: "/web/",
+        p: pubPath === undefined ? "/web/" : pubPath,
         u: (id) => id + "." + jsMap[id] + ".chunk.js",
         miniCssF: (id) => id + "." + cssMap[id] + ".css",
       });
@@ -350,17 +360,87 @@ const CSS_MAP = { home: "ddd" };
     assert(env.calls.length === 0, "1: flag off -> zero fetches");
   }
 
-  // ---- 2. origin gate: srv() mismatch -> inert ------------------------------
+  // ---- 2. origin gate: unparseable srv() -> inert ---------------------------
   {
-    const env = makeEnv({ srv: "http://other-host" });
+    for (const bad of ["", "not-a-url", "ftp://host"]) {
+      const env = makeEnv({ srv: bad });
+      env.run();
+      env.window.webpackChunkjellyfin = makeWebpack(env, JS_MAP, CSS_MAP);
+      await env.advance(5000);
+      assert(
+        env.window.__shellCW === undefined,
+        "2: srv " + JSON.stringify(bad) + " -> no __shellCW state",
+      );
+      assert(
+        env.calls.length === 0,
+        "2: srv " + JSON.stringify(bad) + " -> zero fetches",
+      );
+    }
+  }
+
+  // ---- 2b. JELA-47: file:// page origin warms against srv()'s origin --------
+  // The production Tizen app boots at file:///index.html; webpack's auto
+  // publicPath resolves ABSOLUTE there (assets load from the server). All
+  // warm URLs must be absolute on srv()'s origin, and a page tag carrying
+  // the ABSOLUTE asset URL must still dedupe.
+  {
+    const env = makeEnv({ protocol: "file:", host: "" });
     env.run();
-    env.window.webpackChunkjellyfin = makeWebpack(env, JS_MAP, CSS_MAP);
-    await env.advance(5000);
-    assert(
-      env.window.__shellCW === undefined,
-      "2: origin mismatch -> no __shellCW state",
+    const tag = env.makeNode("SCRIPT");
+    tag.setAttribute("src", "http://srv/web/59258.aaa.chunk.js");
+    env.setLoadedTags([tag]);
+    env.window.webpackChunkjellyfin = makeWebpack(
+      env,
+      JS_MAP,
+      CSS_MAP,
+      "http://srv/web/",
     );
-    assert(env.calls.length === 0, "2: origin mismatch -> zero fetches");
+    await env.advance(3000);
+    const cw = env.window.__shellCW;
+    assert(cw && cw.started === 1, "2b: file:// page starts the warm");
+    const urls = env.calls.map((c) => c.url);
+    assert(
+      urls.length > 0 && urls.every((u) => u.indexOf("http://srv/") === 0),
+      "2b: every warm URL absolute on srv()'s origin: " + JSON.stringify(urls),
+    );
+    assert(
+      urls.indexOf("http://srv/web/home.bbb.chunk.js") !== -1 &&
+        urls.indexOf("http://srv/web/home.ddd.css") !== -1 &&
+        urls.indexOf("http://srv/web/themes/dark/theme.css") !== -1,
+      "2b: absolute-publicPath chunks + absolutized static seed fetched",
+    );
+    assert(
+      urls.indexOf("http://srv/web/59258.aaa.chunk.js") === -1 && cw.sk === 1,
+      "2b: absolute-attr page tag skipped (sk=1), never re-fetched",
+    );
+    assert(
+      cw.done === 1 && cw.st === "done" && cw.f === urls.length,
+      "2b: finished st=done on file://: " + JSON.stringify(cw),
+    );
+  }
+
+  // ---- 2c. JELA-47: cross-origin publicPath chunks dropped, seed still warms
+  {
+    const env = makeEnv({ protocol: "file:", host: "" });
+    env.run();
+    env.window.webpackChunkjellyfin = makeWebpack(
+      env,
+      JS_MAP,
+      CSS_MAP,
+      "http://evil/web/",
+    );
+    await env.advance(3000);
+    const cw = env.window.__shellCW;
+    assert(cw && cw.started === 1, "2c: warm still starts");
+    const urls = env.calls.map((c) => c.url);
+    assert(
+      urls.every((u) => u.indexOf("http://srv/") === 0),
+      "2c: cross-origin publicPath URLs never fetched: " + JSON.stringify(urls),
+    );
+    assert(
+      urls.indexOf("http://srv/web/themes/dark/theme.css") !== -1,
+      "2c: static seed still warms on srv()'s origin",
+    );
   }
 
   // ---- 3. happy path: live resolution + static seed, done -------------------
@@ -380,20 +460,22 @@ const CSS_MAP = { home: "ddd" };
     const cw = env.window.__shellCW;
     assert(cw && cw.started === 1 && cw.wpc === 1, "3: warm started, wpc=1");
     const urls = env.calls.map((c) => c.url);
+    // JELA-47: every warm URL is absolutized against srv()'s origin even on
+    // a same-origin page (one code path, no page-origin dependence)
     assert(
-      urls.indexOf("/web/home.bbb.chunk.js") !== -1 &&
-        urls.indexOf("/web/home.ddd.css") !== -1 &&
-        urls.indexOf("/web/home-html.ccc.chunk.js") !== -1,
+      urls.indexOf("http://srv/web/home.bbb.chunk.js") !== -1 &&
+        urls.indexOf("http://srv/web/home.ddd.css") !== -1 &&
+        urls.indexOf("http://srv/web/home-html.ccc.chunk.js") !== -1,
       "3: live-resolved chunk/css URLs fetched: " + JSON.stringify(urls),
     );
     assert(
-      urls.indexOf("/web/59258.aaa.chunk.js") === -1 && cw.sk === 1,
-      "3: already-tagged chunk skipped (sk=1), never re-fetched",
+      urls.indexOf("http://srv/web/59258.aaa.chunk.js") === -1 && cw.sk === 1,
+      "3: chunk tagged with a ROOT-RELATIVE src skipped (sk=1), never re-fetched",
     );
     assert(
-      urls.indexOf("/web/themes/dark/theme.css") !== -1 &&
-        urls.indexOf("/JellyfinEnhanced/js/jellyseerr/api.js") !== -1,
-      "3: static stable-path seed fetched",
+      urls.indexOf("http://srv/web/themes/dark/theme.css") !== -1 &&
+        urls.indexOf("http://srv/JellyfinEnhanced/js/jellyseerr/api.js") !== -1,
+      "3: static stable-path seed fetched (absolutized)",
     );
     assert(
       urls.every((u) => u.indexOf("undefined") === -1),
