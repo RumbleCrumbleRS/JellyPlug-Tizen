@@ -2699,6 +2699,90 @@
       "if(n===ln)st++;else{st=0;ln=n}" +
       "if(st>=2)capture()" +
       "}catch(_){G.err++}},1500);" +
+      // JELA-44 (JELA-41 WS-3, opt-in, default OFF): cold-boot chunk/CSS
+      // HTTP-cache warm under the boot cover.
+      // localStorage['jellyfin.shell.chunkWarm'] = '1' fires bounded-parallel
+      // (4-wide: Chromium 56 allows 6 connections/origin — two stay free so
+      // the live page's own requests are never starved) same-origin GETs for
+      // the lazy webpack chunks/CSS + stable-path plugin assets jellyfin-web
+      // requests discovery-serially later in the boot (JELA-42 WS-0 list), so
+      // a COLD boot's WAN waterfall collapses into the overlay window. Warm
+      // boots already fetch everything by ~7 s (WS-0) — this targets the
+      // first boot after a jellyfin-web/plugin update or a cache eviction.
+      // Chunk URLs resolve LIVE: a fake chunk pushed into webpackChunk*
+      // (JEL-436 precedent) captures __webpack_require__, then p + u(id) /
+      // miniCssF(id) map the WS-0 chunk-id seed to the CURRENT build's hashed
+      // filenames; ids absent from the live maps stringify with "undefined"
+      // and are skipped (never a guessed hash, never a 404 storm — a future
+      // build renaming ids degrades to a silent skip). The static seed keeps
+      // only stable UNVERSIONED paths (?v= cache-busters would warm dead
+      // URLs). One attempt per URL, response read+discarded (HTTP-cache warm
+      // only, never eval'd), URLs already carried by a script/link tag (or a
+      // data-shell-transpiled-from marker) are skipped so an in-flight page
+      // request is never duplicated. Runs while the boot cover is up — the
+      // Instant-Home overlay OR the A3-fused Direct-Home grid (production
+      // directHome boots hand the snapshot off to the grid at G1 ~1.5-3 s,
+      // BEFORE webpackChunk exists, so warming must survive the "dh"
+      // dismissal); once BOTH are gone (user reached the live page) no new
+      // fetch is issued and the <= 4 in-flight just complete (Chromium 56
+      // has no AbortController). Counters: window.__shellCW
+      // {on,started,q,f,e,sk,st,done,ms,wpc}; st: "done" | "dismiss"
+      // (cover gone) | "cap" (60 s webpackChunk wait) | "push"
+      // (fake-chunk push threw). Kill switch is the flag itself (default
+      // OFF).
+      "function cwCover(){try{var D=W.__shellDH;return!!((G.painted&&!G.dismissed)||(D&&D.painted&&!D.dismissed))}catch(_){return!1}}" +
+      "function cwStart(cw,wr){try{" +
+      "cw.started=1;cw.wpc=1;" +
+      "var q=[],seen={},pend=0;" +
+      "function add(u2){if(u2&&!seen[u2]){seen[u2]=1;q.push(u2)}}" +
+      'var p="";try{p=String(wr.p||"")}catch(_){}' +
+      "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
+      'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      "var ci,r2;" +
+      "for(ci=0;ci<CWI.length;ci++){" +
+      'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
+      'try{if(cf){r2=cf(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}}' +
+      "for(ci=0;ci<CWS.length;ci++)add(CWS[ci]);" +
+      "cw.q=q.length;" +
+      'function fin(){if(!q.length&&!pend&&!cw.done){cw.done=1;cw.ms=+new Date()-(W.__shellT0||t0);if(!cw.st)cw.st="done"}}' +
+      "function pump(){try{" +
+      "if(cw.done)return;" +
+      'if(!cwCover()&&q.length){q.length=0;if(!cw.st)cw.st="dismiss"}' +
+      "var la=null;" +
+      "while(pend<4&&q.length){" +
+      "var u3=q.shift();" +
+      'if(la===null){la=[];try{var es=document.querySelectorAll("script[src],link[href],script[data-shell-transpiled-from]");for(var li=0;li<es.length;li++){var ea=es[li];if(ea&&ea.getAttribute)la.push(String(ea.getAttribute("src")||ea.getAttribute("href")||ea.getAttribute("data-shell-transpiled-from")||""))}}catch(_){}}' +
+      "var hit=0;for(var hi=0;hi<la.length;hi++){if(la[hi].indexOf(u3)>=0){hit=1;break}}" +
+      "if(hit){cw.sk++;continue}" +
+      "(function(u4){pend++;" +
+      'W.fetch(u4,{credentials:"omit"}).then(function(rs){if(!rs.ok)throw 0;return rs.text()}).then(function(){pend--;cw.f++;fin();pump()},function(){pend--;cw.e++;fin();pump()})' +
+      "})(u3)}" +
+      "fin()" +
+      "}catch(_){G.err++}}" +
+      "pump()" +
+      "}catch(_){G.err++}}" +
+      'if(flg("jellyfin.shell.chunkWarm")&&typeof W.fetch==="function"){try{' +
+      'var cwo=!1;try{var cm=/^https?:\\/\\/[^\\/]+/.exec(srv()||"");cwo=!!cm&&String(location.protocol)+"//"+String(location.host)===cm[0]}catch(_){}' +
+      "if(cwo){" +
+      "var cw0=W.__shellCW;" +
+      'if(!cw0)cw0=W.__shellCW={on:1,started:0,q:0,f:0,e:0,sk:0,st:"",done:0,ms:-1,wpc:0};' +
+      "var cwIv=setInterval(function(){try{" +
+      "if(G.gen!==gen||cw0.started||cw0.done){clearInterval(cwIv);return}" +
+      'if(+new Date()-t0>60000){if(!cw0.st)cw0.st="cap";cw0.done=1;clearInterval(cwIv);return}' +
+      'if(G.dismissed&&!cwCover()){if(!cw0.st)cw0.st="dismiss";cw0.done=1;clearInterval(cwIv);return}' +
+      "if(!cwCover())return;" +
+      "var ck=null;for(var ki in W){if(/^webpackChunk/.test(ki)){ck=ki;break}}" +
+      "if(!ck)return;" +
+      'var ch=W[ck];if(!ch||typeof ch.push!=="function")return;' +
+      "var wr0=null;" +
+      'try{ch.push([["__shellCW_"+gen+"_"+(+new Date())],{},function(rq){wr0=rq}])}catch(_){if(!cw0.st)cw0.st="push";cw0.done=1;clearInterval(cwIv);return}' +
+      "if(!wr0)return;" +
+      "clearInterval(cwIv);" +
+      "cwStart(cw0,wr0)" +
+      "}catch(_){G.err++}},500)" +
+      "}" +
+      "}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );
   }
