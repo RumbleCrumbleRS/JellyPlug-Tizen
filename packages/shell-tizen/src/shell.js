@@ -3456,6 +3456,130 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
+      // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
+      // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
+      // fires the DETERMINISTIC home-sections request list (JELA-50 WS-4
+      // spec: config preamble, HomeScreen/Sections + the Section/* fan-out
+      // chained off its OWN response — the server randomizes Genre /
+      // BecauseYouWatched picks per call, so the SPA must be served the same
+      // Sections body the fan-out was derived from — plus JellyfinEnhanced
+      // tag-cache, the single biggest lever: ~13 s server time, completion
+      // coincides with layout-stable on every WS-4 boot) at body-run
+      // (~0.5 s, ~8 s before the SPA can ask) with the stored token, into an
+      // in-memory ONE-SHOT store (TTL 60 s), and serves the SPA's matching
+      // fetch/XHR GETs from it. Every prefetch is issued against srv()'s
+      // SERVER origin (JELA-47: the page origin is file:// on-device and is
+      // never consulted); SPA URLs are matched server-relative with query
+      // params sorted and the NextUpDateCutoff + "_" cache-buster params
+      // dropped (WS-4 fuzz spec). A miss (consumed / expired / errored /
+      // never prefetched — incl. the data-dependent Items?Ids= hydration and
+      // item-detail tier, deliberately fallthrough) goes to the network
+      // untouched: worst case = today's boot. A prefetch still in flight
+      // when the SPA asks parks the SPA on the SAME request (the tag-cache
+      // case: issued ~0.5 s, SPA asks ~9 s, data lands ~14 s instead of
+      // ~22.5 s); if it then errors the SPA request replays on the network.
+      // A token change flushes the store (st:"auth") so stale-user data is
+      // never served. One warm per WINDOW (not per document): the fetch/XHR
+      // patches live on window and survive the document.write handoff and
+      // the "dh" dismissal; a re-run body (gen turnover) is a no-op while
+      // __shellAW exists. Counters: window.__shellAW
+      // {on,started,q,f,e,hits,misses,st,ms}; st: "" (running) | "done" |
+      // "auth". jellyfin.shell.apiWarmDisabled is honored NOW as the
+      // kill-switch reserved for the WS-6 default-ON flip.
+      'if(flg("jellyfin.shell.apiWarm")&&!flg("jellyfin.shell.apiWarmDisabled")&&!W.__shellAW){try{' +
+      'var aC=null;try{var ac0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),as0=ac0&&ac0.Servers&&ac0.Servers[0];if(as0&&as0.AccessToken&&as0.UserId)aC={t:as0.AccessToken,u:as0.UserId,a:String(as0.ManualAddress||as0.LocalAddress||"")}}catch(_){}' +
+      'var aB="";try{aB=String(srv()||(aC&&aC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
+      'if(aC&&/^https?:\\/\\//.test(aB)&&typeof W.XMLHttpRequest==="function"){' +
+      'var aw=W.__shellAW={on:1,started:0,q:0,f:0,e:0,hits:0,misses:0,st:"",ms:-1};' +
+      "var sto={},uK={},sn={},PQ=[],pnd=0;" +
+      'var bL=[aB];try{var ab2=String(aC.a||"").replace(/\\/+$/,"");if(ab2&&ab2!==aB)bL.push(ab2)}catch(_){}' +
+      'var canon=function(u){try{u=String(u||"");for(var bi=0;bi<bL.length;bi++){if(u.indexOf(bL[bi]+"/")===0){u=u.slice(bL[bi].length);break}}' +
+      'if(u.charAt(0)!=="/"||u.charAt(1)==="/")return"";' +
+      'var qi=u.indexOf("?");if(qi<0)return u;' +
+      'var ps=u.slice(qi+1).split("&"),ks=[],pi;for(pi=0;pi<ps.length;pi++){var nm=ps[pi].split("=")[0];if(nm==="_"||nm==="NextUpDateCutoff")continue;ks.push(ps[pi])}' +
+      'if(!ks.length)return u.slice(0,qi);ks.sort();return u.slice(0,qi)+"?"+ks.join("&")}catch(_){return""}};' +
+      'var tokOk=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===aC.t)}catch(_){return!1}};' +
+      // chk: resolve a canonical key to a servable entry. Consuming DELETES
+      // the store slot (one-shot) but callers keep the entry ref — a parked
+      // pending waiter is fed by the in-flight XHR through that ref.
+      "var chk=function(k){if(!k)return null;var e2=sto[k];" +
+      "if(!e2){if(uK[k])aw.misses++;return null}" +
+      'if(!tokOk()){sto={};aw.st="auth";aw.misses++;return null}' +
+      "if(e2.st===2||+new Date()>e2.x){delete sto[k];aw.misses++;return null}" +
+      "aw.hits++;delete sto[k];return e2};" +
+      'var fin=function(){if(!PQ.length&&!pnd&&aw.ms<0){aw.ms=+new Date()-(W.__shellT0||t0);if(!aw.st)aw.st="done"}};' +
+      'var enq=function(p){var k=canon(aB+p);if(!k||sn[k])return;sn[k]=1;uK[k]=1;var e0={st:0,x:+new Date()+60000,s:0,t:"",cb:[]};sto[k]=e0;PQ.push([p,e0]);aw.q++};' +
+      "var sK=null;" +
+      // chain: mirror the Home Screen Sections plugin's fan-out URL
+      // construction from the Sections response we just stored. NextUp gets
+      // a live NextUpDateCutoff + EnableRewatching=false exactly like the
+      // plugin issues it (the cutoff is fuzz-dropped at match time).
+      'var chain=function(tx){try{var d2=JSON.parse(tx),it2=d2&&d2.Items;if(!it2)return;for(var ci2=0;ci2<it2.length;ci2++){var se=it2[ci2],n3=String((se&&se.Section)||"");if(!/^[A-Za-z0-9_-]+$/.test(n3))continue;' +
+      'var u6="/HomeScreen/Section/"+n3+"?UserId="+aC.u;var ad=se.AdditionalData;if(ad!=null&&ad!=="")u6+="&AdditionalData="+encodeURIComponent(String(ad));' +
+      'if(n3==="NextUp")u6+="&NextUpDateCutoff="+encodeURIComponent(new Date().toISOString())+"&EnableRewatching=false";' +
+      "enq(u6)}pump()}catch(_){G.err++}};" +
+      "var issue=function(p,e0){pnd++;aw.started=1;try{" +
+      'var x=new W.XMLHttpRequest();x.__awI=1;x.open("GET",aB+p,!0);' +
+      "try{x.timeout=30000}catch(_){}" +
+      'try{x.setRequestHeader("X-Emby-Token",aC.t);x.setRequestHeader("Accept","application/json")}catch(_){}' +
+      "x.onreadystatechange=function(){try{if(x.readyState!==4)return;" +
+      "var ok=x.status>=200&&x.status<300;" +
+      'if(ok){aw.f++;if(e0.st===0){e0.st=1;e0.s=x.status;e0.t=String(x.responseText||"");e0.x=+new Date()+60000}}else{aw.e++;if(e0.st===0)e0.st=2}' +
+      "if(ok&&canon(aB+p)===sK)chain(x.responseText);" +
+      "var cbs=e0.cb;e0.cb=[];for(var fi=0;fi<cbs.length;fi++){try{cbs[fi]()}catch(_){G.err++}}" +
+      "pnd--;fin();pump()}catch(_){G.err++}};" +
+      "x.send()}catch(_){pnd--;aw.e++;if(e0.st===0)e0.st=2;fin()}};" +
+      "var pump=function(){while(pnd<8&&PQ.length){var pr=PQ.shift();issue(pr[0],pr[1])}fin()};" +
+      // Serve fetch() hits as synthesized Response objects (Chromium 56 has
+      // the Response constructor); a 204 keeps its null body. Anything that
+      // throws mid-serve degrades to the real fetch.
+      'var mkR=null;try{if(typeof Response==="function")mkR=function(e2){return new Response(e2.s===204?null:e2.t,{status:e2.s||200,headers:{"Content-Type":"application/json"}})}}catch(_){}' +
+      'if(typeof W.fetch==="function"&&mkR){try{var oF=W.fetch;W.fetch=function(u7,o7){try{' +
+      'var m7=o7&&o7.method?String(o7.method).toUpperCase():"GET";' +
+      'if(m7==="GET"){var e7=chk(canon(typeof u7==="string"?u7:String((u7&&u7.url)||"")));' +
+      "if(e7){if(e7.st===1)return Promise.resolve(mkR(e7));" +
+      "var oF2=oF;return new Promise(function(rs7){e7.cb.push(function(){if(e7.st===1){try{rs7(mkR(e7));return}catch(_){}}rs7(oF2.call(W,u7,o7))})})}}" +
+      "}catch(_){G.err++}" +
+      "return oF.apply(W,arguments)}}catch(_){G.err++}}" +
+      // XHR delivery: own-property shadows over the prototype accessors +
+      // readystatechange/load/loadend. dispatchEvent(new Event(...)) reaches
+      // addEventListener listeners AND on* handlers on a real XHR; engines
+      // without it get the on* handlers called directly.
+      "var awD=function(x,e2){try{" +
+      "var df=function(n4,v4){try{Object.defineProperty(x,n4,{configurable:!0,value:v4})}catch(_){try{x[n4]=v4}catch(__){}}};" +
+      'df("readyState",4);df("status",e2.s||200);df("statusText","OK");' +
+      'var rt="";try{rt=String(x.responseType||"")}catch(_){}' +
+      'if(rt===""||rt==="text")df("responseText",e2.t);' +
+      'if(rt==="json"){var pj=null;try{pj=JSON.parse(e2.t)}catch(_){}df("response",pj)}else df("response",e2.t);' +
+      'df("getAllResponseHeaders",function(){return"content-type: application/json\\r\\n"});' +
+      'df("getResponseHeader",function(h4){return String(h4||"").toLowerCase()==="content-type"?"application/json":null});' +
+      'var evs=["readystatechange","load","loadend"];for(var ei=0;ei<evs.length;ei++){var fired=0;' +
+      'try{if(typeof Event==="function"&&x.dispatchEvent){x.dispatchEvent(new Event(evs[ei]));fired=1}}catch(_){}' +
+      'if(!fired){try{var h5=x["on"+evs[ei]];if(typeof h5==="function")h5.call(x,{type:evs[ei],target:x})}catch(_){G.err++}}}' +
+      "}catch(_){G.err++}};" +
+      "try{var XP=W.XMLHttpRequest.prototype;if(XP&&XP.open&&XP.send){" +
+      "var oO=XP.open,oS=XP.send,oA=XP.abort;" +
+      'XP.open=function(m9,u9){if(!this.__awI){try{this.__awM=String(m9||"").toUpperCase();this.__awU=String(u9||"")}catch(_){}}return oO.apply(this,arguments)};' +
+      "if(oA)XP.abort=function(){try{this.__awA=1}catch(_){}return oA.apply(this,arguments)};" +
+      'XP.send=function(){if(!this.__awI&&this.__awM==="GET"){var e9=null;try{e9=chk(canon(this.__awU))}catch(_){}' +
+      "if(e9){var x9=this;var go=function(){try{if(x9.__awA)return;if(e9.st===1){awD(x9,e9)}else{oS.call(x9)}}catch(_){G.err++}};" +
+      "if(e9.st===1){setTimeout(go,0)}else{e9.cb.push(go)}" +
+      "return}}" +
+      "return oS.apply(this,arguments)}}}catch(_){G.err++}" +
+      // The WS-4 deterministic request list. tag-cache FIRST (13 s server
+      // time — every ms of head start counts), Sections SECOND (unlocks the
+      // chained fan-out); the genre set was byte-identical across all three
+      // WS-4 boots (a stale name = one cheap query + fallthrough, never a
+      // wrong serve). Truncated-in-capture tier-2 Items URLs are NOT guessed.
+      'sK=canon(aB+"/HomeScreen/Sections?UserId="+aC.u);' +
+      'var AWL=["/JellyfinEnhanced/tag-cache/"+aC.u,"/HomeScreen/Sections?UserId="+aC.u,"/System/Info/Public","/System/Info","/Users/"+aC.u,"/UserViews?userId="+aC.u,"/DisplayPreferences/usersettings?userId="+aC.u+"&client=emby","/Branding/Configuration","/Plugins","/System/Configuration","/PluginPages/User","/CustomTabs/Config","/HomeScreen/Meta","/MediaBar/WebConfig","/JellyfinEnhanced/public-config","/JellyfinEnhanced/private-config","/JellyfinEnhanced/version","/JellyfinEnhanced/locales/en-US.json"];' +
+      'var AWU=["settings","shortcuts","bookmark","elsewhere","hidden-content"],ui;for(ui=0;ui<AWU.length;ui++)AWL.push("/JellyfinEnhanced/user-settings/"+aC.u+"/"+AWU[ui]+".json");' +
+      'AWL.push("/Users/"+aC.u+"/Items/Latest?IncludeItemTypes=Movie%2CSeries&Fields=DateCreated%2CPrimaryImageAspectRatio&ImageTypeLimit=1&EnableImageTypes=Primary&Limit=20");' +
+      'AWL.push("/Shows/NextUp?Fields=DateCreated%2CPrimaryImageAspectRatio&ImageTypeLimit=1&EnableImageTypes=Primary&Limit=20&UserId="+aC.u);' +
+      'var AWG=["Action","Adventure","Animation","Comedy","Crime","Documentary","Drama","Family","Fantasy","Horror","Mystery","Romance","Science%20Fiction","Thriller"],gi;for(gi=0;gi<AWG.length;gi++)AWL.push("/Genres?SearchTerm="+AWG[gi]+"&Limit=12&userId="+aC.u);' +
+      "for(ui=0;ui<AWL.length;ui++)enq(AWL[ui]);" +
+      "pump()" +
+      "}}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );
   }
