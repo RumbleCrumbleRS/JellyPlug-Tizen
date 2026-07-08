@@ -301,6 +301,13 @@ function makeEnv(opts) {
     fire(type) {
       (listeners[type] || []).forEach((fn) => fn({ type }));
     },
+    // Simulates the document.open()/write() SPA index handoff: the window
+    // object survives but ALL its event listeners are wiped along with the
+    // whole DOM; the written document then re-executes the injected body.
+    swapDoc() {
+      for (const k in listeners) delete listeners[k];
+      documentElement.children.length = 0;
+    },
     run() {
       new Function(
         "window",
@@ -914,6 +921,47 @@ function settleHome(env) {
   assert.strictEqual(headChildren.length, 1);
   assert.strictEqual(headChildren[0].attrs["data-shell-instant-home"], "1");
   assert.strictEqual(headChildren[0].textContent, body);
+}
+
+// ---- 16. JELA-37: input dismiss still works after the document.open handoff --------
+// document.open() wipes ALL window listeners together with the DOM; the
+// written document then re-executes the body (gen 2). The old once-per-G
+// inputBound gate skipped the rebind there, so between the swap and SPA
+// hydration a remote keypress could NOT dismiss the snapshot. The bind is
+// per-run now (same fix as Direct-Home PR #82 / direct-home test 20).
+{
+  const env = makeEnv({ store: makeSnapshotStore() });
+  env.run();
+  const G = env.window.__shellIH;
+  assert(findOverlay(env), "gen-1 overlay painted");
+  assert.strictEqual(G.inputBound, 1, "gen-1 run bound keydown");
+  env.swapDoc();
+  env.run();
+  assert.strictEqual(G.gen, 2, "same G, second generation");
+  assert.strictEqual(G.inputBound, 2, "keydown rebound by the gen-2 run");
+  assert(findOverlay(env), "overlay recreated by the gen-2 run");
+  env.fire("keydown");
+  assert.strictEqual(G.dismissed, 1, "post-swap key dismisses the snapshot");
+  assert.strictEqual(G.why, "input");
+  env.advance(3000);
+  assert.strictEqual(
+    findOverlay(env),
+    null,
+    "overlay gone after post-swap input",
+  );
+}
+
+// ---- 16b. JELA-37: a stale-gen survivor listener is inert --------------------------
+// If an engine ever leaves an old listener alive while a newer generation
+// owns the overlay, the gen guard in oi must keep the stale one from
+// dismissing the newer generation's snapshot out from under it.
+{
+  const env = makeEnv({ store: makeSnapshotStore() });
+  env.run();
+  const G = env.window.__shellIH;
+  G.gen++; // a newer generation owns the overlay now
+  env.fire("keydown");
+  assert.strictEqual(G.dismissed, 0, "stale-gen listener goes inert");
 }
 
 console.log("instant-home.test.cjs: all assertions passed");
