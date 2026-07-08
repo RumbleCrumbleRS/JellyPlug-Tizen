@@ -28,6 +28,13 @@
  *     user returns to the top
  *   - all three injection sites present (widget doc, DOMParser path,
  *     string fast path)
+ *   - JELA-43 WS-1 input shield (opt-in): D-pad/Enter swallowed under the
+ *     overlay, Back/Return/Esc always escapes, moving-target Enter guard
+ *     after the crossfade; stands down with no overlay or a painted
+ *     Direct-Home grid
+ *   - JELA-43 WS-2 settle-gated dismissal (opt-in): >= 4 cards + 1.5 s
+ *     stylesheet + above-fold-mutation quiet -> "settled"; hard hold cap
+ *     15 s ("settlecap"), tunable down only; sub-4 partial stall retained
  */
 "use strict";
 const fs = require("fs");
@@ -298,8 +305,31 @@ function makeEnv(opts) {
       media = list;
     },
     makeNode,
-    fire(type) {
-      (listeners[type] || []).forEach((fn) => fn({ type }));
+    fire(type, ev) {
+      (listeners[type] || []).forEach((fn) => fn(ev || { type }));
+    },
+    // JELA-43: keydown with a spy-able event (shield eat = preventDefault +
+    // stopPropagation + stopImmediatePropagation). Returns the event so
+    // callers can assert .pd (prevented) / .sp / .sip.
+    fireKey(code) {
+      const ev = {
+        type: "keydown",
+        keyCode: code,
+        pd: 0,
+        sp: 0,
+        sip: 0,
+        preventDefault() {
+          this.pd = 1;
+        },
+        stopPropagation() {
+          this.sp = 1;
+        },
+        stopImmediatePropagation() {
+          this.sip = 1;
+        },
+      };
+      (listeners.keydown || []).forEach((fn) => fn(ev));
+      return ev;
     },
     // Simulates the document.open()/write() SPA index handoff: the window
     // object survives but ALL its event listeners are wiped along with the
@@ -962,6 +992,353 @@ function settleHome(env) {
   G.gen++; // a newer generation owns the overlay now
   env.fire("keydown");
   assert.strictEqual(G.dismissed, 0, "stale-gen listener goes inert");
+}
+
+// ============================================================================
+// JELA-43 (JELA-41 WS-1+2): input shield + settle-gated dismissal. Both are
+// opt-in localStorage flags, default OFF — every case above this line ran
+// flag-off and pins that the legacy behavior is untouched.
+// ============================================================================
+
+const SHIELD = "jellyfin.shell.instantHomeInputShield";
+const SETTLE = "jellyfin.shell.instantHomeSettleDismiss";
+const CAPKEY = "jellyfin.shell.instantHomeSettleCapMs";
+
+// ---- static contract: flags + new dismiss reasons exist, legacy path kept ----
+assert(body.indexOf(SHIELD) !== -1, "input-shield flag key present");
+assert(body.indexOf(SETTLE) !== -1, "settle-dismiss flag key present");
+assert(body.indexOf(CAPKEY) !== -1, "settle-cap tuning key present");
+assert(
+  body.indexOf('dismiss("input")') !== -1,
+  "flag-off first-keydown dismiss path retained",
+);
+assert(body.indexOf('dismiss("back")') !== -1, "Back escape hatch present");
+assert(body.indexOf('dismiss("settled")') !== -1, "settled dismissal present");
+assert(body.indexOf('dismiss("settlecap")') !== -1, "settle hard cap present");
+// CEO condition #1: the cap literal is 15000 and capLim rejects anything
+// above it (tunable DOWN only).
+assert(
+  body.indexOf("v>=1000&&v<=15000") !== -1 &&
+    body.indexOf("return 15000") !== -1,
+  "settle cap clamps to <= 15000 ms (never tunable up)",
+);
+
+// Fake MutationObserver the body picks up via window.MutationObserver.
+function fakeMO(env) {
+  const state = { cb: null, observed: null, opts: null, disconnected: 0 };
+  env.window.MutationObserver = function (cb) {
+    state.cb = cb;
+    this.observe = (t, o) => {
+      state.observed = t;
+      state.opts = o;
+    };
+    this.disconnect = () => {
+      state.disconnected++;
+    };
+  };
+  return state;
+}
+
+// ---- 17. WS-1 shield: D-pad + Enter swallowed, overlay stays up ---------------
+{
+  const store = makeSnapshotStore();
+  store[SHIELD] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  assert(findOverlay(env), "overlay painted");
+  const G = env.window.__shellIH;
+  for (const code of [37, 38, 39, 40, 13]) {
+    const ev = env.fireKey(code);
+    assert.strictEqual(ev.pd, 1, "key " + code + " preventDefault");
+    assert.strictEqual(ev.sp, 1, "key " + code + " stopPropagation");
+    assert.strictEqual(ev.sip, 1, "key " + code + " stopImmediatePropagation");
+  }
+  assert.strictEqual(G.eaten, 5, "all five keydowns counted as eaten");
+  assert.strictEqual(G.dismissed, 0, "shield never dismisses on D-pad");
+  assert(findOverlay(env), "overlay still up after swallowed input");
+
+  // ---- 18. WS-1 Back = mandatory escape hatch, eaten + immediate dismiss ------
+  const back = env.fireKey(10009);
+  assert.strictEqual(back.pd, 1, "Back eaten (never reaches the live page)");
+  assert.strictEqual(G.backEsc, 1, "backEsc diag counter");
+  assert.strictEqual(G.dismissed, 1, "Back always dismisses");
+  assert.strictEqual(G.why, "back");
+  env.advance(3000);
+  assert.strictEqual(findOverlay(env), null, "overlay gone after Back");
+  // post-dismiss keys pass through untouched (shield is overlay-scoped)
+  const after = env.fireKey(37);
+  assert.strictEqual(after.pd, 0, "no eat once the overlay is gone");
+  assert.strictEqual(G.eaten, 5, "eaten counter frozen after dismissal");
+}
+
+// ---- 19. WS-1 shield stands down when no overlay painted (unauthed) -----------
+{
+  const env = makeEnv({ store: { [SHIELD]: "1" } });
+  env.run();
+  assert.strictEqual(findOverlay(env), null, "unauthed: no overlay");
+  const ev = env.fireKey(37);
+  assert.strictEqual(ev.pd, 0, "keys pass through with no overlay");
+  assert.strictEqual(env.window.__shellIH.dismissed, 0);
+  assert.strictEqual(env.window.__shellIH.eaten, 0);
+}
+
+// ---- 20. WS-1 shield stands down under a painted Direct-Home grid -------------
+{
+  const store = makeSnapshotStore();
+  store[SHIELD] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  env.window.__shellDH = { painted: 1, dismissed: 0 };
+  const ev = env.fireKey(39);
+  assert.strictEqual(ev.pd, 0, "grid owns input: shield does not eat");
+  assert.strictEqual(env.window.__shellIH.eaten, 0);
+  env.advance(1500);
+  assert.strictEqual(env.window.__shellIH.why, "dh", "tick hands off to grid");
+}
+
+// ---- 21. WS-1 Esc/461 variants also escape ------------------------------------
+{
+  for (const code of [461, 27]) {
+    const store = makeSnapshotStore();
+    store[SHIELD] = "1";
+    const env = makeEnv({ store });
+    env.run();
+    env.fireKey(code);
+    assert.strictEqual(env.window.__shellIH.why, "back", "code " + code);
+  }
+}
+
+// ---- 22. WS-1 moving-target Enter guard after crossfade ------------------------
+{
+  const store = makeSnapshotStore();
+  store[SHIELD] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  const G = env.window.__shellIH;
+  const focused = env.makeNode("BUTTON");
+  focused.rect = { width: 300, height: 180, top: 200, bottom: 380, left: 40 };
+  env.document.activeElement = focused;
+  env.fireKey(10009); // dismiss at t=0 arms the guard
+  assert.strictEqual(G.why, "back");
+  // focused rect stable since the first 200 ms sample -> Enter passes at 1 s
+  env.advance(1000);
+  const pass1 = env.fireKey(13);
+  assert.strictEqual(pass1.pd, 0, "stable focus: Enter passes through");
+  assert.strictEqual(G.entHeld, 0);
+  // rect moves -> next sample marks it -> Enter within 400 ms is eaten
+  focused.rect = { width: 300, height: 180, top: 460, bottom: 640, left: 40 };
+  env.advance(1200);
+  const held = env.fireKey(13);
+  assert.strictEqual(held.pd, 1, "moved focus: Enter suppressed");
+  assert.strictEqual(G.entHeld, 1);
+  // re-arm: stable for > 400 ms -> Enter passes again
+  env.advance(1800);
+  const pass2 = env.fireKey(13);
+  assert.strictEqual(pass2.pd, 0, "guard re-arms once the rect settles");
+  assert.strictEqual(G.entHeld, 1);
+  // guard window closes at 10 s: listener goes inert even if the rect moves
+  env.advance(11000);
+  focused.rect = { width: 300, height: 180, top: 700, bottom: 880, left: 40 };
+  env.advance(11400);
+  const late = env.fireKey(13);
+  assert.strictEqual(late.pd, 0, "guard inert past its 10 s window");
+  assert.strictEqual(G.entHeld, 1);
+}
+
+// ---- 23. WS-2 settled dismissal (no MutationObserver: gate degrades open) -----
+{
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  const G = env.window.__shellIH;
+  // stylesheet-count clock starts at the first tick (700 ms): 4 cards alone
+  // must NOT dismiss before 1.5 s of stylesheet stability
+  env.advance(2100);
+  assert.strictEqual(G.dismissed, 0, ">=4 cards alone no longer dismisses");
+  env.advance(2800);
+  assert.strictEqual(G.dismissed, 1, "settled once stylesheets stable 1.5 s");
+  assert.strictEqual(G.why, "settled");
+  assert.strictEqual(G.settleMs, 2800, "settleMs diag recorded");
+}
+
+// ---- 24. WS-2 above-fold mutations hold the overlay; below-fold do not --------
+{
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  assert(mo.observed, "MutationObserver armed on documentElement");
+  assert.strictEqual(mo.opts.childList, true);
+  assert.strictEqual(mo.opts.subtree, true);
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  const G = env.window.__shellIH;
+  const above = visibleCard(env);
+  const below = env.makeNode("DIV");
+  below.rect = { width: 300, height: 180, top: 1200, bottom: 1380, left: 40 };
+  // keep mutating above-fold: overlay must hold well past the flag-off point
+  env.advance(2500);
+  mo.cb([{ target: above }]);
+  env.advance(3500);
+  assert.strictEqual(G.dismissed, 0, "above-fold mutation at 2.5 s holds");
+  // below-fold mutation does NOT reset the settle clock
+  mo.cb([{ target: below }]);
+  env.advance(4200);
+  assert.strictEqual(
+    G.dismissed,
+    1,
+    "settles 1.5 s after last ABOVE-fold mutation",
+  );
+  assert.strictEqual(G.why, "settled");
+  assert.strictEqual(mo.disconnected, 1, "observer disconnected on dismissal");
+}
+
+// ---- 25. WS-2 new stylesheets reset the settle clock ---------------------------
+{
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  env.document.styleSheets = { length: 1 };
+  const G = env.window.__shellIH;
+  env.advance(2100);
+  env.document.styleSheets = { length: 2 }; // late chunk CSS lands
+  env.advance(3500);
+  assert.strictEqual(G.dismissed, 0, "new stylesheet at 2.8 s tick holds");
+  env.advance(5000);
+  assert.strictEqual(
+    G.dismissed,
+    1,
+    "settles 1.5 s after stylesheet count stabilizes",
+  );
+  assert.strictEqual(G.why, "settled");
+}
+
+// ---- 26. WS-2 hard cap: 15 s default, tunable DOWN, clamped never-up -----------
+{
+  // default 15 s
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  env.run(); // no cards ever hydrate
+  env.advance(14700);
+  assert.strictEqual(env.window.__shellIH.dismissed, 0, "held at 14.7 s");
+  env.advance(15400);
+  assert.strictEqual(env.window.__shellIH.why, "settlecap", "capped at 15 s");
+}
+{
+  // tuned down to 5 s
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  store[CAPKEY] = "5000";
+  const env = makeEnv({ store });
+  env.run();
+  env.advance(5600);
+  assert.strictEqual(
+    env.window.__shellIH.why,
+    "settlecap",
+    "tuned-down cap honored",
+  );
+}
+{
+  // attempted tune UP is rejected -> still 15 s
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  store[CAPKEY] = "60000";
+  const env = makeEnv({ store });
+  env.run();
+  env.advance(15400);
+  assert.strictEqual(
+    env.window.__shellIH.why,
+    "settlecap",
+    "cap can never be tuned above 15 s",
+  );
+}
+
+// ---- 27. WS-2 partial-stall path only fires below 4 cards ----------------------
+{
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  env.setCards([visibleCard(env), visibleCard(env)]); // stalls at 2 cards
+  env.advance(9800);
+  assert.strictEqual(
+    env.window.__shellIH.why,
+    "partial",
+    "sub-4 stall still bails",
+  );
+}
+{
+  // >= 4 cards but never settled (constant above-fold churn) must NOT go
+  // "partial" at 8 s — it holds to the settle cap.
+  const store = makeSnapshotStore();
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  const churn = visibleCard(env);
+  for (let t = 1000; t <= 15000; t += 1000) {
+    env.advance(t);
+    mo.cb([{ target: churn }]);
+  }
+  env.advance(16000);
+  assert.strictEqual(
+    env.window.__shellIH.why,
+    "settlecap",
+    ">=4 unsettled holds to the cap, never partial",
+  );
+}
+
+// ---- 28. WS-1+2 combined: shield holds input the whole settle window -----------
+{
+  const store = makeSnapshotStore();
+  store[SHIELD] = "1";
+  store[SETTLE] = "1";
+  const env = makeEnv({ store });
+  env.run();
+  const G = env.window.__shellIH;
+  env.advance(1000);
+  env.fireKey(40);
+  env.advance(2000);
+  env.fireKey(13);
+  assert.strictEqual(G.eaten, 2, "keys eaten while settling");
+  assert.strictEqual(G.dismissed, 0);
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  env.advance(4600);
+  assert.strictEqual(G.why, "settled", "settles with shield active");
+  const after = env.fireKey(37);
+  assert.strictEqual(after.pd, 0, "input flows to the live page after settle");
 }
 
 console.log("instant-home.test.cjs: all assertions passed");

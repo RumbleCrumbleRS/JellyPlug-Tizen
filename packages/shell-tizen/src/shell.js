@@ -3079,6 +3079,37 @@
   // document.write wipes the DOM (getElementById re-entry guard makes the
   // repaint idempotent and free on every other tick).
   //
+  // JELA-43 (JELA-41 WS-1+2, both opt-in, default OFF):
+  //
+  // WS-1 input shield — localStorage['jellyfin.shell.instantHomeInputShield']
+  // = '1'. While the overlay is painted, keydowns are SWALLOWED (capture
+  // phase preventDefault + stop(Immediate)Propagation; G.eaten counts them)
+  // instead of dismissing into the still-shifting live page. Back/Return/Esc
+  // (10009/461/27) is the mandatory escape hatch: always eaten AND dismisses
+  // immediately (G.backEsc). If the Direct-Home grid is painted the shield
+  // stands down (the grid owns input; the watch tick hands off via "dh").
+  // After any dismissal a 10 s moving-target Enter guard arms: a 200 ms
+  // poller tracks document.activeElement's rect, and Enter (13) is eaten +
+  // re-armed while that rect changed within the last 400 ms (G.entHeld), so
+  // a late layout shift can never redirect a click onto the wrong card.
+  // Pointer/mouse listeners remain forbidden (playback-controls pin).
+  //
+  // WS-2 settle-gated dismissal —
+  // localStorage['jellyfin.shell.instantHomeSettleDismiss'] = '1'. Replaces
+  // the >=4-cards-only "hydrated" dismissal with layout-settled: >= 4
+  // above-fold cards AND document.styleSheets.length stable for 1.5 s AND no
+  // above-fold DOM mutations (MutationObserver on documentElement, childList
+  // + subtree + class/style/src attributes, target rect intersecting the
+  // viewport) for 1.5 s -> dismiss("settled"), G.settleMs. Overlay hold is
+  // hard-capped -> dismiss("settlecap") at 15 s (CEO condition: starts
+  // <= 15 s), tunable ONLY DOWN via
+  // localStorage['jellyfin.shell.instantHomeSettleCapMs'] (1000..15000 ms;
+  // anything else falls back to 15000 — never above). The partial-stall path
+  // only fires below 4 cards under this flag (>= 4 unsettled must hold to
+  // settle or cap, never "partial"). Without MutationObserver the mutation
+  // gate degrades open (cards + stylesheet stability still gate). The 90 s
+  // absolute cap stays as the flag-off backstop.
+  //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
   // #/home with >= 5 above-fold cards stable across two consecutive ticks,
   // window scrollY <= 8 px (JELA-22: only ever snapshot the pristine
@@ -3103,12 +3134,20 @@
       'try{if(localStorage.getItem("jellyfin.shell.instantHomeDisabled")==="1")return}catch(_){}' +
       'var W=window,MK="jellyfin.shell.instantHome",OID="__shell_instant_home";' +
       "var G=W.__shellIH;" +
-      'if(!G)G=W.__shellIH={gen:0,painted:0,paintMs:0,dismissed:0,why:"",dismissMs:0,captured:0,capMs:0,items:0,err:0,skeleton:0,snapAgeMs:-1};' +
+      'if(!G)G=W.__shellIH={gen:0,painted:0,paintMs:0,dismissed:0,why:"",dismissMs:0,captured:0,capMs:0,items:0,err:0,skeleton:0,snapAgeMs:-1,eaten:0,backEsc:0,entHeld:0,settleMs:-1};' +
       "var gen=++G.gen;" +
       "var t0=+new Date();" +
       "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
       'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
       'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
+      // JELA-43 opt-in flags (both default OFF) + shared key-eat / rect-key
+      // helpers. capLim() accepts ONLY 1000..15000 ms (CEO condition: the
+      // settle cap starts <= 15 s and is tuned DOWN from WS-0 data, never up).
+      'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
+      'var SH=flg("jellyfin.shell.instantHomeInputShield"),SD=flg("jellyfin.shell.instantHomeSettleDismiss");' +
+      'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=15000)return v}catch(_){}return 15000}' +
+      "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
+      'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
       // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
       // library never paints forever; operator-tunable via
       // localStorage["jellyfin.shell.instantHomeMaxAgeMs"] (any positive ms;
@@ -3146,7 +3185,25 @@
       "function dismiss(why){" +
       "if(G.dismissed)return;" +
       "G.dismissed=1;G.why=why;G.dismissMs=+new Date()-(W.__shellT0||t0);" +
+      "try{mo&&mo.disconnect()}catch(_){}" +
+      "armEG();" +
       'try{var e=el0();if(e){e.style.opacity="0";setTimeout(function(){try{e.parentNode&&e.parentNode.removeChild(e)}catch(_){}},450)}}catch(_){}}' +
+      // JELA-43 (WS-1): moving-target Enter guard, armed at dismissal (the
+      // crossfade reveals a live page that can still be reflowing). For 10 s
+      // a 200 ms poller fingerprints document.activeElement's rect; Enter is
+      // eaten + re-armed while the focused rect changed within the last
+      // 400 ms, so a shifting layout can never redirect the press onto a
+      // moved card. The listener goes inert past the 10 s window (and on
+      // gen turnover) instead of being removed — the window stub used by the
+      // instant-home tests exposes no removeEventListener, and a per-gen
+      // inert listener matches the oi lifecycle. Stands down while the
+      // Direct-Home grid is painted (its own capture handler owns Enter).
+      "function armEG(){if(!SH)return;try{" +
+      'var dT=+new Date(),le=null,lk="",mvT=dT;' +
+      "var gIv=setInterval(function(){try{var n2=+new Date();if(n2-dT>10000){clearInterval(gIv);return}var a=document.activeElement||null,k2=rk(a);if(a!==le||k2!==lk){mvT=n2;le=a;lk=k2}}catch(_){}},200);" +
+      "var oe=function(ev){try{if(G.gen!==gen)return;if(+new Date()-dT>10000)return;if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed)return;var k3=0;try{k3=ev.keyCode||ev.which||0}catch(_){}if(k3!==13)return;if(+new Date()-mvT<400){eatK(ev);G.entHeld=(G.entHeld||0)+1}}catch(_){G.err++}};" +
+      'W.addEventListener("keydown",oe,!0)' +
+      "}catch(_){G.err++}}" +
       "function paint(){try{" +
       "if(G.dismissed||el0())return;" +
       "var de=document.documentElement;" +
@@ -3184,13 +3241,36 @@
       // means no same-window double-bind; the gen guard in oi turns any
       // engine-quirk survivor listener inert instead of dismissing a newer
       // generation's overlay. G.inputBound stays as a bind-count diagnostic.
-      'var oi=function(){if(G.gen!==gen)return;dismiss("input")};' +
+      // JELA-43 (WS-1): with the input shield on, keydowns are swallowed
+      // while the overlay is up (never handed to the still-shifting live
+      // page) instead of dismissing; Back/Return/Esc is the mandatory
+      // always-works escape hatch (eaten + immediate dismiss). Shield stands
+      // down when the overlay is absent (pass through untouched) or the
+      // Direct-Home grid is painted (grid owns input; tick hands off "dh").
+      // Flag off keeps the pre-JELA-43 first-keydown dismiss("input") path.
+      "var oi=function(ev){if(G.gen!==gen)return;" +
+      'if(!SH){dismiss("input");return}' +
+      "if(G.dismissed||!el0())return;" +
+      "if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed)return;" +
+      "var k=0;try{k=ev.keyCode||ev.which||0}catch(_){}" +
+      'if(k===10009||k===461||k===27){G.backEsc=(G.backEsc||0)+1;eatK(ev);dismiss("back");return}' +
+      "G.eaten=(G.eaten||0)+1;eatK(ev)};" +
       "G.inputBound=(G.inputBound||0)+1;" +
       'try{W.addEventListener("keydown",oi,!0)}catch(_){}' +
       "paint();" +
+      // JELA-43 (WS-2): settle instrumentation. muT = last above-fold DOM
+      // mutation (observer target rect intersects the viewport; text nodes
+      // resolve to their parent; a throwing check counts as a mutation so
+      // the gate fails closed). ssN/ssT track document.styleSheets.length
+      // stability. Without MutationObserver (old engines, test stub) muT
+      // stays t0 and the mutation gate degrades open. Observer armed AFTER
+      // the initial paint so our own overlay append never resets the clock;
+      // watch-tick repaints only happen mid document.write churn.
+      "var mo=null,muT=t0,ssN=-1,ssT=t0;" +
+      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){mo=new MO(function(ms){try{var vh2=W.innerHeight||1080;for(var mi=0;mi<ms.length;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=+new Date();break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=+new Date();break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
-      "if(G.gen!==gen||G.dismissed){clearInterval(wIv);return}" +
+      "if(G.gen!==gen||G.dismissed){try{mo&&mo.disconnect()}catch(_){}clearInterval(wIv);return}" +
       'if(+new Date()-t0>90000){dismiss("cap");clearInterval(wIv);return}' +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("login")!==-1||h.indexOf("selectserver")!==-1||h.indexOf("wizard")!==-1){dismiss("route");clearInterval(wIv);return}' +
@@ -3201,8 +3281,22 @@
       'if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed){dismiss("dh");clearInterval(wIv);return}' +
       "paint();" +
       "var n=folds();" +
+      // JELA-43 (WS-2): settle-gated dismissal replaces >=4-cards-only when
+      // the flag is on — >=4 cards AND no above-fold mutation for 1.5 s AND
+      // stylesheet count stable for 1.5 s -> "settled"; overlay hold is
+      // hard-capped at capLim() (<= 15 s) -> "settlecap". The partial-stall
+      // path fires only BELOW 4 cards here (>= 4 unsettled holds to settle
+      // or cap). Flag off keeps the pre-JELA-43 "hydrated" dismissal.
+      "if(SD){" +
+      "var nw=+new Date();" +
+      'if(nw-t0>capLim()){dismiss("settlecap");clearInterval(wIv);return}' +
+      "var s2=0;try{s2=document.styleSheets?document.styleSheets.length:0}catch(_){}" +
+      "if(s2!==ssN){ssN=s2;ssT=nw}" +
+      'if(n>=4&&nw-muT>=1500&&nw-ssT>=1500){G.settleMs=nw-t0;dismiss("settled");clearInterval(wIv);return}' +
+      "}else{" +
       'if(n>=4){dismiss("hydrated");clearInterval(wIv);return}' +
-      'if(n>0){if(!fc)fc=+new Date();else if(+new Date()-fc>8000){dismiss("partial");clearInterval(wIv);return}}' +
+      "}" +
+      'if((!SD||n<4)&&n>0){if(!fc)fc=+new Date();else if(+new Date()-fc>8000){dismiss("partial");clearInterval(wIv);return}}' +
       "}catch(_){G.err++}},700);" +
       "function capture(){try{" +
       "if(el0())return;" +
