@@ -2558,9 +2558,18 @@
       // JELA-22 (JEL-647): window scroll offset, so capture only snapshots the
       // pristine above-fold (scrollY~0) and never a scrolled-down card row.
       "function scy(){try{var y=W.pageYOffset;if(y==null){var de=document.documentElement;y=de&&de.scrollTop}return+y||0}catch(_){return 0}}" +
-      "if(!G.inputBound){G.inputBound=1;" +
-      'var oi=function(){dismiss("input")};' +
-      'try{W.addEventListener("keydown",oi,!0)}catch(_){}}' +
+      // JELA-37: document.open() (the SPA index handoff) wipes ALL window
+      // listeners, and this body re-runs once per written document (gen++),
+      // so the keydown bind must be per-run, not once-per-G — the old
+      // persistent G.inputBound gate skipped the rebind after the swap,
+      // leaving the post-swap overlay deaf to input until hydration (same
+      // defect PR #82 fixed for Direct-Home). One body run per document
+      // means no same-window double-bind; the gen guard in oi turns any
+      // engine-quirk survivor listener inert instead of dismissing a newer
+      // generation's overlay. G.inputBound stays as a bind-count diagnostic.
+      'var oi=function(){if(G.gen!==gen)return;dismiss("input")};' +
+      "G.inputBound=(G.inputBound||0)+1;" +
+      'try{W.addEventListener("keydown",oi,!0)}catch(_){}' +
       "paint();" +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
