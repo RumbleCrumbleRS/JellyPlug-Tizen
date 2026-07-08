@@ -444,8 +444,10 @@ const CSS_MAP = { home: "ddd" };
       env.calls.length === 4 && env.inflight() === 4,
       "4: exactly 4 issued while none settled",
     );
-    // overlay dismissed (input path, shield off) -> cover gone
-    env.fireKey(38);
+    // overlay dismissed (Back escape hatch -- the input shield is default ON
+    // since JELA-49, so D-pad keys are eaten; Back always dismisses) ->
+    // cover gone
+    env.fireKey(10009);
     assert(env.window.__shellIH.dismissed === 1, "4: overlay dismissed");
     env.calls[0].resolve(true);
     await env.drainMicro();
@@ -488,7 +490,7 @@ const CSS_MAP = { home: "ddd" };
     const env = makeEnv({});
     env.run();
     await env.advance(500);
-    env.fireKey(38); // dismiss overlay, no DH grid
+    env.fireKey(10009); // Back escape dismisses (shield eats D-pad), no DH grid
     await env.advance(2000);
     env.window.webpackChunkjellyfin = makeWebpack(env, JS_MAP, CSS_MAP);
     await env.advance(5000);
