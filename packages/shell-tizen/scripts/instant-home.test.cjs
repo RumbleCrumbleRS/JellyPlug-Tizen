@@ -28,13 +28,18 @@
  *     user returns to the top
  *   - all three injection sites present (widget doc, DOMParser path,
  *     string fast path)
- *   - JELA-43 WS-1 input shield (opt-in): D-pad/Enter swallowed under the
- *     overlay, Back/Return/Esc always escapes, moving-target Enter guard
- *     after the crossfade; stands down with no overlay or a painted
- *     Direct-Home grid
- *   - JELA-43 WS-2 settle-gated dismissal (opt-in): >= 4 cards + 1.5 s
- *     stylesheet + above-fold-mutation quiet -> "settled"; hard hold cap
- *     15 s ("settlecap"), tunable down only; sub-4 partial stall retained
+ *   - JELA-43 WS-1 input shield (default ON since JELA-49; kill-switch
+ *     jellyfin.shell.instantHomeInputShieldDisabled=1): D-pad/Enter
+ *     swallowed under the overlay, Back/Return/Esc always escapes,
+ *     moving-target Enter guard after the crossfade; stands down with no
+ *     overlay or a painted Direct-Home grid
+ *   - JELA-43 WS-2 settle-gated dismissal (default ON since JELA-49;
+ *     kill-switch jellyfin.shell.instantHomeSettleDismissDisabled=1):
+ *     >= 4 cards + 1.5 s stylesheet + above-fold-mutation quiet ->
+ *     "settled"; hard hold cap 15 s ("settlecap"), tunable down only;
+ *     sub-4 partial stall retained
+ *   - kill-switched boots reproduce the stock v1.0.4.0 dismissal paths
+ *     (cases 1-16 pin "hydrated"/"input"/90 s "cap" under the switches)
  */
 "use strict";
 const fs = require("fs");
@@ -106,6 +111,12 @@ const MK = "jellyfin.shell.instantHome";
 const CREDS = JSON.stringify({
   Servers: [{ Id: "s1", AccessToken: "tok", UserId: "u1" }],
 });
+
+// JELA-49: WS-1+2 are default ON; these per-behavior kill-switches restore
+// the stock (v1.0.4.0) input/hydration dismissal. Legacy cases below set them
+// to pin that the kill-switched path still IS the stock behavior.
+const SHIELD_OFF = "jellyfin.shell.instantHomeInputShieldDisabled";
+const SETTLE_OFF = "jellyfin.shell.instantHomeSettleDismissDisabled";
 
 function makeSnapshotStore(opts) {
   opts = opts || {};
@@ -398,8 +409,11 @@ function visibleCard(env) {
 }
 
 // ---- 1. paint happy path -------------------------------------------------------
+// (SETTLE_OFF: case 4 pins the stock >=4-cards "hydrated" dismissal)
 {
-  const env = makeEnv({ store: makeSnapshotStore() });
+  const store = makeSnapshotStore();
+  store[SETTLE_OFF] = "1";
+  const env = makeEnv({ store });
   env.run();
   const overlay = findOverlay(env);
   assert(overlay, "overlay painted from snapshot");
@@ -454,9 +468,11 @@ function visibleCard(env) {
   assert.strictEqual(findOverlay(env), null, "overlay removed after fade");
 }
 
-// ---- 5. input dismiss -----------------------------------------------------------
+// ---- 5. input dismiss (stock path: shield kill-switched) -------------------------
 {
-  const env = makeEnv({ store: makeSnapshotStore() });
+  const store = makeSnapshotStore();
+  store[SHIELD_OFF] = "1";
+  const env = makeEnv({ store });
   env.run();
   assert(findOverlay(env));
   env.fire("keydown");
@@ -508,9 +524,11 @@ function visibleCard(env) {
   );
 }
 
-// ---- 7. 90 s absolute cap -------------------------------------------------------
+// ---- 7. 90 s absolute cap (stock backstop: settle-dismiss kill-switched) ---------
 {
-  const env = makeEnv({ store: makeSnapshotStore() });
+  const store = makeSnapshotStore();
+  store[SETTLE_OFF] = "1";
+  const env = makeEnv({ store });
   env.run();
   env.advance(91000);
   assert.strictEqual(env.window.__shellIH.why, "cap");
@@ -959,8 +977,11 @@ function settleHome(env) {
 // inputBound gate skipped the rebind there, so between the swap and SPA
 // hydration a remote keypress could NOT dismiss the snapshot. The bind is
 // per-run now (same fix as Direct-Home PR #82 / direct-home test 20).
+// (SHIELD_OFF: pins the stock keydown-dismiss path across the swap.)
 {
-  const env = makeEnv({ store: makeSnapshotStore() });
+  const store = makeSnapshotStore();
+  store[SHIELD_OFF] = "1";
+  const env = makeEnv({ store });
   env.run();
   const G = env.window.__shellIH;
   assert(findOverlay(env), "gen-1 overlay painted");
@@ -995,18 +1016,23 @@ function settleHome(env) {
 }
 
 // ============================================================================
-// JELA-43 (JELA-41 WS-1+2): input shield + settle-gated dismissal. Both are
-// opt-in localStorage flags, default OFF — every case above this line ran
-// flag-off and pins that the legacy behavior is untouched.
+// JELA-43 (JELA-41 WS-1+2): input shield + settle-gated dismissal. Default ON
+// since JELA-49 (JELA-48 ACCEPT) — every case below this line runs with no
+// flags set and exercises the shipped default; the "…Disabled" kill-switches
+// are pinned by the legacy cases above (stock v1.0.4.0 behavior).
 // ============================================================================
 
-const SHIELD = "jellyfin.shell.instantHomeInputShield";
-const SETTLE = "jellyfin.shell.instantHomeSettleDismiss";
 const CAPKEY = "jellyfin.shell.instantHomeSettleCapMs";
 
-// ---- static contract: flags + new dismiss reasons exist, legacy path kept ----
-assert(body.indexOf(SHIELD) !== -1, "input-shield flag key present");
-assert(body.indexOf(SETTLE) !== -1, "settle-dismiss flag key present");
+// ---- static contract: kill-switch keys + dismiss reasons exist, stock path kept ----
+assert(
+  body.indexOf('!flg("' + SHIELD_OFF + '")') !== -1,
+  "input shield is default ON behind the Disabled kill-switch",
+);
+assert(
+  body.indexOf('!flg("' + SETTLE_OFF + '")') !== -1,
+  "settle dismissal is default ON behind the Disabled kill-switch",
+);
 assert(body.indexOf(CAPKEY) !== -1, "settle-cap tuning key present");
 assert(
   body.indexOf('dismiss("input")') !== -1,
@@ -1042,7 +1068,6 @@ function fakeMO(env) {
 // ---- 17. WS-1 shield: D-pad + Enter swallowed, overlay stays up ---------------
 {
   const store = makeSnapshotStore();
-  store[SHIELD] = "1";
   const env = makeEnv({ store });
   env.run();
   assert(findOverlay(env), "overlay painted");
@@ -1073,7 +1098,7 @@ function fakeMO(env) {
 
 // ---- 19. WS-1 shield stands down when no overlay painted (unauthed) -----------
 {
-  const env = makeEnv({ store: { [SHIELD]: "1" } });
+  const env = makeEnv({ store: {} });
   env.run();
   assert.strictEqual(findOverlay(env), null, "unauthed: no overlay");
   const ev = env.fireKey(37);
@@ -1085,7 +1110,6 @@ function fakeMO(env) {
 // ---- 20. WS-1 shield stands down under a painted Direct-Home grid -------------
 {
   const store = makeSnapshotStore();
-  store[SHIELD] = "1";
   const env = makeEnv({ store });
   env.run();
   env.window.__shellDH = { painted: 1, dismissed: 0 };
@@ -1100,7 +1124,6 @@ function fakeMO(env) {
 {
   for (const code of [461, 27]) {
     const store = makeSnapshotStore();
-    store[SHIELD] = "1";
     const env = makeEnv({ store });
     env.run();
     env.fireKey(code);
@@ -1111,7 +1134,6 @@ function fakeMO(env) {
 // ---- 22. WS-1 moving-target Enter guard after crossfade ------------------------
 {
   const store = makeSnapshotStore();
-  store[SHIELD] = "1";
   const env = makeEnv({ store });
   env.run();
   const G = env.window.__shellIH;
@@ -1148,7 +1170,6 @@ function fakeMO(env) {
 // ---- 23. WS-2 settled dismissal (no MutationObserver: gate degrades open) -----
 {
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   env.run();
   env.setCards([
@@ -1171,7 +1192,6 @@ function fakeMO(env) {
 // ---- 24. WS-2 above-fold mutations hold the overlay; below-fold do not --------
 {
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   const mo = fakeMO(env);
   env.run();
@@ -1208,7 +1228,6 @@ function fakeMO(env) {
 // ---- 25. WS-2 new stylesheets reset the settle clock ---------------------------
 {
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   env.run();
   env.setCards([
@@ -1236,7 +1255,6 @@ function fakeMO(env) {
 {
   // default 15 s
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   env.run(); // no cards ever hydrate
   env.advance(14700);
@@ -1247,7 +1265,6 @@ function fakeMO(env) {
 {
   // tuned down to 5 s
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   store[CAPKEY] = "5000";
   const env = makeEnv({ store });
   env.run();
@@ -1261,7 +1278,6 @@ function fakeMO(env) {
 {
   // attempted tune UP is rejected -> still 15 s
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   store[CAPKEY] = "60000";
   const env = makeEnv({ store });
   env.run();
@@ -1276,7 +1292,6 @@ function fakeMO(env) {
 // ---- 27. WS-2 partial-stall path only fires below 4 cards ----------------------
 {
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   const mo = fakeMO(env);
   env.run();
@@ -1292,7 +1307,6 @@ function fakeMO(env) {
   // >= 4 cards but never settled (constant above-fold churn) must NOT go
   // "partial" at 8 s — it holds to the settle cap.
   const store = makeSnapshotStore();
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   const mo = fakeMO(env);
   env.run();
@@ -1318,8 +1332,6 @@ function fakeMO(env) {
 // ---- 28. WS-1+2 combined: shield holds input the whole settle window -----------
 {
   const store = makeSnapshotStore();
-  store[SHIELD] = "1";
-  store[SETTLE] = "1";
   const env = makeEnv({ store });
   env.run();
   const G = env.window.__shellIH;

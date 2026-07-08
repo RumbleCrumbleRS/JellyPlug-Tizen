@@ -2492,11 +2492,12 @@
       "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
       'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
       'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
-      // JELA-43 opt-in flags (both default OFF) + shared key-eat / rect-key
-      // helpers. capLim() accepts ONLY 1000..15000 ms (CEO condition: the
-      // settle cap starts <= 15 s and is tuned DOWN from WS-0 data, never up).
+      // JELA-49: WS-1+2 default ON (JELA-48 ACCEPT); the "…Disabled" keys are
+      // per-behavior opt-out kill-switches (plan §3 house rule). capLim()
+      // accepts ONLY 1000..15000 ms (CEO condition: the settle cap starts
+      // <= 15 s and is tuned DOWN from WS-0 data, never up).
       'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
-      'var SH=flg("jellyfin.shell.instantHomeInputShield"),SD=flg("jellyfin.shell.instantHomeSettleDismiss");' +
+      'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=15000)return v}catch(_){}return 15000}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +

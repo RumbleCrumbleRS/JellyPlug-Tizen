@@ -3079,10 +3079,12 @@
   // document.write wipes the DOM (getElementById re-entry guard makes the
   // repaint idempotent and free on every other tick).
   //
-  // JELA-43 (JELA-41 WS-1+2, both opt-in, default OFF):
+  // JELA-43 (JELA-41 WS-1+2) — default ON since JELA-49 (JELA-48 ACCEPT);
+  // per-behavior opt-out kill-switches:
   //
-  // WS-1 input shield — localStorage['jellyfin.shell.instantHomeInputShield']
-  // = '1'. While the overlay is painted, keydowns are SWALLOWED (capture
+  // WS-1 input shield — ON unless
+  // localStorage['jellyfin.shell.instantHomeInputShieldDisabled'] = '1'.
+  // While the overlay is painted, keydowns are SWALLOWED (capture
   // phase preventDefault + stop(Immediate)Propagation; G.eaten counts them)
   // instead of dismissing into the still-shifting live page. Back/Return/Esc
   // (10009/461/27) is the mandatory escape hatch: always eaten AND dismisses
@@ -3094,8 +3096,9 @@
   // a late layout shift can never redirect a click onto the wrong card.
   // Pointer/mouse listeners remain forbidden (playback-controls pin).
   //
-  // WS-2 settle-gated dismissal —
-  // localStorage['jellyfin.shell.instantHomeSettleDismiss'] = '1'. Replaces
+  // WS-2 settle-gated dismissal — ON unless
+  // localStorage['jellyfin.shell.instantHomeSettleDismissDisabled'] = '1'.
+  // Replaces
   // the >=4-cards-only "hydrated" dismissal with layout-settled: >= 4
   // above-fold cards AND document.styleSheets.length stable for 1.5 s AND no
   // above-fold DOM mutations (MutationObserver on documentElement, childList
@@ -3105,10 +3108,10 @@
   // <= 15 s), tunable ONLY DOWN via
   // localStorage['jellyfin.shell.instantHomeSettleCapMs'] (1000..15000 ms;
   // anything else falls back to 15000 — never above). The partial-stall path
-  // only fires below 4 cards under this flag (>= 4 unsettled must hold to
-  // settle or cap, never "partial"). Without MutationObserver the mutation
+  // only fires below 4 cards while WS-2 is active (>= 4 unsettled must hold
+  // to settle or cap, never "partial"). Without MutationObserver the mutation
   // gate degrades open (cards + stylesheet stability still gate). The 90 s
-  // absolute cap stays as the flag-off backstop.
+  // absolute cap stays as the kill-switched backstop.
   //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
   // #/home with >= 5 above-fold cards stable across two consecutive ticks,
@@ -3140,11 +3143,12 @@
       "function el0(){try{return document.getElementById(OID)}catch(_){return null}}" +
       'function srv(){try{return localStorage.getItem("jellyfin.shell.serverUrl")||""}catch(_){return""}}' +
       'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
-      // JELA-43 opt-in flags (both default OFF) + shared key-eat / rect-key
-      // helpers. capLim() accepts ONLY 1000..15000 ms (CEO condition: the
-      // settle cap starts <= 15 s and is tuned DOWN from WS-0 data, never up).
+      // JELA-49: WS-1+2 default ON (JELA-48 ACCEPT); the "…Disabled" keys are
+      // per-behavior opt-out kill-switches (plan §3 house rule). capLim()
+      // accepts ONLY 1000..15000 ms (CEO condition: the settle cap starts
+      // <= 15 s and is tuned DOWN from WS-0 data, never up).
       'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
-      'var SH=flg("jellyfin.shell.instantHomeInputShield"),SD=flg("jellyfin.shell.instantHomeSettleDismiss");' +
+      'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=15000)return v}catch(_){}return 15000}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
