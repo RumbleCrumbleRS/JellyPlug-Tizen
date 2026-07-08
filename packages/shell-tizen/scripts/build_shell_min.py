@@ -78,6 +78,11 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # JEL-647 raised it 147456 -> 163840 (160 KiB): the instant-home snapshot
 # overlay (instantHomeBody paint/dismiss/capture, mirrored in boot-shell)
 # grew the minified base to ~144.8 KiB, 852 B over the old cap.
+# JELA-33 raised it 163840 -> 180224 (176 KiB): the Direct-Home render
+# prototype + D-pad nav (JELA-29/33) and the post-swap listener rebinds
+# (JELA-33 PR #82, JELA-37 PR #84, both mirrored in boot-shell) grew the
+# minified base to ~158.4 KiB, leaving 1676 B — under SOFT_HEADROOM, so
+# the build had been warning since the JELA-37 lockstep rebuild.
 # JEL-625 raised it 131072 -> 147456 (144 KiB) and moved the breadcrumb
 # manifest out-of-band (shell.jel-history.txt): the committed blob had crept
 # to 3 B under the old cap, so the next non-trivial shell change failed the
@@ -94,7 +99,7 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # code, leaving >= SOFT_HEADROOM of room after the raise; never absorb the
 # bump silently in an unrelated change. The build warns (does not fail) when
 # headroom drops below SOFT_HEADROOM so the wall is visible one ticket early.
-HARD_CAP = 163840
+HARD_CAP = 180224
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
