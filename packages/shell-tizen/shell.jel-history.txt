@@ -7,6 +7,38 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 
 *JEL-3 Jellyfin Tizen browser-shell prototype , milestone M1).
 *JEL-2 Architecture (per roadmap section 3
+*JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
+*JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
+*JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
+*JEL-139 Redaction / egress , WS-F folded into JELA-30): the payload
+*JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
+*JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
+*JEL-178 caching honouring public.js's ?v= config-version query.
+*JEL-197 Idempotency : if the document already references a public.js
+*JEL-196 the cutover: the two carry independent content today, and on
+*JEL-204 JEL-203 parent audit): the delivery route is overridable via
+*JEL-618 channel body cache. The channel is the aggregate of EVERY
+*JEL-618 bodies > 256 KiB — so pre- the TV re-downloaded AND re-babel
+*JEL-618 cache = pre- refetch-every-boot behaviour) and only while
+*JEL-178 up: the one-boot-lag contract widens to a bounded TTL for
+*JEL-618 a fresh cached channel body (already transpiled + gated on
+*JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
+*JEL-178 query-bearing: transpileLegacyScripts then routes it through
+*JEL-216 an active channel on a legacy engine used to GUARANTEE a
+*JEL-216 Babel in the slow path, neutralize fail-safe unchanged
+*JEL-620 the channel body routes through the content-addressed
+*JEL-178 JEL-618 JEL-1984 tx-cache /, so honor the unused-streak
+*JEL-621 unless the pre-lowered drop manifest already resolved OK —
+*JEL-554 v32): tx cache constants shared with the in-document seed
+*JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
+*JEL-1034 v53): persistent flag — set true on any boot that triggered
+*JEL-1984 sibling counter to BABEL_NEEDED_KEY. Incremented at the end
+*JEL-554 v35): normalize cache key by stripping the per-load cache-bu
+*JEL-178 stripping the ENTIRE query — but that over-corrected : plugi
+*JEL-26 lockstep) — both run on the same localStorage tx-cache.
+*JEL-619 JEL-178 version-keyed plugin FETCH caching. 's per-boot &__sb=
+*JEL-178 network; ANY token change still misses -> busted fetch (the
+*JEL-619 boot stays a fresh busted read (pre- behaviour).
 *JEL-557 capture shell.js IIFE entry timestamp so the diag HUD can re
 *JEL-617 boot-phase ring. Persists per-boot launch→connect→login→home
 *JEL-616 rehaul can be read on-device without host tooling (Q60R bloc
