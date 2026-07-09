@@ -117,6 +117,7 @@ const CREDS = JSON.stringify({
 // to pin that the kill-switched path still IS the stock behavior.
 const SHIELD_OFF = "jellyfin.shell.instantHomeInputShieldDisabled";
 const SETTLE_OFF = "jellyfin.shell.instantHomeSettleDismissDisabled";
+const HOLD_OFF = "jellyfin.shell.instantHomeHoldCoverDisabled";
 
 function makeSnapshotStore(opts) {
   opts = opts || {};
@@ -492,13 +493,34 @@ function visibleCard(env) {
   assert.strictEqual(env.window.__shellIH.why, "route");
 }
 
-// ---- 6b. JELA-33 A3 fusion: live Direct-Home grid replaces the crossfade ---------
-// When the (shell.js-only, opt-in) Direct-Home grid paints, the snapshot hands
-// off to it instead of waiting for SPA hydration. In the baked boot-shell
-// __shellDH never exists, so the branch is a structural no-op there — this
-// case pins both sides of that contract.
+// ---- 6b. JELA-54 hold-cover (default): NO "dh" handoff — the cover holds ---------
+// User-decided default (JELA-52 ask 00d36d8f): the snapshot cover holds to the
+// settled reveal instead of handing off to the Direct-Home grid. Even with a
+// painted grid faked in, the "dh" branch must be skipped while hold-cover is
+// on (in a real hold-cover boot directHomeBody stands down and never paints).
 {
   const env = makeEnv({ store: makeSnapshotStore() });
+  env.run();
+  assert(findOverlay(env), "snapshot painted");
+  env.window.__shellDH = { painted: 1, dismissed: 0 };
+  env.advance(1500);
+  assert.strictEqual(
+    env.window.__shellIH.dismissed,
+    0,
+    "hold-cover: no dh handoff, the cover holds",
+  );
+  assert(findOverlay(env), "snapshot still up under hold-cover");
+}
+
+// ---- 6c. JELA-54 opt-out restores the JELA-33 A3 fusion handoff ------------------
+// With jellyfin.shell.instantHomeHoldCoverDisabled=1 the pre-JELA-54 contract
+// is byte-for-byte back: the snapshot hands off to the painted grid via "dh".
+// In the baked boot-shell __shellDH never exists, so the branch is a
+// structural no-op there — this case pins both sides of that contract.
+{
+  const store = makeSnapshotStore();
+  store[HOLD_OFF] = "1";
+  const env = makeEnv({ store });
   env.run();
   assert(findOverlay(env), "snapshot painted");
   env.window.__shellDH = { painted: 1, dismissed: 0 };
@@ -1108,8 +1130,12 @@ function fakeMO(env) {
 }
 
 // ---- 20. WS-1 shield stands down under a painted Direct-Home grid -------------
+// (JELA-54: a painted grid only exists when hold-cover is opted out — under
+// the hold-cover default directHomeBody stands down and never paints, so the
+// stand-down is inert there and the shield owns input for the full hold.)
 {
   const store = makeSnapshotStore();
+  store[HOLD_OFF] = "1";
   const env = makeEnv({ store });
   env.run();
   env.window.__shellDH = { painted: 1, dismissed: 0 };
