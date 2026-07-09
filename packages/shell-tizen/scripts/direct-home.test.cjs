@@ -403,10 +403,15 @@ function visibleCard(env) {
   return n;
 }
 function authedStore() {
+  // JELA-54: hold-cover (default ON) stands the grid down entirely, so every
+  // live-grid case below runs in the opted-out state — the exact state a
+  // fielded TV is in after jellyfin.shell.instantHomeHoldCoverDisabled=1.
+  // Case 1b pins the hold-cover default itself.
   return {
     jellyfin_credentials: CREDS,
     "jellyfin.shell.serverUrl": "http://srv",
     "jellyfin.shell.directHome": "1",
+    "jellyfin.shell.instantHomeHoldCoverDisabled": "1",
   };
 }
 
@@ -423,6 +428,44 @@ function authedStore() {
   assert.strictEqual(env.requests.length, 0, "no fetch when flag absent");
   assert.strictEqual(env.timers.size, 0, "no timers armed when flag absent");
   assert.strictEqual(env.window.__shellDH, undefined, "no state when off");
+}
+
+// ---- 1b. JELA-54 hold-cover default: grid stands down even when opted in ------
+// User-decided default (JELA-52 ask 00d36d8f): with Instant-Home active and
+// hold-cover not opted out, the snapshot cover holds to the settled reveal —
+// the grid (which would paint ABOVE the cover) must never fetch, paint, or
+// bind input. __shellDHHeld is the QA marker for this stand-down.
+{
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+      "jellyfin.shell.directHome": "1",
+    },
+  });
+  env.run();
+  assert.strictEqual(overlayOf(env), null, "no overlay under hold-cover");
+  assert.strictEqual(env.requests.length, 0, "no fetch under hold-cover");
+  assert.strictEqual(env.timers.size, 0, "no timers under hold-cover");
+  assert.strictEqual(env.window.__shellDH, undefined, "no grid state");
+  assert.strictEqual(env.window.__shellDHHeld, 1, "stand-down marker set");
+}
+
+// ---- 1c. JELA-54: disabling Instant-Home entirely also frees the grid ---------
+// With no cover to hold (instantHomeDisabled=1) the grid keeps its pre-JELA-54
+// behavior even without the hold-cover opt-out.
+{
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+      "jellyfin.shell.directHome": "1",
+      "jellyfin.shell.instantHomeDisabled": "1",
+    },
+  });
+  env.run();
+  assert(env.requests.length > 0, "grid fetches when Instant-Home is off");
+  assert.strictEqual(env.window.__shellDHHeld, undefined, "no stand-down");
 }
 
 // ---- 2. happy path -----------------------------------------------------------

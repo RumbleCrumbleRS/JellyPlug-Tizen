@@ -3090,6 +3090,8 @@
   // (10009/461/27) is the mandatory escape hatch: always eaten AND dismisses
   // immediately (G.backEsc). If the Direct-Home grid is painted the shield
   // stands down (the grid owns input; the watch tick hands off via "dh").
+  // JELA-54: with hold-cover on (default) the grid never paints and the "dh"
+  // handoff is skipped, so the shield owns input for the full covered hold.
   // After any dismissal a 10 s moving-target Enter guard arms: a 200 ms
   // poller tracks document.activeElement's rect, and Enter (13) is eaten +
   // re-armed while that rect changed within the last 400 ms (G.entHeld), so
@@ -3147,8 +3149,14 @@
       // per-behavior opt-out kill-switches (plan §3 house rule). capLim()
       // accepts ONLY 1000..15000 ms (CEO condition: the settle cap starts
       // <= 15 s and is tuned DOWN from WS-0 data, never up).
+      // JELA-54 (user decision, JELA-52 ask 00d36d8f): HC = hold-cover. The
+      // snapshot cover holds to the settled reveal (Netflix-splash) instead of
+      // handing off to the Direct-Home grid mid-boot; the "dh" dismissal below
+      // is skipped while HC is on (directHomeBody also stands down — see
+      // __shellDHHeld there). Reveal timing is unchanged: settled or the
+      // <= 15 s settlecap; Back/Return/Esc stays the mandatory escape hatch.
       'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
-      'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled");' +
+      'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=15000)return v}catch(_){}return 15000}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
@@ -3282,7 +3290,9 @@
       // crossfade — the snapshot hands off the moment the grid paints. In the
       // baked boot-shell __shellDH never exists, so this is a structural no-op
       // there (kept byte-identical for the cross-shell mirror guard).
-      'if(W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed){dismiss("dh");clearInterval(wIv);return}' +
+      // JELA-54: skipped while HC (hold-cover) is on — the cover holds to the
+      // settled reveal instead of the early "dh" handoff.
+      'if(!HC&&W.__shellDH&&W.__shellDH.painted&&!W.__shellDH.dismissed){dismiss("dh");clearInterval(wIv);return}' +
       "paint();" +
       "var n=folds();" +
       // JELA-43 (WS-2): settle-gated dismissal replaces >=4-cards-only when
@@ -3638,6 +3648,13 @@
   // dismisses the snapshot with why:"dh" the moment G.painted is set — the
   // static crossfade-to-SPA is replaced by snapshot->live-grid->SPA.
   //
+  // JELA-54 (user decision, JELA-52 ask 00d36d8f): the A3 flow above is now
+  // the OPT-OUT path. With hold-cover on (default) this body stands down
+  // right after the directHome opt-in gate (window.__shellDHHeld=1) and the
+  // boot is snapshot->settled-SPA-reveal; set
+  // localStorage['jellyfin.shell.instantHomeHoldCoverDisabled']='1' (or
+  // disable Instant-Home) to restore the grid.
+  //
   // Timing readout (no CDP needed): launch->first-real-card is recorded as
   // window.__shellDH.firstCardMs AND as the "dhcard" boot-phase (persisted in
   // the jellyfin.shell.bootPhases ring), so a >=3-boot A1 measurement is
@@ -3668,6 +3685,14 @@
     return (
       "(function(){try{" +
       'try{if(localStorage.getItem("jellyfin.shell.directHome")!=="1")return}catch(_){return}' +
+      // JELA-54 hold-cover: while the Instant-Home cover is active AND
+      // hold-cover is on (both default states), the grid stands down entirely —
+      // it paints ABOVE the snapshot (z 2147483100 > 2147483000), so merely
+      // skipping the "dh" dismissal would not hold the cover visually, and a
+      // covered grid must never own input. __shellDHHeld is the QA marker.
+      // Grid behavior is fully restored by either opt-out
+      // (instantHomeDisabled=1 or instantHomeHoldCoverDisabled=1).
+      'try{if(localStorage.getItem("jellyfin.shell.instantHomeDisabled")!=="1"&&localStorage.getItem("jellyfin.shell.instantHomeHoldCoverDisabled")!=="1"){window.__shellDHHeld=1;return}}catch(_){}' +
       'var W=window,OID="__shell_direct_home";' +
       "var G=W.__shellDH;" +
       'if(!G)G=W.__shellDH={gen:0,enabled:1,fetched:0,painted:0,fetchMs:0,firstCardMs:0,navReadyMs:0,cards:0,sections:0,err:0,dismissed:0,why:"",dismissMs:0,rows:[],http:{},grid:[],shown:0,fadeDone:0,focusR:-1,focusC:0,navved:0,opened:0,openId:"",openMs:0,playIntent:0,played:0};' +

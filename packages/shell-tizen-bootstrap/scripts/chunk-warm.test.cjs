@@ -548,8 +548,13 @@ const CSS_MAP = { home: "ddd" };
   }
 
   // ---- 5. Direct-Home handoff: dismiss("dh") keeps the cover up -------------
+  // (JELA-54: the "dh" handoff only exists with hold-cover opted out — under
+  // the default the cover holds to the settled reveal, so this case seeds the
+  // opt-out to keep pinning the warm-under-grid contract.)
   {
-    const env = makeEnv({});
+    const env = makeEnv({
+      store: { "jellyfin.shell.instantHomeHoldCoverDisabled": "1" },
+    });
     env.window.__shellDH = { painted: 1, dismissed: 0 };
     env.run();
     await env.advance(1400); // watch tick dismisses "dh" before webpackChunk
