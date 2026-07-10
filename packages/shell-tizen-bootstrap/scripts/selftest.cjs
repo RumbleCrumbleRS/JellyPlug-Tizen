@@ -20,10 +20,19 @@ const SOURCE = match[1];
 
 function fail(msg) { console.error('FAIL:', msg); process.exit(1); }
 
-function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, navigatorUA, ensureBabelSpy, extraStore }) {
+function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, navigatorUA, ensureBabelSpy, extraStore, fetchBodies }) {
     const log = { appended: [], formAttached: false, errorShown: null };
+    const sandboxRef = {}; // filled at the bottom so inline exec sees the live sandbox
     const head = { tagName: 'HEAD', appendChild(node) {
-        log.appended.push({ tag: node.tagName, src: node.src });
+        log.appended.push({ tag: node.tagName, src: node.src,
+                            inline: node.tagName === 'SCRIPT' && !node.src && typeof node.text === 'string' });
+        // JELA-66: an inline <script> (script.text set, no src) executes
+        // synchronously during appendChild in a real browser — mirror that
+        // so the LS-shell-cache scenarios can observe execution.
+        if (node.tagName === 'SCRIPT' && !node.src && typeof node.text === 'string') {
+            vm.runInContext(node.text, sandboxRef.sandbox);
+            return;
+        }
         setImmediate(function(){
             if (node.tagName !== 'SCRIPT') return;
             if (scriptErrors && scriptErrors[node.src]) {
@@ -79,13 +88,24 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         store: Object.assign({ 'jellyfin.shell.serverUrl': savedUrl }, extraStore || {}),
         getItem(k){ return Object.prototype.hasOwnProperty.call(this.store, k) ? this.store[k] : null; },
         setItem(k, v){ this.store[k] = String(v); },
+        removeItem(k){ delete this.store[k]; },
     };
     if (savedUrl == null) delete localStorage.store['jellyfin.shell.serverUrl'];
 
     // JEL-125: prime-path observability — record prefetch URLs and eager
     // babel kicks issued by primeWebBoot.
     log.fetched = [];
-    function fakeFetch(url){ log.fetched.push(url); return new Promise(function(){}); }
+    // JELA-66: URLs present in `fetchBodies` resolve with real text (the
+    // shell byte-store path); everything else stays a forever-pending
+    // promise (the prefetch prime path never consumes responses here).
+    function fakeFetch(url){
+        log.fetched.push(url);
+        if (fetchBodies && Object.prototype.hasOwnProperty.call(fetchBodies, url)) {
+            const body = fetchBodies[url];
+            return Promise.resolve({ ok: true, text: function(){ return Promise.resolve(body); } });
+        }
+        return new Promise(function(){});
+    }
     const win = { __qaMarks: null };
     if (ensureBabelSpy) {
         log.babelKicks = 0;
@@ -128,7 +148,22 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         Function,
     };
     if (navigatorUA) sandbox.navigator = { userAgent: navigatorUA };
+    sandboxRef.sandbox = sandbox; // JELA-66: let head.appendChild run inline scripts in-context
     return { log, sandbox };
+}
+
+// JELA-66: mirror of the bootloader's hsbFnv (itself the shell's txFnv1a
+// recipe) so scenarios can build integrity-valid shell-body records.
+function fnv(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h.toString(36);
+}
+function shellBodyRec(sha, url, body) {
+    return JSON.stringify({ v: 1, sha, url, len: body.length, h: fnv(body), ts: 1, body });
 }
 
 async function runScenario(opts) {
@@ -478,6 +513,123 @@ async function runScenario(opts) {
             fail('scenario 17: cold-path manifest 200 must persist hash+shellUrl for the next boot, got '
                 + store2['jellyfin.shell.hsbCachedHash'] + ' / ' + store2['jellyfin.shell.hsbCachedShellUrl']);
         console.log('OK 17: cached shellUrl honored warm; cold 200 persists hash+shellUrl');
+    }
+
+    // JELA-66 scenarios: hosted-shell byte cache. When the cached manifest
+    // sha is unchanged and integrity-valid shell bytes are persisted, the
+    // bootloader must execute them inline — ZERO network script loads —
+    // while the manifest still revalidates in the background. Every
+    // degraded state (stale sha, corrupt record, kill switch) must fall
+    // back to the JEL-622 pinned network load unchanged.
+
+    // Scenario 18: warm boot + valid body record → inline execution, no
+    // network script, background revalidation still persists a new hash.
+    {
+        const body = 'window.__testShellRan = (window.__testShellRan || 0) + 1;';
+        const manifest = JSON.stringify({ version: '2.1.0', sha256: 'newhash', shellUrl: null });
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: manifest,
+            manifestStatus: 200,
+            extraStore: {
+                'jellyfin.shell.hsbCachedHash': 'cafebabe',
+                'jellyfin.shell.hsbShellBody':
+                    shellBodyRec('cafebabe', 'https://srv.example/shell/shell.min.js?v=cafebabe', body),
+            },
+        });
+        const netScripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT' && x.src; });
+        const inlineScripts = r.log.appended.filter(function(x){ return x.inline; });
+        if (netScripts.length !== 0)
+            fail('scenario 18: LS hit must append NO network script, got '
+                + JSON.stringify(netScripts.map(function(s){ return s.src; })));
+        if (inlineScripts.length !== 1)
+            fail('scenario 18: expected exactly 1 inline script, got ' + inlineScripts.length);
+        if (r.sandbox.window.__testShellRan !== 1)
+            fail('scenario 18: cached shell body did not execute');
+        if (!r.sandbox.window.__hsbShellLs || r.sandbox.window.__hsbShellLs.st !== 'hit')
+            fail('scenario 18: __hsbShellLs.st should be "hit", got '
+                + JSON.stringify(r.sandbox.window.__hsbShellLs));
+        if (r.sandbox.localStorage.store['jellyfin.shell.hsbCachedHash'] !== 'newhash')
+            fail('scenario 18: background revalidation must still store the new hash');
+        console.log('OK 18: LS-cached shell executes inline, zero network, revalidation intact');
+    }
+
+    // Scenario 19: warm boot, record sha ≠ cached sha (new build adopted
+    // last boot) → pinned network load, then the background store fetches
+    // the pinned URL and persists an integrity-valid record for NEXT boot.
+    {
+        const pinned = 'https://srv.example/shell/shell.min.js?v=freshsha';
+        const newBody = 'window.__hsbNewShell=1;/*' + 'x'.repeat(1200) + '*/';
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            scriptOk: { [pinned]: true },
+            fetchBodies: { [pinned]: newBody },
+            extraStore: {
+                'jellyfin.shell.hsbCachedHash': 'freshsha',
+                'jellyfin.shell.hsbShellBody':
+                    shellBodyRec('oldsha', 'https://srv.example/shell/shell.min.js?v=oldsha', 'window.__stale=1;'),
+            },
+        });
+        const netScripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT' && x.src; });
+        if (netScripts.length !== 1 || netScripts[0].src !== pinned)
+            fail('scenario 19: stale record must fall back to the pinned network load, got '
+                + JSON.stringify(netScripts.map(function(s){ return s.src; })));
+        if (r.sandbox.window.__stale)
+            fail('scenario 19: stale-sha body must NOT execute');
+        let rec = null;
+        try { rec = JSON.parse(r.sandbox.localStorage.store['jellyfin.shell.hsbShellBody']); } catch(_) {}
+        if (!rec || rec.sha !== 'freshsha' || rec.body !== newBody || rec.h !== fnv(newBody))
+            fail('scenario 19: background store must persist the new body keyed by freshsha, got '
+                + JSON.stringify(rec && { sha: rec.sha, len: rec.len }));
+        console.log('OK 19: stale record → network load; new bytes stored for next boot');
+    }
+
+    // Scenario 20: kill switch → network path even with a valid record.
+    {
+        const body = 'window.__testShellRan = 1;';
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            extraStore: {
+                'jellyfin.shell.hsbCachedHash': 'cafebabe',
+                'jellyfin.shell.hsbShellLsDisabled': '1',
+                'jellyfin.shell.hsbShellBody':
+                    shellBodyRec('cafebabe', 'https://srv.example/shell/shell.min.js?v=cafebabe', body),
+            },
+        });
+        const netScripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT' && x.src; });
+        if (netScripts.length !== 1
+            || netScripts[0].src !== 'https://srv.example/shell/shell.min.js?v=cafebabe')
+            fail('scenario 20: kill switch must force the pinned network load, got '
+                + JSON.stringify(netScripts.map(function(s){ return s.src; })));
+        if (r.sandbox.window.__testShellRan)
+            fail('scenario 20: kill switch must not execute the cached body');
+        console.log('OK 20: hsbShellLsDisabled=1 → pinned network load, no LS execution');
+    }
+
+    // Scenario 21: corrupt record (checksum mismatch) → record dropped +
+    // pinned network load. A flipped byte must never execute.
+    {
+        const body = 'window.__testShellRan = 1;';
+        const rec = JSON.parse(shellBodyRec('cafebabe', 'https://srv.example/shell/shell.min.js?v=cafebabe', body));
+        rec.body = 'window.__corrupt = 1;'; // body no longer matches len/h
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            extraStore: {
+                'jellyfin.shell.hsbCachedHash': 'cafebabe',
+                'jellyfin.shell.hsbShellBody': JSON.stringify(rec),
+            },
+        });
+        const netScripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT' && x.src; });
+        if (netScripts.length !== 1
+            || netScripts[0].src !== 'https://srv.example/shell/shell.min.js?v=cafebabe')
+            fail('scenario 21: corrupt record must fall back to the pinned network load, got '
+                + JSON.stringify(netScripts.map(function(s){ return s.src; })));
+        if (r.sandbox.window.__corrupt)
+            fail('scenario 21: corrupt body must NOT execute');
+        console.log('OK 21: corrupt record dropped → pinned network load');
     }
 
     console.log('ALL SCENARIOS PASS');
