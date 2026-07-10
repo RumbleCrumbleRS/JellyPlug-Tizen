@@ -36,7 +36,7 @@
  *   - JELA-43 WS-2 settle-gated dismissal (default ON since JELA-49;
  *     kill-switch jellyfin.shell.instantHomeSettleDismissDisabled=1):
  *     >= 4 cards + 1.5 s stylesheet + above-fold-mutation quiet ->
- *     "settled"; hard hold cap 15 s ("settlecap"), tunable down only;
+ *     "settled"; hard hold cap 22 s ("settlecap", JELA-56), tunable down only;
  *     sub-4 partial stall retained
  *   - kill-switched boots reproduce the stock v1.0.4.0 dismissal paths
  *     (cases 1-16 pin "hydrated"/"input"/90 s "cap" under the switches)
@@ -1063,12 +1063,12 @@ assert(
 assert(body.indexOf('dismiss("back")') !== -1, "Back escape hatch present");
 assert(body.indexOf('dismiss("settled")') !== -1, "settled dismissal present");
 assert(body.indexOf('dismiss("settlecap")') !== -1, "settle hard cap present");
-// CEO condition #1: the cap literal is 15000 and capLim rejects anything
+// JELA-56 CEO decision: the cap literal is 22000 and capLim rejects anything
 // above it (tunable DOWN only).
 assert(
-  body.indexOf("v>=1000&&v<=15000") !== -1 &&
-    body.indexOf("return 15000") !== -1,
-  "settle cap clamps to <= 15000 ms (never tunable up)",
+  body.indexOf("v>=1000&&v<=22000") !== -1 &&
+    body.indexOf("return 22000") !== -1,
+  "settle cap clamps to <= 22000 ms (never tunable up)",
 );
 
 // Fake MutationObserver the body picks up via window.MutationObserver.
@@ -1277,16 +1277,16 @@ function fakeMO(env) {
   assert.strictEqual(G.why, "settled");
 }
 
-// ---- 26. WS-2 hard cap: 15 s default, tunable DOWN, clamped never-up -----------
+// ---- 26. WS-2 hard cap: 22 s default, tunable DOWN, clamped never-up -----------
 {
-  // default 15 s
+  // default 22 s (JELA-56)
   const store = makeSnapshotStore();
   const env = makeEnv({ store });
   env.run(); // no cards ever hydrate
-  env.advance(14700);
-  assert.strictEqual(env.window.__shellIH.dismissed, 0, "held at 14.7 s");
-  env.advance(15400);
-  assert.strictEqual(env.window.__shellIH.why, "settlecap", "capped at 15 s");
+  env.advance(21700);
+  assert.strictEqual(env.window.__shellIH.dismissed, 0, "held at 21.7 s");
+  env.advance(22400);
+  assert.strictEqual(env.window.__shellIH.why, "settlecap", "capped at 22 s");
 }
 {
   // tuned down to 5 s
@@ -1302,16 +1302,16 @@ function fakeMO(env) {
   );
 }
 {
-  // attempted tune UP is rejected -> still 15 s
+  // attempted tune UP is rejected -> still 22 s
   const store = makeSnapshotStore();
   store[CAPKEY] = "60000";
   const env = makeEnv({ store });
   env.run();
-  env.advance(15400);
+  env.advance(22400);
   assert.strictEqual(
     env.window.__shellIH.why,
     "settlecap",
-    "cap can never be tuned above 15 s",
+    "cap can never be tuned above 22 s",
   );
 }
 
@@ -1343,11 +1343,11 @@ function fakeMO(env) {
     visibleCard(env),
   ]);
   const churn = visibleCard(env);
-  for (let t = 1000; t <= 15000; t += 1000) {
+  for (let t = 1000; t <= 22000; t += 1000) {
     env.advance(t);
     mo.cb([{ target: churn }]);
   }
-  env.advance(16000);
+  env.advance(23000);
   assert.strictEqual(
     env.window.__shellIH.why,
     "settlecap",
