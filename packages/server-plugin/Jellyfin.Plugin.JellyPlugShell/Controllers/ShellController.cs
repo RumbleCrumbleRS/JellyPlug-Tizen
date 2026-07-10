@@ -9,11 +9,17 @@ namespace Jellyfin.Plugin.JellyPlugShell.Controllers;
 /// Root-level /shell/ routes for the Hosted Shell Bootstrap. Root-level (not
 /// /Plugins/...) because every fielded bootstrap WGT hardcodes
 /// ${server}/shell/ — precedent for plugin root routes on 10.11:
-/// JellyfinEnhanced, PluginPages. Anonymous by design: the TV fetches these
-/// before any login, exactly like /web/ statics.
+/// JellyfinEnhanced, PluginPages. The TV-facing routes are anonymous by
+/// design: the TV fetches these before any login, exactly like /web/ statics.
+/// Auth shape is fail-closed: the class default is RequiresElevation and each
+/// TV-facing endpoint opts out with [AllowAnonymous] (method-level
+/// AllowAnonymous legitimately overrides class-level Authorize). The previous
+/// class-level [AllowAnonymous] did the reverse — it silently disabled the
+/// method-level [Authorize] on diag/report (ASP0026) — and a future endpoint
+/// added without any attribute would have shipped anonymous.
 /// </summary>
 [ApiController]
-[AllowAnonymous]
+[Authorize(Policy = "RequiresElevation")]
 [Route("shell")]
 public class ShellController : ControllerBase
 {
@@ -41,6 +47,7 @@ public class ShellController : ControllerBase
     /// the fingerprint is unavailable, in which case the legacy static bytes
     /// are served verbatim (today's behavior, both compat directions free).
     /// </summary>
+    [AllowAnonymous]
     [HttpGet("manifest.json")]
     public IActionResult GetManifest()
     {
@@ -59,6 +66,7 @@ public class ShellController : ControllerBase
         return File(_drop.ManifestJson, "application/json");
     }
 
+    [AllowAnonymous]
     [HttpGet("shell.min.js")]
     public IActionResult GetShell()
     {
@@ -68,6 +76,7 @@ public class ShellController : ControllerBase
         return File(_drop.ShellBytes, "application/javascript");
     }
 
+    [AllowAnonymous]
     [HttpGet("babel.min.js")]
     public IActionResult GetBabel()
     {
@@ -75,6 +84,7 @@ public class ShellController : ControllerBase
         return File(_drop.BabelBytes, "application/javascript");
     }
 
+    [AllowAnonymous]
     [HttpGet("tx-manifest.json")]
     public IActionResult GetTxManifest()
     {
@@ -87,6 +97,7 @@ public class ShellController : ControllerBase
         return PhysicalFile(_drop.TxManifestPath, "application/json");
     }
 
+    [AllowAnonymous]
     [HttpGet("tx/{hash}.js")]
     public IActionResult GetTxBody([FromRoute] string hash)
     {
@@ -119,6 +130,7 @@ public class ShellController : ControllerBase
     /// a widget origin can post without tripping a CORS preflight; the body is
     /// parsed as JSON regardless of the declared content type.
     /// </summary>
+    [AllowAnonymous]
     [HttpPost("diag")]
     [Consumes("application/json", "text/plain")]
     public async Task<IActionResult> PostDiag()
@@ -168,6 +180,45 @@ public class ShellController : ControllerBase
         Response.Headers.CacheControl = "no-store";
         return Ok(new { ok = true, accepted });
     }
+
+    /// <summary>
+    /// JELA-62: current server config fingerprint for the plugin settings
+    /// page. Admin-only — the anonymous manifest already carries the epoch,
+    /// but this view also works while the DisableConfigFingerprint kill
+    /// switch is on (the operator can still inspect the hash the manifest is
+    /// withholding) and reports the switch state itself.
+    /// </summary>
+    [HttpGet("fingerprint")]
+    [Authorize(Policy = "RequiresElevation")]
+    public IActionResult GetFingerprint()
+    {
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        Response.Headers.CacheControl = "no-store";
+        return FingerprintJson(config, _fingerprint.TryGetFingerprint(config));
+    }
+
+    /// <summary>
+    /// JELA-62: force a full re-hash now (the settings page "Rehash now"
+    /// button) — same operation the scheduled ConfigRehashTask runs. Returns
+    /// the freshly computed fingerprint.
+    /// </summary>
+    [HttpPost("fingerprint/rehash")]
+    [Authorize(Policy = "RequiresElevation")]
+    public IActionResult PostFingerprintRehash()
+    {
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        Response.Headers.CacheControl = "no-store";
+        return FingerprintJson(config, _fingerprint.Rehash(config, HttpContext.RequestAborted));
+    }
+
+    private static JsonResult FingerprintJson(PluginConfiguration config, ConfigFingerprint? fingerprint)
+        => new(new
+        {
+            enabled = !config.DisableConfigFingerprint,
+            available = fingerprint != null,
+            epoch = fingerprint?.Epoch,
+            components = fingerprint?.ComponentsDictionary(),
+        });
 
     /// <summary>
     /// JELA-30 (WS-C): read-side view over the aggregated rings — the boot

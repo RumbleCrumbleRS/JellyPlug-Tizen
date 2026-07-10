@@ -73,13 +73,7 @@ public class ShellDropService
         var manifest = new Dictionary<string, object?>(_baseManifest)
         {
             ["configEpoch"] = fingerprint.Epoch,
-            ["components"] = new Dictionary<string, string>
-            {
-                ["web"] = fingerprint.Web,
-                ["shell"] = fingerprint.Shell,
-                ["scripts"] = fingerprint.Scripts,
-                ["branding"] = fingerprint.Branding,
-            },
+            ["components"] = fingerprint.ComponentsDictionary(),
         };
         return JsonSerializer.SerializeToUtf8Bytes(manifest);
     }
