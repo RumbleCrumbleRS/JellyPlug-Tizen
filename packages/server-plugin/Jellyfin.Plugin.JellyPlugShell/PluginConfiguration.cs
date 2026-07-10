@@ -37,6 +37,32 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DisableDiagIngest { get; set; }
 
     /// <summary>
+    /// JELA-58 (JELA-57 WS-1) server-side kill switch: when true,
+    /// /shell/manifest.json omits configEpoch/components entirely and serves
+    /// the exact legacy bytes — every TV falls back to today's revalidation
+    /// behavior regardless of what it opted into. Default false: the fields
+    /// are additive and old TVs ignore them, so serving them is always safe;
+    /// rollout gating lives on the TV (JELA-59).
+    /// </summary>
+    public bool DisableConfigFingerprint { get; set; }
+
+    /// <summary>
+    /// JELA-58: newline-separated case-insensitive glob patterns selecting
+    /// which injector-style plugins feed the `scripts` fingerprint group.
+    /// Matched against file names in the plugin-configurations dir and
+    /// folder names in the plugins dir. Defaults cover the fielded stack
+    /// (JS-Injector snippets/config + JellyfinEnhanced user-script plugin).
+    /// </summary>
+    public string ScriptFingerprintPatterns { get; set; } = "*injector*\n*enhanced*";
+
+    /// <summary>
+    /// JELA-58: newline-separated extra absolute files/directories to fold
+    /// into the `scripts` fingerprint group — e.g. an on-disk user-script a
+    /// snippet loads that no pattern above covers. Empty by default.
+    /// </summary>
+    public string ExtraFingerprintPaths { get; set; } = string.Empty;
+
+    /// <summary>
     /// JELA-30: cap on retained boot-ring records in the diag store
     /// (diag/rings.ndjson under the server data dir). Oldest rings are pruned
     /// once the store grows past this, bounding disk and a hostile TV's ability

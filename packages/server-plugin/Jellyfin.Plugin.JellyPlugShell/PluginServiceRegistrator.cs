@@ -11,5 +11,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ShellDropService>();
         serviceCollection.AddSingleton<TxDropBuilder>();
         serviceCollection.AddSingleton<DiagIngestService>();
+        serviceCollection.AddSingleton<ConfigFingerprintService>();
     }
 }

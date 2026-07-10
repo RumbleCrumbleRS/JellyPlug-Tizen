@@ -26,22 +26,26 @@ public class ShellDropService
             ReadResource("JellyPlugShell.Resources.babel-transform.min.js"));
 
         ShellSha256 = Sha256Hex(ShellBytes);
+        BabelSha256 = Sha256Hex(BabelBytes);
         var shellVersion = ExtractShellVersion(Encoding.UTF8.GetString(ShellBytes));
 
-        ManifestJson = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
+        _baseManifest = new Dictionary<string, object?>
         {
             ["version"] = shellVersion,
             ["sha256"] = ShellSha256,
             ["shellUrl"] = null,
-            ["babelSha256"] = Sha256Hex(BabelBytes),
+            ["babelSha256"] = BabelSha256,
             ["minBootstrapVersion"] = MinBootstrapVersion,
             ["bootstrapWgt"] = null,
-        });
+        };
+        ManifestJson = JsonSerializer.SerializeToUtf8Bytes(_baseManifest);
 
         DropDir = Path.Combine(appPaths.DataPath, "jellyplug-shell");
         TxDir = Path.Combine(DropDir, "tx");
         TxManifestPath = Path.Combine(DropDir, "tx-manifest.json");
     }
+
+    private readonly Dictionary<string, object?> _baseManifest;
 
     public byte[] ShellBytes { get; }
 
@@ -49,8 +53,36 @@ public class ShellDropService
 
     public string ShellSha256 { get; }
 
-    /// <summary>manifest.json body served to the bootstrap (emit_manifest.py schema).</summary>
+    public string BabelSha256 { get; }
+
+    /// <summary>
+    /// Legacy manifest.json body (emit_manifest.py schema) — the exact bytes
+    /// served before JELA-58, still served verbatim when the config
+    /// fingerprint is disabled or unavailable.
+    /// </summary>
     public byte[] ManifestJson { get; }
+
+    /// <summary>
+    /// JELA-58: manifest.json with the ADDITIVE config-fingerprint fields
+    /// appended after the legacy keys — `configEpoch` plus per-group
+    /// `components`. Old TVs JSON.parse and ignore the extras; nothing in the
+    /// legacy schema changes shape or value.
+    /// </summary>
+    public byte[] BuildManifestJson(ConfigFingerprint fingerprint)
+    {
+        var manifest = new Dictionary<string, object?>(_baseManifest)
+        {
+            ["configEpoch"] = fingerprint.Epoch,
+            ["components"] = new Dictionary<string, string>
+            {
+                ["web"] = fingerprint.Web,
+                ["shell"] = fingerprint.Shell,
+                ["scripts"] = fingerprint.Scripts,
+                ["branding"] = fingerprint.Branding,
+            },
+        };
+        return JsonSerializer.SerializeToUtf8Bytes(manifest);
+    }
 
     /// <summary>The official @babel/standalone UMD source used for server-side transforms.</summary>
     public string BabelTransformSource { get; }
