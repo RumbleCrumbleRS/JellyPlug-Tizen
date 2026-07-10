@@ -2494,17 +2494,18 @@
       'function authed(){try{var c=localStorage.getItem("jellyfin_credentials");if(!c)return!1;var p=JSON.parse(c);return!!(p&&p.Servers&&p.Servers.length&&p.Servers[0].AccessToken)}catch(_){return!1}}' +
       // JELA-49: WS-1+2 default ON (JELA-48 ACCEPT); the "…Disabled" keys are
       // per-behavior opt-out kill-switches (plan §3 house rule). capLim()
-      // accepts ONLY 1000..15000 ms (CEO condition: the settle cap starts
-      // <= 15 s and is tuned DOWN from WS-0 data, never up).
+      // accepts ONLY 1000..22000 ms (JELA-56 CEO decision raised the ceiling
+      // from 15000 for the hold-cover settled reveal; still tunable DOWN
+      // only, never above 22000).
       // JELA-54 (user decision, JELA-52 ask 00d36d8f): HC = hold-cover. The
       // snapshot cover holds to the settled reveal (Netflix-splash) instead of
       // handing off to the Direct-Home grid mid-boot; the "dh" dismissal below
       // is skipped while HC is on (directHomeBody also stands down — see
-      // __shellDHHeld there). Reveal timing is unchanged: settled or the
-      // <= 15 s settlecap; Back/Return/Esc stays the mandatory escape hatch.
+      // __shellDHHeld there). Reveal timing: settled or the <= 22 s
+      // settlecap; Back/Return/Esc stays the mandatory escape hatch.
       'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
       'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
-      'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=15000)return v}catch(_){}return 15000}' +
+      'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=22000)return v}catch(_){}return 22000}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
       // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
@@ -2645,7 +2646,7 @@
       // JELA-43 (WS-2): settle-gated dismissal replaces >=4-cards-only when
       // the flag is on — >=4 cards AND no above-fold mutation for 1.5 s AND
       // stylesheet count stable for 1.5 s -> "settled"; overlay hold is
-      // hard-capped at capLim() (<= 15 s) -> "settlecap". The partial-stall
+      // hard-capped at capLim() (<= 22 s) -> "settlecap". The partial-stall
       // path fires only BELOW 4 cards here (>= 4 unsettled holds to settle
       // or cap). Flag off keeps the pre-JELA-43 "hydrated" dismissal.
       "if(SD){" +
