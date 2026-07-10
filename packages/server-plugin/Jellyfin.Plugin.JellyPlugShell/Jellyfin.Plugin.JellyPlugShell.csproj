@@ -5,7 +5,7 @@
     <RootNamespace>Jellyfin.Plugin.JellyPlugShell</RootNamespace>
     <AssemblyVersion>1.0.1.0</AssemblyVersion>
     <FileVersion>1.0.1.0</FileVersion>
-    <Version>1.0.14.0</Version>
+    <Version>1.0.15.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -21,6 +21,12 @@
   <ItemGroup>
     <EmbeddedResource Include="../../shell-tizen/src/shell.min.js" Link="Resources/shell.min.js" LogicalName="JellyPlugShell.Resources.shell.min.js" />
     <EmbeddedResource Include="../../shell-tizen/src/babel.min.js" Link="Resources/babel.min.js" LogicalName="JellyPlugShell.Resources.babel.min.js" />
+  </ItemGroup>
+
+  <!-- JELA-62: dashboard settings page (Plugin.GetPages resolves it as
+       {RootNamespace}.Configuration.configPage.html, the msbuild default). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration/configPage.html" />
   </ItemGroup>
 
   <!-- Server-side transform engine: the official @babel/standalone UMD at the

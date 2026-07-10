@@ -13,7 +13,21 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// ordered aggregate epoch (JELA-58 / plan JELA-57 §5.1). All values are
 /// lowercase sha256 hex.
 /// </summary>
-public sealed record ConfigFingerprint(string Epoch, string Web, string Shell, string Scripts, string Branding);
+public sealed record ConfigFingerprint(string Epoch, string Web, string Shell, string Scripts, string Branding)
+{
+    /// <summary>
+    /// The one manifest/settings-facing view of the component groups — both
+    /// /shell/manifest.json and the settings-page endpoints serve this, so a
+    /// future fifth group cannot show up in one and not the other.
+    /// </summary>
+    public Dictionary<string, string> ComponentsDictionary() => new()
+    {
+        ["web"] = Web,
+        ["shell"] = Shell,
+        ["scripts"] = Scripts,
+        ["branding"] = Branding,
+    };
+}
 
 /// <summary>
 /// JELA-58 (JELA-57 WS-1): computes a stable `configEpoch` over every source
@@ -73,9 +87,13 @@ public class ConfigFingerprintService
     private readonly ILogger<ConfigFingerprintService> _logger;
     private readonly object _sync = new();
 
+    /// <summary>Serializes Rehash passes only — never held while serving manifest fetches.</summary>
+    private readonly object _rehashGate = new();
+
     private long _prescanDueTicks; // Environment.TickCount64 basis; 0 = scan now
     private string? _prescanSignature;
     private ConfigFingerprint? _cached;
+    private long _generation; // bumped by Invalidate(); detects saves racing a Rehash pass
 
     public ConfigFingerprintService(
         ShellDropService drop,
@@ -93,6 +111,17 @@ public class ConfigFingerprintService
         // event on 10.11; the throttled pre-scan picks those up.
         configurationManager.NamedConfigurationUpdated += (_, _) => Invalidate();
         configurationManager.ConfigurationUpdated += (_, _) => Invalidate();
+
+        // JELA-62: our own settings page saves fingerprint-affecting fields
+        // (patterns/extra paths/kill switch) through UpdateConfiguration, so
+        // the epoch the page re-reads right after Save must not be a stale
+        // pre-save value from inside the 30s throttle window. Instance can
+        // only be null if this singleton is somehow resolved before the
+        // plugin loads — then the throttled pre-scan remains the fallback.
+        if (Plugin.Instance is { } plugin)
+        {
+            plugin.ConfigurationChanged += (_, _) => Invalidate();
+        }
     }
 
     /// <summary>Force the next fingerprint request to re-run the pre-scan.</summary>
@@ -101,6 +130,74 @@ public class ConfigFingerprintService
         lock (_sync)
         {
             _prescanDueTicks = 0;
+            _generation++;
+        }
+    }
+
+    /// <summary>
+    /// JELA-62: full re-hash regardless of pre-scan state — every covered
+    /// byte is hashed again. Covers the one change class the mtime+size
+    /// pre-scan cannot see: content rewritten in place with a preserved
+    /// timestamp (rsync -t, cp -p into a bind mount).
+    ///
+    /// The hash runs OUTSIDE the state lock so /shell/manifest.json keeps
+    /// serving the previous fingerprint for the whole pass (a full pass over
+    /// a NAS bind mount can take seconds — booting TVs must not queue behind
+    /// it), and the result is published only on success: a transient IO
+    /// failure keeps the known-good cache instead of dropping the epoch
+    /// fleet-wide. Concurrent Rehash calls serialize on a separate gate so an
+    /// elevated caller looping the endpoint cannot fan out parallel full disk
+    /// passes; a config save racing the pass zeroes the pre-scan deadline via
+    /// the generation counter, so the next fetch re-scans immediately instead
+    /// of serving the pre-save epoch for up to 30s. Returns null only when
+    /// the re-hash itself failed.
+    /// </summary>
+    public ConfigFingerprint? Rehash(PluginConfiguration config, CancellationToken cancellationToken = default)
+    {
+        lock (_rehashGate)
+        {
+            long generationAtStart;
+            lock (_sync)
+            {
+                generationAtStart = _generation;
+            }
+
+            try
+            {
+                var files = EnumerateCoveredFiles(config);
+                var signature = PrescanSignature(files);
+                var computed = Compute(files, cancellationToken);
+
+                lock (_sync)
+                {
+                    var before = _cached?.Epoch;
+                    _cached = computed;
+                    _prescanSignature = signature;
+                    _prescanDueTicks = _generation == generationAtStart
+                        ? Environment.TickCount64 + (long)PrescanInterval.TotalMilliseconds
+                        : 0;
+
+                    if (before != null && before != computed.Epoch)
+                    {
+                        _logger.LogInformation("config rehash: epoch changed {Before} -> {After}", before, computed.Epoch);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("config rehash: epoch {Epoch}", computed.Epoch);
+                    }
+                }
+
+                return computed;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "config rehash failed; keeping the previous fingerprint");
+                return null;
+            }
         }
     }
 
@@ -336,7 +433,7 @@ public class ConfigFingerprintService
         return Sha256Hex(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
     }
 
-    private ConfigFingerprint Compute(List<CoveredFile> files)
+    private ConfigFingerprint Compute(List<CoveredFile> files, CancellationToken cancellationToken = default)
     {
         var groups = new Dictionary<string, List<(string Label, string Sha)>>(StringComparer.Ordinal)
         {
@@ -352,6 +449,7 @@ public class ConfigFingerprintService
 
         foreach (var f in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string sha;
             try
             {

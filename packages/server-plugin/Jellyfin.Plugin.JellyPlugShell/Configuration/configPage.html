@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>JellyPlug Shell</title>
+</head>
+<body>
+    <div id="jellyPlugShellConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-textarea">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="jellyPlugShellConfigForm">
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Server config hash</h2>
+                        <div class="fieldDescription" style="margin-bottom: 0.5em;">
+                            The configEpoch served in <code>/shell/manifest.json</code> — a sha256 over everything a
+                            JellyPlug TV consumes at boot. TVs whose cached epoch matches skip all revalidation traffic.
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="fingerprintEpoch" label="Current server hash (configEpoch)" readonly />
+                            <div class="fieldDescription" id="fingerprintStatus"></div>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="fingerprintWeb" label="web component" readonly />
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="fingerprintShell" label="shell component" readonly />
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="fingerprintScripts" label="scripts component" readonly />
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="fingerprintBranding" label="branding component" readonly />
+                        </div>
+                        <button is="emby-button" type="button" id="rehashNow" class="raised block">
+                            <span>Rehash now</span>
+                        </button>
+                        <div class="fieldDescription">
+                            Forces a full re-hash of every covered byte — the same operation the scheduled task
+                            &ldquo;Rehash JellyPlug server config&rdquo; runs periodically.
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Config fingerprint</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableConfigFingerprint" />
+                                <span>Disable config fingerprint</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch: /shell/manifest.json omits configEpoch entirely and every TV falls back
+                                to full revalidation on boot.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="ScriptFingerprintPatterns" label="Script plugin patterns (one glob per line)" rows="3" style="resize: vertical;"></textarea>
+                            <div class="fieldDescription">
+                                Case-insensitive globs selecting which injector-style plugins feed the scripts hash
+                                (matched against plugin-config file names and plugin folder names).
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="ExtraFingerprintPaths" label="Extra fingerprint paths (one per line)" rows="3" style="resize: vertical;"></textarea>
+                            <div class="fieldDescription">
+                                Extra absolute files or directories to fold into the scripts hash.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Transpile drop</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableTxRebuild" />
+                                <span>Disable scheduled tx-drop rebuild</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Static /shell/ assets keep serving; TVs fall back to on-device Babel (21&ndash;42s on Tizen 5.0).
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="JsiChannelPath" label="Snippet channel path" />
+                            <div class="fieldDescription">
+                                Server-relative path of the snippet-channel script the TVs load.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="ExtraSourceUrls" label="Extra transform source URLs (one per line)" rows="3" style="resize: vertical;"></textarea>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="TransformTimeoutSeconds" label="Per-source transform timeout (seconds)" min="30" />
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Boot diagnostics</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableDiagIngest" />
+                                <span>Refuse boot-ring diag beacons</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Rejects every POST /shell/diag regardless of what a fielded TV opts into.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="DiagMaxRings" label="Max retained boot rings" min="1" />
+                        </div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var pluginId = '6f97e5aa-cf2f-4b48-8b73-6be92f4b7d31';
+                var page = document.querySelector('#jellyPlugShellConfigPage');
+
+                // One list drives both load and save; a field missing from
+                // either direction is impossible by construction. 'number'
+                // fields keep the server-stored value when the input is blank
+                // or unparseable — the C# defaults are NOT duplicated here.
+                var fields = [
+                    { id: 'DisableConfigFingerprint', type: 'bool' },
+                    { id: 'ScriptFingerprintPatterns', type: 'text' },
+                    { id: 'ExtraFingerprintPaths', type: 'text' },
+                    { id: 'DisableTxRebuild', type: 'bool' },
+                    { id: 'JsiChannelPath', type: 'text' },
+                    { id: 'ExtraSourceUrls', type: 'text' },
+                    { id: 'TransformTimeoutSeconds', type: 'number' },
+                    { id: 'DisableDiagIngest', type: 'bool' },
+                    { id: 'DiagMaxRings', type: 'number' }
+                ];
+
+                function loadForm(config) {
+                    fields.forEach(function (f) {
+                        var el = page.querySelector('#' + f.id);
+                        if (f.type === 'bool') {
+                            el.checked = !!config[f.id];
+                        } else {
+                            el.value = config[f.id] == null ? '' : config[f.id];
+                        }
+                    });
+                }
+
+                function saveForm(config) {
+                    fields.forEach(function (f) {
+                        var el = page.querySelector('#' + f.id);
+                        if (f.type === 'bool') {
+                            config[f.id] = el.checked;
+                        } else if (f.type === 'number') {
+                            var n = parseInt(el.value, 10);
+                            if (isFinite(n)) {
+                                config[f.id] = n;
+                            }
+                        } else {
+                            config[f.id] = el.value;
+                        }
+                    });
+                }
+
+                function loadFailed() {
+                    Dashboard.hideLoadingMsg();
+                    Dashboard.alert('Request failed — check the server connection and reload.');
+                }
+
+                function setVal(id, value) {
+                    page.querySelector('#' + id).value = value == null ? '' : value;
+                }
+
+                function renderFingerprint(fp) {
+                    setVal('fingerprintEpoch', fp && fp.epoch);
+                    setVal('fingerprintWeb', fp && fp.components ? fp.components.web : '');
+                    setVal('fingerprintShell', fp && fp.components ? fp.components.shell : '');
+                    setVal('fingerprintScripts', fp && fp.components ? fp.components.scripts : '');
+                    setVal('fingerprintBranding', fp && fp.components ? fp.components.branding : '');
+                    var status = page.querySelector('#fingerprintStatus');
+                    if (!fp) {
+                        status.textContent = 'Could not load the fingerprint (request failed).';
+                    } else if (!fp.available) {
+                        status.textContent = 'Fingerprint unavailable — computation failed; the manifest is serving legacy bytes. Check the server log.';
+                    } else if (!fp.enabled) {
+                        status.textContent = 'Computed, but NOT served: the kill switch below is on, so the manifest omits it.';
+                    } else {
+                        status.textContent = 'Served to TVs in /shell/manifest.json.';
+                    }
+                }
+
+                function fingerprintRequest(method) {
+                    return ApiClient.ajax({
+                        type: method,
+                        url: ApiClient.getUrl('shell/fingerprint' + (method === 'POST' ? '/rehash' : '')),
+                        dataType: 'json'
+                    });
+                }
+
+                function loadFingerprint(method) {
+                    return fingerprintRequest(method).then(renderFingerprint, function () {
+                        renderFingerprint(null);
+                    });
+                }
+
+                page.addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        loadForm(config);
+                        Dashboard.hideLoadingMsg();
+                    }, loadFailed);
+                    loadFingerprint('GET');
+                });
+
+                page.querySelector('#rehashNow').addEventListener('click', function () {
+                    Dashboard.showLoadingMsg();
+                    loadFingerprint('POST').then(function () {
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+                page.querySelector('#jellyPlugShellConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        saveForm(config);
+                        return ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                            loadFingerprint('GET');
+                        });
+                    }).catch(loadFailed);
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>

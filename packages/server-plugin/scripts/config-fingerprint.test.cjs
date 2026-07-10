@@ -166,9 +166,16 @@ assert.ok(
   drop.includes('["configEpoch"] = fingerprint.Epoch'),
   "configEpoch additive field missing",
 );
+// JELA-62 moved the group map onto the ConfigFingerprint record so the
+// manifest and the settings endpoints cannot drift; the four fixed groups now
+// live there and the manifest builds from the shared helper.
 for (const k of ['["web"]', '["shell"]', '["scripts"]', '["branding"]']) {
-  assert.ok(drop.includes(k), "components group missing: " + k);
+  assert.ok(svc.includes(k), "components group missing: " + k);
 }
+assert.ok(
+  drop.includes('["components"] = fingerprint.ComponentsDictionary()'),
+  "manifest must build components from the shared record helper",
+);
 // Legacy bytes still serialized from the same base dict (byte-identity of the
 // disabled path with the pre-JELA-58 manifest).
 assert.ok(

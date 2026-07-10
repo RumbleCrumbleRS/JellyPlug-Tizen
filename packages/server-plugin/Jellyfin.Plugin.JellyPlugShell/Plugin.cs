@@ -1,5 +1,6 @@
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
 namespace Jellyfin.Plugin.JellyPlugShell;
@@ -9,7 +10,7 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// drop (/shell/) straight from an installable plugin so no server ever needs
 /// SSH + filesystem + cron to keep JellyPlug TVs fast.
 /// </summary>
-public class Plugin : BasePlugin<PluginConfiguration>
+public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
         : base(applicationPaths, xmlSerializer)
@@ -29,4 +30,17 @@ public class Plugin : BasePlugin<PluginConfiguration>
     public override string Description =>
         "Serves the JellyPlug hosted TV shell (/shell/) plus the pre-lowered "
         + "transpile drop, and rebuilds the drop in-process on a scheduled task.";
+
+    /// <summary>
+    /// JELA-62: dashboard settings page — shows the current server config
+    /// hash (configEpoch + per-component shas) and edits the plugin toggles.
+    /// </summary>
+    public IEnumerable<PluginPageInfo> GetPages()
+    {
+        yield return new PluginPageInfo
+        {
+            Name = Name,
+            EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+        };
+    }
 }
