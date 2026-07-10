@@ -361,16 +361,22 @@ for (const [label, src] of SRC_SHELLS) {
   );
 }
 
-// B2. Invariant 2 — background revalidation: on a hit, the in-flight fetch is
+// B2. Invariant 2 — background revalidation: on a hit, the fetch pair is
 //     still drained and writes the fresh body back for the NEXT boot.
+//     JELA-59 restructured the drain into a shared helper gated on the
+//     config-epoch promise (an epoch-MATCHED boot suppresses the pair by
+//     design; every other state revalidates as before), so the check pins
+//     the helper wiring: drain(thunk, cachedBody, writeBack) + the write
+//     call inside the helper body.
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "on hit, index fetch revalidates LS in background (writeWebIndexCache after fetch) in " + label,
-    /indexFetch[\s\S]{0,400}writeWebIndexCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
+    "on hit, index fetch revalidates LS in background (drain -> writeWebIndexCache) in " + label,
+    /drain\(\s*mkIdxF\s*,\s*cachedIndex\s*,\s*writeWebIndexCache\s*\)/.test(src) &&
+      /\bw\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
   );
   check(
-    "on hit, config fetch revalidates LS in background (writeWebConfigCache after fetch) in " + label,
-    /configFetch[\s\S]{0,400}writeWebConfigCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
+    "on hit, config fetch revalidates LS in background (drain -> writeWebConfigCache) in " + label,
+    /drain\(\s*mkCfgF\s*,\s*cachedConfig\s*,\s*writeWebConfigCache\s*\)/.test(src),
   );
 }
 
