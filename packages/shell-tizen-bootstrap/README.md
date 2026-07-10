@@ -9,9 +9,19 @@ Samsung Device Manager GUI. At launch it:
 
 1. Reads `serverUrl` from `localStorage`.
 2. If absent → renders the connect form (same UX as the old shell).
-3. If present → fetches `${server}/shell/manifest.json` (1.5 s timeout) and
-   `<script src>`-loads the advertised `shell.min.js?sha=<hash>`.
-4. On any failure → falls back to the baked `boot-shell.min.js` (last-known-good
+3. If present and the last-good manifest sha is cached (warm boot) →
+   executes the shell straight from the `localStorage` byte cache when the
+   persisted record matches that sha (JELA-66: zero network on the shell
+   critical path — survives Tizen's HTTP-cache eviction on power-cycle),
+   while `manifest.json` revalidates in the background so a new build is
+   adopted next boot. On a byte-cache miss it `<script src>`-loads the
+   pinned `shell.min.js?v=<sha>` and background-stores the bytes for the
+   next boot. Kill switch: `jellyfin.shell.hsbShellLsDisabled=1`; QA
+   counters on `window.__hsbShellLs`.
+4. Cold boot (no cached sha) → fetches `${server}/shell/manifest.json`
+   (1.5 s timeout) and `<script src>`-loads the advertised
+   `shell.min.js?v=<hash>`.
+5. On any failure → falls back to the baked `boot-shell.min.js` (last-known-good
    shell shipped inside this WGT; source of record in `boot-shell.src.js`).
 
 After install, every shell update is a server-side file swap into
@@ -86,8 +96,9 @@ pnpm --filter @jellyfin-tv/shell-tizen-bootstrap test
 node scripts/selftest.cjs
 ```
 
-Covers four bootloader branches: no-server, manifest 200, script onerror
-fallback, manifest network error.
+Covers the bootloader branches: no-server, manifest 200, script onerror
+fallback, manifest network error, warm-boot manifest cache (JEL-622), and
+the hosted-shell byte cache hit/stale/kill-switch/corrupt paths (JELA-66).
 
 ## Layout
 

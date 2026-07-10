@@ -67,6 +67,23 @@
             // that manifest carried none), so the warm path below can rebuild
             // the exact shell URL without a blocking manifest RTT.
             var HSB_SHELL_URL_KEY = 'jellyfin.shell.hsbCachedShellUrl';
+            // JELA-66: hosted-shell byte cache. When the cached manifest sha
+            // is unchanged, the shell executes straight from these persisted
+            // bytes — zero network on the shell critical path (the ?v=<sha>
+            // script URL is HTTP-cacheable, but Tizen evicts its ~50 MB HTTP
+            // cache on power-cycle/Defender wipes, so a hash-unchanged boot
+            // could still pay a full serial shell download). The manifest
+            // keeps revalidating in the background, exactly as before, so a
+            // NEW sha is adopted on the next boot. The record is dropped on
+            // any integrity failure (length + fnv1a checksum) and the body
+            // must have parsed on THIS engine at store time (new Function
+            // syntax check), so a truncated/corrupt body can never brick the
+            // boot — every failure falls back to today's network path.
+            // Kill switch: localStorage['jellyfin.shell.hsbShellLsDisabled']='1'.
+            // QA surface: window.__hsbShellLs {st:'hit'|'miss'|'off'|'err', b, sha}.
+            var HSB_SHELL_BODY_KEY = 'jellyfin.shell.hsbShellBody';
+            var HSB_SHELL_LS_DISABLED_KEY = 'jellyfin.shell.hsbShellLsDisabled';
+            var HSB_SHELL_BODY_MAX = 262144; // 256 KB (shell.min.js ~175 KB today)
             var HSB_DEBUG_KEY = 'jellyfin.shell.hsbDebug';
             // JEL-332: the true installed bootstrap version. MUST equal the
             // config.xml widget version (the single source of truth that
@@ -74,7 +91,7 @@
             // selftest.cjs asserts this equality so it can never silently drift
             // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
             // on the diagnostic label without polluting the version itself.
-            var HSB_VERSION = '2.0.20';
+            var HSB_VERSION = '2.0.21';
             var HSB_CODENAME = 'ac3';
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
@@ -113,6 +130,7 @@
                 if (hsbState.manifestUrl) out.push('manifestUrl = ' + hsbState.manifestUrl);
                 if (hsbState.manifestSha) out.push('manifestSha = ' + hsbState.manifestSha);
                 if (hsbState.shellUrl)    out.push('shellUrl    = ' + hsbState.shellUrl);
+                if (hsbState.shellLs)     out.push('shellLs     = ' + hsbState.shellLs);
                 if (hsbState.fallback)    out.push('fallback    = ' + hsbState.fallback);
                 if (hsbState.errors.length) out.push('errors      = ' + hsbState.errors.join(' | '));
                 return out;
@@ -155,6 +173,97 @@
                     hsbPhase('connect-submit', 'ok');
                     loadHostedShell(raw);
                 });
+            }
+
+            // --- JELA-66 hosted-shell byte cache ----------------------------
+            // fnv1a over charCodes, base-36 — same recipe as the shell's
+            // txFnv1a so on-device spot checks can cross-verify checksums.
+            function hsbFnv(s) {
+                var h = 0x811c9dc5;
+                for (var i = 0; i < s.length; i++) {
+                    h ^= s.charCodeAt(i);
+                    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+                }
+                return h.toString(36);
+            }
+            function shellLsDisabled() {
+                try { return localStorage.getItem(HSB_SHELL_LS_DISABLED_KEY) === '1'; }
+                catch(_) { return true; }
+            }
+            function readShellBody(sha) {
+                // Body record for EXACTLY this sha, integrity-checked; any
+                // failure drops the record so the next boot re-stores fresh.
+                if (shellLsDisabled()) {
+                    window.__hsbShellLs = { st: 'off' };
+                    return null;
+                }
+                var rec = null;
+                try { rec = JSON.parse(localStorage.getItem(HSB_SHELL_BODY_KEY)); }
+                catch(_) { rec = null; }
+                if (!rec || rec.v !== 1 || rec.sha !== sha
+                    || typeof rec.body !== 'string' || !rec.body.length) return null;
+                if (rec.body.length !== rec.len || hsbFnv(rec.body) !== rec.h) {
+                    try { localStorage.removeItem(HSB_SHELL_BODY_KEY); } catch(_){}
+                    return null;
+                }
+                return rec;
+            }
+            function execShellFromLs(rec) {
+                // Inline <script> executes synchronously on appendChild — the
+                // shell is a self-contained IIFE (no document.currentScript
+                // dependence), so this is behavior-identical to <script src>.
+                hsbState.manifestSha = rec.sha;
+                hsbPhase('shell-ls-hit', 'ok');
+                try {
+                    var s = document.createElement('script');
+                    s.text = rec.body;
+                    document.head.appendChild(s);
+                    window.__hsbShellUrl = rec.url;
+                    window.__hsbShellLs = { st: 'hit', b: rec.body.length, sha: rec.sha };
+                    hsbState.shellUrl = rec.url;
+                    hsbState.shellLs = 'hit b=' + rec.body.length;
+                    hsbPhase('shell-ls-loaded', 'ok');
+                    return true;
+                } catch (e) {
+                    try { localStorage.removeItem(HSB_SHELL_BODY_KEY); } catch(_){}
+                    hsbState.errors.push('shell-ls-exec:' + ((e && e.message) || e));
+                    hsbState.shellLs = 'err';
+                    window.__hsbShellLs = { st: 'err' };
+                    return false;
+                }
+            }
+            function storeShellBody(url, sha) {
+                // Background, best-effort: refetch the just-loaded pinned URL
+                // as text (same stable ?v=<sha> URL the engine just cached)
+                // and persist it for the next boot. Never on the critical
+                // path; every failure just means the next boot loads over the
+                // network like today.
+                if (!sha || shellLsDisabled() || typeof fetch !== 'function') return;
+                var cur = null;
+                try { cur = JSON.parse(localStorage.getItem(HSB_SHELL_BODY_KEY)); }
+                catch(_) { cur = null; }
+                if (cur && cur.v === 1 && cur.sha === sha) return; // already stored
+                try {
+                    fetch(url, { credentials: 'omit' })
+                        .then(function(r){ return (r && r.ok) ? r.text() : null; })
+                        .then(function(body){
+                            if (typeof body !== 'string' || body.length < 1024
+                                || body.length > HSB_SHELL_BODY_MAX) return;
+                            // Syntax-check on THIS engine (not called) before
+                            // the body may ever replace the network load.
+                            try { new Function(body); } catch(_) { return; }
+                            var rec = { v: 1, sha: sha, url: url, len: body.length,
+                                        h: hsbFnv(body), ts: Date.now(), body: body };
+                            try {
+                                localStorage.setItem(HSB_SHELL_BODY_KEY, JSON.stringify(rec));
+                                hsbState.shellLs = 'stored b=' + body.length;
+                            } catch(_) {
+                                // Quota — make sure no stale record lingers.
+                                try { localStorage.removeItem(HSB_SHELL_BODY_KEY); } catch(__){}
+                            }
+                        })
+                        .catch(function(){});
+                } catch(_){}
             }
 
             function appendScript(src, onload, onerror) {
@@ -249,7 +358,11 @@
 
                 // Manifest probe is best-effort; if it fails fast, jump directly
                 // to the unversioned shell.min.js with a cache-buster.
-                function loadShellAt(url) {
+                // `sha` (JELA-66) is the content identity of `url` when known
+                // (?v=<sha> pinned loads); it keys the background byte-store
+                // so the NEXT boot can execute from localStorage. ?t= busted
+                // loads have no identity and are never stored.
+                function loadShellAt(url, sha) {
                     hsbState.shellUrl = url;
                     hsbPhase('load-shell', 'ok');
                     appendScript(url,
@@ -258,6 +371,7 @@
                             done = true; clearTimeout(timer);
                             window.__hsbShellUrl = url;
                             hsbPhase('shell-loaded', 'ok');
+                            storeShellBody(url, sha);
                         },
                         function(){
                             if (done) return;
@@ -329,11 +443,24 @@
                     cachedShellUrl = localStorage.getItem(HSB_SHELL_URL_KEY);
                 } catch(_){}
                 if (cachedSha) {
-                    hsbPhase('manifest-cache-hit', 'ok');
                     hsbState.manifestSha = cachedSha;
+                    // Background revalidation for the NEXT boot — fires on
+                    // both subpaths below, before any shell bytes execute.
                     fetchManifest(function(){});
+                    // JELA-66: hash unchanged since the last adopted boot →
+                    // execute the persisted shell bytes directly. Zero
+                    // network on the shell critical path; survives the HTTP
+                    // cache eviction that made hash-unchanged boots re-pay
+                    // the shell download.
+                    var lsRec = readShellBody(cachedSha);
+                    if (lsRec && execShellFromLs(lsRec)) {
+                        done = true; clearTimeout(timer);
+                        return;
+                    }
+                    if (!window.__hsbShellLs) window.__hsbShellLs = { st: 'miss' };
+                    hsbPhase('manifest-cache-hit', 'ok');
                     loadShellAt((cachedShellUrl || (base + 'shell.min.js'))
-                        + '?v=' + encodeURIComponent(cachedSha));
+                        + '?v=' + encodeURIComponent(cachedSha), cachedSha);
                     return;
                 }
 
@@ -345,7 +472,7 @@
                     if (m) {
                         var u = (typeof m.shellUrl === 'string' && m.shellUrl) || (base + 'shell.min.js');
                         var v = m.sha256 ? ('?v=' + encodeURIComponent(m.sha256)) : ('?t=' + Date.now());
-                        loadShellAt(u + v);
+                        loadShellAt(u + v, m.sha256 || null);
                         return;
                     }
                     loadShellAt(base + 'shell.min.js?t=' + Date.now());
