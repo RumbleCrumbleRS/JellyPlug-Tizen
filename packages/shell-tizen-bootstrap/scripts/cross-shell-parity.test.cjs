@@ -195,8 +195,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    retail: "88c2ebf4966833d9",
-    boot: "5f8a4af27cfa179c",
+    retail: "3516c63821eef368",
+    boot: "e67ed293c4c2dddd",
   },
   {
     name: "buildDiagSeedScript",
@@ -244,8 +244,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "loadRemoteWebClient",
     class: "hsb-feature",
     why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document.",
-    retail: "22df2dab273144bf",
-    boot: "6c0e399f8639a4bd",
+    retail: "80a874ce27323381",
+    boot: "dc1d75fef51c2df8",
   },
   {
     name: "bootstrap",

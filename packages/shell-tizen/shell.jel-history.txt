@@ -234,6 +234,9 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-619 deref a version-slot pointer to its content-addressed body.
 *JEL-619 download-skip telemetry (a query-bearing hit means a
 *JEL-619 cap raised 262144 -> 2097152 so the JSI channel aggregate
+*JEL-619 class-1 24 h TTL so plugin bodies (incl. the
+*JEL-619 scripts -> JSI channel + version-keyed slots
+*JEL-619 Drop the version-keyed slots via the per-path vqk: index
 *JEL-621 Pre-lowered transpile drop
 *JEL-131 measured — see the primer comment in buildSeedScript). The
 *JEL-178 same txFnv1a the `txc:` cache key already uses. At boot the

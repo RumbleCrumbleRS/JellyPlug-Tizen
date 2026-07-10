@@ -410,6 +410,16 @@
           writeStylesheetBodies(serverOrigin, items);
         return;
       }
+      // JELA-59: an epoch-matched boot skips the miss-populate fetches —
+      // with an unchanged fingerprint a body missing from the cache is
+      // missing durably (typically over the per-body cap), so the pass
+      // would refetch the same bytes every boot for nothing. Mismatch and
+      // soft-TTL boots run it as today.
+      if (window.__shellCfgEM === 1) {
+        var g = window.__shellConfigEpoch;
+        if (g && g.sup) g.sup.css = (g.sup.css || 0) + misses.length;
+        return;
+      }
       Promise.all(
         misses.map(function (u) {
           return fetch(u, { credentials: "include" })
@@ -1161,7 +1171,7 @@
       '    var __TXREF="@@shellref:";',
       '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;}return pin?2:bust?1:0;}',
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
-      '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
+      '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
       '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
@@ -3019,7 +3029,13 @@
       if (!meta || meta.v !== TX_VER) return null;
       // Math.abs: a TV clock jump in EITHER direction bounds staleness
       // instead of making a backdated record immortal.
-      if (!(meta.t > 0) || Math.abs(Date.now() - meta.t) > maxAge) return null;
+      if (!(meta.t > 0)) return null;
+      if (Math.abs(Date.now() - meta.t) > maxAge) {
+        // JELA-59: an epoch-matched boot waives the age bound (the server
+        // attests the snippet config is unchanged); integrity checks stay.
+        if (window.__shellCfgEM !== 1) return null;
+        ceSup("jsi");
+      }
       if (!(meta.n >= 1) || meta.n > JSI_CHANNEL_MAX_CHUNKS) return null;
       var parts = [];
       for (var i = 0; i < meta.n; i++) {
@@ -3260,7 +3276,12 @@
           try {
             ts = parseInt(localStorage.getItem(TX_PFX + "ts:" + k), 10) || 0;
           } catch (_) {}
-          if (Date.now() - ts > TX_QUERY_TTL_MS) return null;
+          if (Date.now() - ts > TX_QUERY_TTL_MS) {
+            // JELA-59: an epoch-matched boot attests the plugin config is
+            // unchanged — waive the 24 h staleness bound.
+            if (window.__shellCfgEM !== 1) return null;
+            ceSup("q");
+          }
         }
       } else {
         k = txKey(u);
@@ -3288,6 +3309,223 @@
         localStorage.setItem(TX_PFX + txKey(url), body);
       } catch (_) {}
   }
+  // ---- Config-epoch boot gate (JELA-59, parent JELA-57 WS-2) -------------
+  //
+  // The server plugin (JELA-58, v1.0.13.0+) publishes a config fingerprint
+  // in /shell/manifest.json as additive fields: `configEpoch` (aggregate
+  // sha256) + `components` {web,shell,scripts,branding} (per-group sha256).
+  // The gate fetches the manifest once per boot (3 s bound, off the critical
+  // path — background revalidation waits for it, primary fetches never do)
+  // and compares it against the record persisted by the last adopted boot:
+  //   MATCH    -> window.__shellCfgEM=1, a boot-scoped flag whose
+  //               suppression points (a) skip the /web/ index+config SWR
+  //               revalidation pair, (b) skip the stylesheet miss-populate
+  //               pass (baked shell only), (c) serve the tx-drop manifest
+  //               from a persisted copy instead of the per-boot ?__sb=
+  //               busted fetch, (d) waive the JSI channel max-age and the
+  //               JEL-619 class-1 24 h TTL so plugin bodies (incl. the
+  //               JellyfinEnhanced skin aggregate) keep serving from the
+  //               EXISTING bounded LS caches instead of refetching.
+  //   MISMATCH -> per-component diff invalidates ONLY the affected cache
+  //               groups (web -> index/config/bundle/stylesheet bodies;
+  //               scripts -> JSI channel + JEL-619 version-keyed slots;
+  //               branding -> stylesheet bodies; shell -> nothing, the
+  //               bootstrap's manifest-sha path already adopts new shell
+  //               bytes), then today's refetch machinery repopulates and
+  //               the NEW record is committed only after this boot's /web/
+  //               pair settled successfully (write-after-adopt: a failed
+  //               refresh keeps the old record so the next boot re-runs
+  //               the same invalidation instead of wedging on a stale
+  //               epoch — invalidation is remove-first, so nothing stale
+  //               can be served meanwhile).
+  //   Manifest unreachable / field absent / record absent -> exactly
+  //   today's behavior (match stays 0, nothing is invalidated).
+  // Soft TTL: even on a match, a full-revalidation boot runs every 20
+  // boots or 7 days so a fingerprint bug cannot pin caches forever.
+  // Rollout (JELA-48/51 discipline): OPT-IN via
+  // localStorage['jellyfin.shell.configEpochGate']='1'; the kill switch
+  // 'jellyfin.shell.configEpochDisabled'='1' is honored NOW as the future
+  // default-ON opt-out. QA counters (WS-3) live on
+  // window.__shellConfigEpoch {st,e,inv,sup:{idx,txm,jsi,q,css}} plus the
+  // boot-scoped match flag window.__shellCfgEM (1 = suppression active).
+  function ceGateOn() {
+    try {
+      var ls = localStorage;
+      return (
+        ls.getItem("jellyfin.shell.configEpochGate") === "1" &&
+        ls.getItem("jellyfin.shell.configEpochDisabled") !== "1"
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+  function ceRecWrite(r) {
+    try {
+      localStorage.setItem("jellyfin.shell.configEpoch", JSON.stringify(r));
+    } catch (_) {}
+  }
+  function ceSup(f) {
+    // Bump a suppression counter (QA surface for WS-3).
+    var g = window.__shellConfigEpoch;
+    if (g && g.sup) g.sup[f] = (g.sup[f] || 0) + 1;
+  }
+  function ceReady() {
+    var p = window.__shellEpochReady;
+    return p && typeof p.then === "function" ? p : Promise.resolve(null);
+  }
+  function ceInvalidate(pv, nx) {
+    // Component-selective cache-group invalidation. `pv` null (no record
+    // yet) invalidates nothing — with no adopted generation there is no
+    // suppression, so every cache already revalidates on its own contract.
+    var inv = [];
+    if (!pv) return inv;
+    var SS_KEY = "jellyfin.shell.stylesheetBodies";
+    function ch(grp, keys) {
+      if (pv.components[grp] === nx[grp]) return false;
+      inv.push(grp);
+      for (var i = 0; i < keys.length; i++) localStorage.removeItem(keys[i]);
+      return true;
+    }
+    try {
+      ch("web", [
+        WEB_INDEX_CACHE_KEY,
+        WEB_CONFIG_CACHE_KEY,
+        BUNDLE_CACHE_KEY,
+        SS_KEY,
+      ]);
+      if (ch("scripts", [])) {
+        jsiChannelCacheClear();
+        // Drop the JEL-619 version-keyed slots via the per-path vqk: index
+        // so every query-bearing plugin body refetches with a fresh buster.
+        // Content-addressed txc: bodies stay — they only serve through a
+        // matching source hash, so they cannot go stale.
+        var drop = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.lastIndexOf(TX_PFX + "vqk:", 0) === 0) drop.push(k);
+        }
+        for (var j = 0; j < drop.length; j++) {
+          var vq = null;
+          try {
+            vq = JSON.parse(localStorage.getItem(drop[j]));
+          } catch (_) {}
+          localStorage.removeItem(drop[j]);
+          if (vq && vq.k) {
+            localStorage.removeItem(TX_PFX + vq.k);
+            localStorage.removeItem(TX_PFX + "ts:" + vq.k);
+          }
+        }
+      }
+      ch("branding", [SS_KEY]);
+      ch("shell", []);
+    } catch (_) {}
+    return inv;
+  }
+  function ceAdopt() {
+    // Write-after-adopt commit point: called once this boot's /web/
+    // index+config pair settled successfully (fresh fetch or revalidation),
+    // which is always AFTER ceInvalidate ran (the commit call sites chain
+    // on window.__shellEpochReady).
+    var g = window.__shellConfigEpoch;
+    if (!g || !g.pend) return;
+    ceRecWrite(g.pend);
+    g.pend = null;
+    g.ad = 1;
+  }
+  function loadConfigEpoch(u) {
+    // Parks a never-rejecting promise on window.__shellEpochReady and the
+    // gate state on window.__shellConfigEpoch. Suppression points key on
+    // the sync flag window.__shellCfgEM===1 (window survives
+    // document.write, so the in-document seed pipelines see it too).
+    var g = { st: "off", sup: {} };
+    window.__shellConfigEpoch = g;
+    window.__shellCfgEM = 0;
+    if (!ceGateOn()) return (window.__shellEpochReady = Promise.resolve(null));
+    // The HSB bootstrap fetches manifest.json each boot too, but persists
+    // only version/sha256/shellUrl and cannot be updated on installed WGTs
+    // — so gated boots pay one extra small manifest GET (~1 KB).
+    var p = withBootTimeout(
+      fetch(u + "/shell/manifest.json?__sb=" + Date.now(), {
+        credentials: "omit",
+        cache: "no-store",
+      }),
+      "cfg epoch",
+      3000,
+    )
+      .then(function (r) {
+        return r && r.ok ? r.json() : null;
+      })
+      .then(function (m) {
+        if (!m || !m.configEpoch || !m.components) {
+          g.st = m ? "nofield" : "err";
+          return g;
+        }
+        g.e = String(m.configEpoch).slice(0, 8);
+        var rec = null;
+        try {
+          rec = JSON.parse(localStorage.getItem("jellyfin.shell.configEpoch"));
+        } catch (_) {}
+        if (!rec || rec.origin !== u || !rec.components) rec = null;
+        var pend = {
+          origin: u,
+          epoch: m.configEpoch,
+          components: m.components,
+          ts: Date.now(),
+        };
+        if (rec && rec.epoch === m.configEpoch) {
+          // Soft-TTL: even on a perpetual match, a full-revalidation boot
+          // runs every 7 days; the refreshed record commits only after the
+          // /web/ pair adopted (same write-after-adopt as a mismatch).
+          if (!(rec.ts > 0) || Math.abs(pend.ts - rec.ts) > 6048e5) {
+            g.st = "ttl";
+            g.pend = pend;
+            return g;
+          }
+          g.st = "match";
+          window.__shellCfgEM = 1;
+          return g;
+        }
+        g.st = rec ? "mismatch" : "fresh";
+        g.inv = ceInvalidate(rec, m.components);
+        g.pend = pend;
+        return g;
+      })
+      .catch(function () {
+        g.st = "err";
+        return g;
+      });
+    return (window.__shellEpochReady = p);
+  }
+  function ceTxdState(u, e) {
+    var d = {
+      ok: true,
+      base: u + "/shell/",
+      entries: e,
+      h: 0,
+      m: 0,
+      r: 0,
+      f: 0,
+    };
+    window.__shellTxDrop = d;
+    return d;
+  }
+  function ceTxmRead(u) {
+    try {
+      var p = JSON.parse(localStorage.getItem("jellyfin.shell.txDropCache"));
+      if (!p || p.o !== u || p.v !== BABEL_OPTS_KEY || !p.e) return null;
+      return p.e;
+    } catch (_) {
+      return null;
+    }
+  }
+  function ceTxmWrite(u, e) {
+    try {
+      var s = JSON.stringify({ o: u, v: BABEL_OPTS_KEY, e: e });
+      if (s.length > 131072) return;
+      localStorage.setItem("jellyfin.shell.txDropCache", s);
+    } catch (_) {}
+  }
+
   // ---- Pre-lowered transpile drop (JEL-621) ------------------------------
   // THE dominant cold-boot cost on Tizen 5.0 is Babel itself (~1.9 MB of
   // plugin JS serially transformed on the TV main thread, 21-42 s measured).
@@ -3325,38 +3563,43 @@
       window.__shellTxDropReady = Promise.resolve(null);
       return window.__shellTxDropReady;
     }
-    var p = withBootTimeout(
-      fetch(
-        // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
-        // reliably; a per-fetch unique token forces a real network read so
-        // a freshly regenerated drop is picked up on the next boot.
-        serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
-        { credentials: "omit", cache: "no-store" },
-      ),
-      "tx drop manifest",
-      4000,
-    )
-      .then(function (r) {
-        if (!r.ok) return null;
-        return r.json();
-      })
-      .then(function (mf) {
-        if (!mf || typeof mf !== "object" || !mf.entries) return null;
-        // Different transform semantics (target/loose/assumptions drift
-        // between the drop builder and this shell) could pass the syntax
-        // oracle yet behave differently at runtime; require an exact match.
-        if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
-        var d = {
-          ok: true,
-          base: serverUrl + "/shell/",
-          entries: mf.entries,
-          h: 0,
-          m: 0,
-          r: 0,
-          f: 0,
-        };
-        window.__shellTxDrop = d;
-        return d;
+    // JELA-59: the decision waits for the epoch gate (resolved immediately
+    // when the gate is off). An epoch-matched boot serves the persisted
+    // last-good manifest — the per-boot busted fetch is exactly the
+    // revalidation the gate suppresses; every other state fetches as today.
+    var p = ceReady()
+      .then(function () {
+        if (window.__shellCfgEM === 1) {
+          var ce = ceTxmRead(serverUrl);
+          if (ce) {
+            ceSup("txm");
+            return ceTxdState(serverUrl, ce);
+          }
+        }
+        return withBootTimeout(
+          fetch(
+            // JEL-178: M63's WebView doesn't honor fetch cache:"no-store"
+            // reliably; a per-fetch unique token forces a real network read
+            // so a freshly regenerated drop is picked up on the next boot.
+            serverUrl + TXDROP_MANIFEST_PATH + "?__sb=" + Date.now(),
+            { credentials: "omit", cache: "no-store" },
+          ),
+          "tx drop manifest",
+          4000,
+        )
+          .then(function (r) {
+            if (!r.ok) return null;
+            return r.json();
+          })
+          .then(function (mf) {
+            if (!mf || typeof mf !== "object" || !mf.entries) return null;
+            // Different transform semantics (target/loose/assumptions drift
+            // between the drop builder and this shell) could pass the syntax
+            // oracle yet behave differently at runtime; require exact match.
+            if (mf.babelOptsKey !== BABEL_OPTS_KEY) return null;
+            if (ceGateOn()) ceTxmWrite(serverUrl, mf.entries);
+            return ceTxdState(serverUrl, mf.entries);
+          });
       })
       .catch(function () {
         return null;
@@ -4679,6 +4922,11 @@
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
+    // JELA-59: kick the config-epoch probe first — loadTxDropManifest and
+    // the SWR revalidation below chain on window.__shellEpochReady.
+    try {
+      loadConfigEpoch(serverUrl);
+    } catch (_) {}
     // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
     // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
     // without a /shell/ drop and every consumer falls back to Babel.
@@ -4714,18 +4962,25 @@
       } catch (_) {}
     var pf = window.__shellPrefetch,
       fetchOpts = { credentials: "omit" },
-      indexFetch = withBootTimeout(
-        pf && pf.baseUrl === baseUrl && pf.index
-          ? pf.index
-          : fetch(baseUrl + "index.html", fetchOpts),
-        "web client",
-      ),
-      configFetch = withBootTimeout(
-        pf && pf.baseUrl === baseUrl && pf.config
-          ? pf.config
-          : fetch(baseUrl + "config.json", fetchOpts),
-        "web config",
-      );
+      // JELA-59: creation is lazy (thunks) so an epoch-matched cache-hit
+      // boot can skip issuing the SWR revalidation pair entirely; the
+      // cache-miss primary path calls them synchronously below, as before.
+      mkIdxF = function () {
+        return withBootTimeout(
+          pf && pf.baseUrl === baseUrl && pf.index
+            ? pf.index
+            : fetch(baseUrl + "index.html", fetchOpts),
+          "web client",
+        );
+      },
+      mkCfgF = function () {
+        return withBootTimeout(
+          pf && pf.baseUrl === baseUrl && pf.config
+            ? pf.config
+            : fetch(baseUrl + "config.json", fetchOpts),
+          "web config",
+        );
+      };
     ((window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
       (window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0),
       (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0));
@@ -4737,34 +4992,47 @@
       (window.__shellIndexCacheHits++,
         (window.__shellWebIndexCacheAdopted = 1));
       var revalStart = typeof Date != "undefined" ? Date.now() : 0;
-      (indexFetch
-        .then(function (r) {
-          return r && r.ok ? r.text() : null;
-        })
-        .then(function (txt) {
-          if (
-            (typeof txt == "string" &&
-              txt.length &&
-              txt !== cachedIndex.body &&
-              writeWebIndexCache(serverUrl, txt),
-            revalStart)
-          )
-            try {
-              window.__shellIndexCacheSavedMs = Date.now() - revalStart;
-            } catch (_) {}
-        })
-        .catch(function () {}),
-        configFetch
+      // JELA-59: the SWR revalidation pair now waits for the epoch gate. A
+      // matched boot skips it (suppression point (a)); any other state
+      // revalidates as today, and a successful pair commits a pending epoch
+      // record (write-after-adopt). Chaining on __shellEpochReady also
+      // orders the writes AFTER a mismatch invalidation.
+      var drain = function (mk, c, w) {
+        return mk()
           .then(function (r) {
             return r && r.ok ? r.text() : null;
           })
           .then(function (txt) {
-            typeof txt == "string" &&
-              txt.length &&
-              txt !== cachedConfig.body &&
-              writeWebConfigCache(serverUrl, txt);
+            var ok = typeof txt === "string" && !!txt.length;
+            if (ok && txt !== c.body) w(serverUrl, txt);
+            return ok;
           })
-          .catch(function () {}));
+          .catch(function () {
+            return false;
+          });
+      };
+      ceReady()
+        .then(function () {
+          if (window.__shellCfgEM === 1) {
+            ceSup("idx");
+            return;
+          }
+          var iOk = drain(mkIdxF, cachedIndex, writeWebIndexCache).then(
+            function (ok) {
+              if (revalStart) {
+                try {
+                  window.__shellIndexCacheSavedMs = Date.now() - revalStart;
+                } catch (_) {}
+              }
+              return ok;
+            },
+          );
+          var cOk = drain(mkCfgF, cachedConfig, writeWebConfigCache);
+          Promise.all([iOk, cOk]).then(function (r) {
+            if (r[0] && r[1]) ceAdopt();
+          });
+        })
+        .catch(function () {});
     }
     var prefetchedBundle =
       pf && pf.baseUrl === baseUrl && pf.bundle && pf.bundleUrl
@@ -4779,7 +5047,7 @@
     } catch (_) {}
     var indexPromise = indexCacheHit
         ? Promise.resolve(cachedIndex.body)
-        : indexFetch
+        : mkIdxF()
             .then(function (r) {
               if (!r.ok)
                 throw new Error(
@@ -4797,7 +5065,7 @@
             }),
       configPromise = indexCacheHit
         ? Promise.resolve(cachedConfig.parsed)
-        : configFetch
+        : mkCfgF()
             .then(function (r) {
               if (!r.ok)
                 throw new Error(
@@ -4813,6 +5081,15 @@
                 throw new Error("Failed to parse web config");
               }
             });
+    // JELA-59 write-after-adopt, cache-miss path: the primary /web/ pair
+    // succeeding IS the adoption; commit once the epoch probe also settled
+    // (so a mismatch invalidation always precedes the commit).
+    if (!indexCacheHit)
+      Promise.all([indexPromise, configPromise])
+        .then(function () {
+          ceReady().then(ceAdopt);
+        })
+        .catch(function () {});
     // JEL-134: vault restore joins the document.write gate so jellyfin-web
     // always boots against restored creds. It overlaps the index/config
     // RTTs (IDB read is ~ms) and is 3 s-bounded, never-rejecting — it can
