@@ -4,6 +4,6 @@
   "private": true,
   "description": "Jellyfin server plugin serving the Hosted Shell Bootstrap drop (/shell/) + in-process tx-drop rebuild (JELA-15)",
   "scripts": {
-    "test": "node scripts/lockstep.test.cjs"
+    "test": "node scripts/lockstep.test.cjs && node scripts/diag-ingest.test.cjs && node scripts/config-fingerprint.test.cjs"
   }
 }

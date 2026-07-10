@@ -26,17 +26,36 @@ public class ShellController : ControllerBase
 
     private readonly ShellDropService _drop;
     private readonly DiagIngestService _diag;
+    private readonly ConfigFingerprintService _fingerprint;
 
-    public ShellController(ShellDropService drop, DiagIngestService diag)
+    public ShellController(ShellDropService drop, DiagIngestService diag, ConfigFingerprintService fingerprint)
     {
         _drop = drop;
         _diag = diag;
+        _fingerprint = fingerprint;
     }
 
+    /// <summary>
+    /// JELA-58: dynamic — carries the additive configEpoch/components fields
+    /// unless the operator kill switch (DisableConfigFingerprint) is on or
+    /// the fingerprint is unavailable, in which case the legacy static bytes
+    /// are served verbatim (today's behavior, both compat directions free).
+    /// </summary>
     [HttpGet("manifest.json")]
     public IActionResult GetManifest()
     {
         Response.Headers.CacheControl = "no-cache";
+
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        if (!config.DisableConfigFingerprint)
+        {
+            var fingerprint = _fingerprint.TryGetFingerprint(config);
+            if (fingerprint != null)
+            {
+                return File(_drop.BuildManifestJson(fingerprint), "application/json");
+            }
+        }
+
         return File(_drop.ManifestJson, "application/json");
     }
 
