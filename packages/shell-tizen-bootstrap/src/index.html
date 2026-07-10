@@ -91,7 +91,7 @@
             // selftest.cjs asserts this equality so it can never silently drift
             // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
             // on the diagnostic label without polluting the version itself.
-            var HSB_VERSION = '2.0.21';
+            var HSB_VERSION = '2.0.22';
             var HSB_CODENAME = 'ac3';
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
@@ -367,11 +367,20 @@
                     hsbPhase('load-shell', 'ok');
                     appendScript(url,
                         function(){
+                            // JELA-66: store BEFORE the done-race guard. On a
+                            // slow network the 4 s boot budget can fire first
+                            // (done=true, baked fallback appended) while this
+                            // hosted script still loads+executes late — those
+                            // are exactly the boots the byte cache must learn
+                            // from, so the NEXT boot is instant from LS and
+                            // never re-races the budget timer. (QN90B/WAN
+                            // finding: fallback:timeout every boot, so the
+                            // guarded store never ran.)
+                            storeShellBody(url, sha);
                             if (done) return;
                             done = true; clearTimeout(timer);
                             window.__hsbShellUrl = url;
                             hsbPhase('shell-loaded', 'ok');
-                            storeShellBody(url, sha);
                         },
                         function(){
                             if (done) return;

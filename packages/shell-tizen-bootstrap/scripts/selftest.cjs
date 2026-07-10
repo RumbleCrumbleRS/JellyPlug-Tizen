@@ -20,7 +20,7 @@ const SOURCE = match[1];
 
 function fail(msg) { console.error('FAIL:', msg); process.exit(1); }
 
-function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, navigatorUA, ensureBabelSpy, extraStore, fetchBodies }) {
+function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, scriptDelayedOk, navigatorUA, ensureBabelSpy, extraStore, fetchBodies }) {
     const log = { appended: [], formAttached: false, errorShown: null };
     const sandboxRef = {}; // filled at the bottom so inline exec sees the live sandbox
     const head = { tagName: 'HEAD', appendChild(node) {
@@ -31,6 +31,12 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         // so the LS-shell-cache scenarios can observe execution.
         if (node.tagName === 'SCRIPT' && !node.src && typeof node.text === 'string') {
             vm.runInContext(node.text, sandboxRef.sandbox);
+            return;
+        }
+        // JELA-66: scriptDelayedOk[src] = ms — onload fires late (slow-network
+        // race with the BOOT_BUDGET_MS baked-fallback timer).
+        if (scriptDelayedOk && scriptDelayedOk[node.src] != null) {
+            setTimeout(function(){ if (node.onload) node.onload(); }, scriptDelayedOk[node.src]);
             return;
         }
         setImmediate(function(){
@@ -170,7 +176,7 @@ async function runScenario(opts) {
     const env = makeEnv(opts);
     vm.createContext(env.sandbox);
     vm.runInContext(SOURCE, env.sandbox);
-    await new Promise(function(resolve){ setTimeout(resolve, 50); });
+    await new Promise(function(resolve){ setTimeout(resolve, opts.settleMs || 50); });
     return env;
 }
 
@@ -630,6 +636,34 @@ async function runScenario(opts) {
         if (r.sandbox.window.__corrupt)
             fail('scenario 21: corrupt body must NOT execute');
         console.log('OK 21: corrupt record dropped → pinned network load');
+    }
+
+    // Scenario 22: slow network — the hosted script's onload fires AFTER the
+    // 4 s boot budget already triggered the baked fallback (done=true). The
+    // byte store must still learn the shell bytes so the NEXT boot executes
+    // from LS and never re-races the timer (QN90B/WAN field finding: this
+    // race fired every boot, so a guarded store would never run).
+    {
+        const pinned = 'https://srv.example/shell/shell.min.js?v=slowsha';
+        const body = 'window.__hsbSlowShell=1;/*' + 'x'.repeat(1200) + '*/';
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            scriptDelayedOk: { [pinned]: 4300 },
+            fetchBodies: { [pinned]: body },
+            extraStore: { 'jellyfin.shell.hsbCachedHash': 'slowsha' },
+            settleMs: 5000,
+        });
+        const netScripts = r.log.appended.filter(function(x){ return x.tag === 'SCRIPT' && x.src; });
+        if (netScripts.length !== 2 || netScripts[1].src !== 'boot-shell.min.js')
+            fail('scenario 22: expected pinned load + baked fallback (budget raced), got '
+                + JSON.stringify(netScripts.map(function(s){ return s.src; })));
+        let rec = null;
+        try { rec = JSON.parse(r.sandbox.localStorage.store['jellyfin.shell.hsbShellBody']); } catch(_) {}
+        if (!rec || rec.sha !== 'slowsha' || rec.body !== body)
+            fail('scenario 22: late onload must still store the shell bytes, got '
+                + JSON.stringify(rec && { sha: rec.sha, len: rec.len }));
+        console.log('OK 22: budget-raced late onload still stores bytes for the next boot');
     }
 
     console.log('ALL SCENARIOS PASS');
