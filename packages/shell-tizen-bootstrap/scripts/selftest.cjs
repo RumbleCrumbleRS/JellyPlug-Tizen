@@ -20,7 +20,7 @@ const SOURCE = match[1];
 
 function fail(msg) { console.error('FAIL:', msg); process.exit(1); }
 
-function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, scriptDelayedOk, navigatorUA, ensureBabelSpy, extraStore, fetchBodies }) {
+function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, scriptDelayedOk, scriptSilent, navigatorUA, ensureBabelSpy, extraStore, fetchBodies, fetchRejects, storeRetryMs }) {
     const log = { appended: [], formAttached: false, errorShown: null };
     const sandboxRef = {}; // filled at the bottom so inline exec sees the live sandbox
     const head = { tagName: 'HEAD', appendChild(node) {
@@ -39,6 +39,9 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
             setTimeout(function(){ if (node.onload) node.onload(); }, scriptDelayedOk[node.src]);
             return;
         }
+        // JELA-66: scriptSilent[src] — neither onload nor onerror ever fires
+        // (models the load event being lost to the shell's doc.write).
+        if (scriptSilent && scriptSilent[node.src]) return;
         setImmediate(function(){
             if (node.tagName !== 'SCRIPT') return;
             if (scriptErrors && scriptErrors[node.src]) {
@@ -104,8 +107,15 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
     // JELA-66: URLs present in `fetchBodies` resolve with real text (the
     // shell byte-store path); everything else stays a forever-pending
     // promise (the prefetch prime path never consumes responses here).
+    // JELA-66: fetchRejects[url] = n — the first n fetches of that URL reject
+    // (models document.open() aborting the old document's in-flight fetches).
+    const fetchRejected = {};
     function fakeFetch(url){
         log.fetched.push(url);
+        if (fetchRejects && (fetchRejected[url] || 0) < (fetchRejects[url] || 0)) {
+            fetchRejected[url] = (fetchRejected[url] || 0) + 1;
+            return Promise.reject(new Error('aborted'));
+        }
         if (fetchBodies && Object.prototype.hasOwnProperty.call(fetchBodies, url)) {
             const body = fetchBodies[url];
             return Promise.resolve({ ok: true, text: function(){ return Promise.resolve(body); } });
@@ -113,6 +123,7 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         return new Promise(function(){});
     }
     const win = { __qaMarks: null };
+    if (storeRetryMs) win.__hsbStoreRetryMs = storeRetryMs;
     if (ensureBabelSpy) {
         log.babelKicks = 0;
         win.__ensureBabel = function(){ log.babelKicks++; return Promise.resolve(); };
@@ -664,6 +675,59 @@ async function runScenario(opts) {
             fail('scenario 22: late onload must still store the shell bytes, got '
                 + JSON.stringify(rec && { sha: rec.sha, len: rec.len }));
         console.log('OK 22: budget-raced late onload still stores bytes for the next boot');
+    }
+
+    // Scenario 23: the store fetch kicked from onload is ABORTED (the shell's
+    // doc.write kills the old document's in-flight fetches — QN90B field
+    // finding, JELA-66) → the delayed retry must run post-write and persist
+    // the record anyway.
+    {
+        const pinned = 'https://srv.example/shell/shell.min.js?v=retrysha';
+        const body = 'window.__hsbRetryShell=1;/*' + 'x'.repeat(1200) + '*/';
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            scriptOk: { [pinned]: true },
+            fetchRejects: { [pinned]: 1 },
+            fetchBodies: { [pinned]: body },
+            storeRetryMs: [0, 40, 40],
+            extraStore: { 'jellyfin.shell.hsbCachedHash': 'retrysha' },
+            settleMs: 300,
+        });
+        const storeFetches = r.log.fetched.filter(function(u){ return u === pinned; });
+        if (storeFetches.length !== 2)
+            fail('scenario 23: expected aborted fetch + 1 retry, got ' + storeFetches.length);
+        let rec = null;
+        try { rec = JSON.parse(r.sandbox.localStorage.store['jellyfin.shell.hsbShellBody']); } catch(_) {}
+        if (!rec || rec.sha !== 'retrysha' || rec.body !== body)
+            fail('scenario 23: retry must persist the record after the aborted first fetch, got '
+                + JSON.stringify(rec && { sha: rec.sha, len: rec.len }));
+        if (r.sandbox.window.__hsbShellStorePending !== false)
+            fail('scenario 23: store chain must clear the pending flag after success');
+        console.log('OK 23: store fetch aborted by doc.write → delayed retry persists the record');
+    }
+
+    // Scenario 24: the pinned script's onload NEVER fires (lost to the
+    // doc.write entirely) → the loadShellAt safety kick must still start a
+    // store chain and persist the record.
+    {
+        const pinned = 'https://srv.example/shell/shell.min.js?v=kicksha';
+        const body = 'window.__hsbKickShell=1;/*' + 'x'.repeat(1200) + '*/';
+        const r = await runScenario({
+            serverUrl: 'https://srv.example',
+            manifestResponse: 'timeout',
+            scriptSilent: { [pinned]: true },
+            fetchBodies: { [pinned]: body },
+            storeRetryMs: [0, 40, 40], // safety kick fires at 4 * 40 = 160 ms
+            extraStore: { 'jellyfin.shell.hsbCachedHash': 'kicksha' },
+            settleMs: 400,
+        });
+        let rec = null;
+        try { rec = JSON.parse(r.sandbox.localStorage.store['jellyfin.shell.hsbShellBody']); } catch(_) {}
+        if (!rec || rec.sha !== 'kicksha' || rec.body !== body)
+            fail('scenario 24: safety kick must store the record when onload is lost, got '
+                + JSON.stringify(rec && { sha: rec.sha, len: rec.len }));
+        console.log('OK 24: lost onload → loadShellAt safety kick still stores the record');
     }
 
     console.log('ALL SCENARIOS PASS');

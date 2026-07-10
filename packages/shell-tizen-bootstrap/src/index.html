@@ -84,6 +84,10 @@
             var HSB_SHELL_BODY_KEY = 'jellyfin.shell.hsbShellBody';
             var HSB_SHELL_LS_DISABLED_KEY = 'jellyfin.shell.hsbShellLsDisabled';
             var HSB_SHELL_BODY_MAX = 262144; // 256 KB (shell.min.js ~175 KB today)
+            // Store-attempt schedule: first try from the script onload, then
+            // two delayed retries that outlive the shell's doc.write (which
+            // aborts the old document's in-flight fetches — see storeShellBody).
+            var HSB_STORE_RETRY_MS = [0, 12000, 30000];
             var HSB_DEBUG_KEY = 'jellyfin.shell.hsbDebug';
             // JEL-332: the true installed bootstrap version. MUST equal the
             // config.xml widget version (the single source of truth that
@@ -91,7 +95,7 @@
             // selftest.cjs asserts this equality so it can never silently drift
             // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
             // on the diagnostic label without polluting the version itself.
-            var HSB_VERSION = '2.0.22';
+            var HSB_VERSION = '2.0.23';
             var HSB_CODENAME = 'ac3';
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
@@ -238,32 +242,66 @@
                 // and persist it for the next boot. Never on the critical
                 // path; every failure just means the next boot loads over the
                 // network like today.
+                //
+                // JELA-66 on-device finding (QN90B): the shell doc.writes the
+                // /web/ client shortly after it executes, and document.open()
+                // ABORTS in-flight fetches of the old document — so a single
+                // fetch kicked from the script onload silently dies every
+                // boot and the record is never written. Timers are window-
+                // level and survive the doc.write, so failed attempts are
+                // retried on a delay; by then the rewritten document is
+                // settled and the fetch completes (verified live over CDP).
                 if (!sha || shellLsDisabled() || typeof fetch !== 'function') return;
-                var cur = null;
-                try { cur = JSON.parse(localStorage.getItem(HSB_SHELL_BODY_KEY)); }
-                catch(_) { cur = null; }
-                if (cur && cur.v === 1 && cur.sha === sha) return; // already stored
-                try {
-                    fetch(url, { credentials: 'omit' })
-                        .then(function(r){ return (r && r.ok) ? r.text() : null; })
-                        .then(function(body){
-                            if (typeof body !== 'string' || body.length < 1024
-                                || body.length > HSB_SHELL_BODY_MAX) return;
-                            // Syntax-check on THIS engine (not called) before
-                            // the body may ever replace the network load.
-                            try { new Function(body); } catch(_) { return; }
-                            var rec = { v: 1, sha: sha, url: url, len: body.length,
-                                        h: hsbFnv(body), ts: Date.now(), body: body };
-                            try {
-                                localStorage.setItem(HSB_SHELL_BODY_KEY, JSON.stringify(rec));
-                                hsbState.shellLs = 'stored b=' + body.length;
-                            } catch(_) {
-                                // Quota — make sure no stale record lingers.
-                                try { localStorage.removeItem(HSB_SHELL_BODY_KEY); } catch(__){}
-                            }
-                        })
-                        .catch(function(){});
-                } catch(_){}
+                if (window.__hsbShellStorePending) return; // one chain at a time
+                window.__hsbShellStorePending = true;
+                // Test hook: the selftest sandbox shrinks these delays.
+                var delays = window.__hsbStoreRetryMs || HSB_STORE_RETRY_MS;
+                var attempt = 0;
+                function fail(why) {
+                    attempt++;
+                    if (attempt >= delays.length) {
+                        hsbState.shellLs = 'store-failed:' + why;
+                        // Unlock so a later safety kick can try a fresh chain.
+                        window.__hsbShellStorePending = false;
+                        return;
+                    }
+                    hsbState.shellLs = 'store-retry' + attempt + ':' + why;
+                    try { setTimeout(run, delays[attempt]); }
+                    catch(_) { window.__hsbShellStorePending = false; }
+                }
+                function run() {
+                    var cur = null;
+                    try { cur = JSON.parse(localStorage.getItem(HSB_SHELL_BODY_KEY)); }
+                    catch(_) { cur = null; }
+                    if (cur && cur.v === 1 && cur.sha === sha) {
+                        window.__hsbShellStorePending = false;
+                        return; // already stored
+                    }
+                    try {
+                        fetch(url, { credentials: 'omit' })
+                            .then(function(r){ return (r && r.ok) ? r.text() : null; })
+                            .then(function(body){
+                                if (typeof body !== 'string' || body.length < 1024
+                                    || body.length > HSB_SHELL_BODY_MAX) { fail('body'); return; }
+                                // Syntax-check on THIS engine (not called) before
+                                // the body may ever replace the network load.
+                                try { new Function(body); } catch(_) { fail('syntax'); return; }
+                                var rec = { v: 1, sha: sha, url: url, len: body.length,
+                                            h: hsbFnv(body), ts: Date.now(), body: body };
+                                try {
+                                    localStorage.setItem(HSB_SHELL_BODY_KEY, JSON.stringify(rec));
+                                    hsbState.shellLs = 'stored b=' + body.length;
+                                    window.__hsbShellStorePending = false;
+                                } catch(_) {
+                                    // Quota — make sure no stale record lingers.
+                                    try { localStorage.removeItem(HSB_SHELL_BODY_KEY); } catch(__){}
+                                    fail('quota');
+                                }
+                            })
+                            .catch(function(){ fail('fetch'); });
+                    } catch(_) { fail('fetch'); }
+                }
+                run();
             }
 
             function appendScript(src, onload, onerror) {
@@ -365,6 +403,16 @@
                 function loadShellAt(url, sha) {
                     hsbState.shellUrl = url;
                     hsbPhase('load-shell', 'ok');
+                    // Safety kick: if the onload-driven store chain died (or
+                    // onload itself was lost to the doc.write), try once more
+                    // from a long timer — storeShellBody no-ops when a valid
+                    // record already exists or a chain is still in flight.
+                    if (sha) {
+                        var kickMs = (window.__hsbStoreRetryMs && 4 * window.__hsbStoreRetryMs[
+                            window.__hsbStoreRetryMs.length - 1]) || 45000;
+                        try { setTimeout(function(){ storeShellBody(url, sha); }, kickMs); }
+                        catch(_){}
+                    }
                     appendScript(url,
                         function(){
                             // JELA-66: store BEFORE the done-race guard. On a
