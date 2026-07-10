@@ -1,6 +1,6 @@
 {
   "name": "@jellyfin-tv/shell-tizen",
-  "version": "1.0.75",
+  "version": "1.0.76",
   "private": true,
   "description": "Jellyfin TV browser shell for Samsung Tizen.",
   "license": "GPL-2.0-only",

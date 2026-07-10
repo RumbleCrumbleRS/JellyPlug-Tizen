@@ -2799,6 +2799,13 @@
       // load count / ok / err for the pluginManager.loadPlugin fallback
       // that targets empty Video roster.
       '    (function(){var dpm=(window.__shellDiag&&window.__shellDiag.pm)||{};var r=dpm.roster||{};var first=(r.names&&r.names[0])||"?";return "pm p="+(window.__shellPMPatched||0)+" c="+(window.__shellCMPatched||0)+" r="+(r.count||0)+"/"+(r.video||0)+" mt="+(window.__shellMTDerived||0)+" gs="+(window.__shellGACAuthSwap||0)+" gf="+(window.__shellGACFallback||0)+" pm="+(window.__shellPluginManager?1:0)+" flv="+(window.__shellForceLoadVideoCount||0)+"/"+(window.__shellForceLoadVideoOK||0)+"/"+(window.__shellForceLoadVideoErr?1:0)+" p0="+first;})(),',
+      // JELA-65: config-epoch row. `cache=` is the persisted
+      // localStorage['jellyfin.shell.configEpoch'] epoch — the device-side
+      // hash the gate compares against the server manifest's requested
+      // configEpoch (`srv=`, first 8). st/ad/em mirror the
+      // window.__shellConfigEpoch QA counters (JELA-59) so a single debug
+      // HUD screenshot answers "what hash does this TV hold vs the server".
+      '    (function(){var g=window.__shellConfigEpoch||{};var rec=null;try{rec=JSON.parse(localStorage.getItem("jellyfin.shell.configEpoch"));}catch(_){}var c=(rec&&rec.epoch)?String(rec.epoch):"-";return "CE:"+(g.st||"?")+" srv="+(g.e||"-")+" ad="+(g.ad||0)+" em="+(window.__shellCfgEM||0)+" cache="+c;})(),',
       '    "err="+d.errors.length+" warn="+d.warns.length+" ua="+s.ua.slice(0,40)];',
       "  var es=d.errors.slice(-8);",
       '  for(var i=0;i<es.length;i++){lines.push("E "+es[i].f+":"+es[i].l+" "+es[i].m);}',
