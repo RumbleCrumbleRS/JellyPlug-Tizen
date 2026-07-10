@@ -1,13 +1,15 @@
 /*
  * JELA-59 (JELA-57 WS-2): config-epoch boot gate — server fingerprint
  * (manifest configEpoch/components, JELA-58) vs the TV-persisted record.
- * Opt-in via localStorage['jellyfin.shell.configEpochGate']='1', default
- * OFF; kill switch 'jellyfin.shell.configEpochDisabled'='1' honored now.
+ * DEFAULT-ON since the JELA-61 flip; opt-out kill switch
+ * 'jellyfin.shell.configEpochDisabled'='1'. The retired WS-2 opt-in key
+ * 'jellyfin.shell.configEpochGate' is ignored.
  *
  * Extracts the SHIPPED gate block (+ loadTxDropManifest) from BOTH shells
  * and drives it with fake localStorage/fetch, pinning:
- *   - default OFF: no flag -> st="off", zero manifest fetches, CfgEM 0
- *   - kill switch beats the gate flag
+ *   - default ON: no flags -> the gate probes the manifest and runs
+ *   - opt-out: configEpochDisabled='1' -> st="off", zero manifest
+ *     fetches, CfgEM 0 (the retired opt-in key cannot override it)
  *   - manifest without the additive fields -> st="nofield", inert
  *   - fetch error -> st="err", inert (today's behavior)
  *   - fresh (no record) -> nothing invalidated; record commits ONLY via
@@ -139,29 +141,29 @@ const S = "http://srv:8096";
 const COMPS = { web: "w1", shell: "s1", scripts: "j1", branding: "b1" };
 
 async function driveShell(label, code) {
-  // A. default OFF
+  // A. default ON (JELA-61 flip): no flags at all -> the gate runs
   let e = mkEnv(code);
+  e.setManifest({ configEpoch: "E1", components: COMPS });
   await e.api.loadConfigEpoch(S);
   check(
-    label + ": default OFF -> st=off, no fetch, CfgEM 0",
-    e.window.__shellConfigEpoch.st === "off" &&
-      e.fetchLog.length === 0 &&
-      e.window.__shellCfgEM === 0,
+    label + ": default ON -> no flags, gate probes manifest, st=fresh",
+    e.window.__shellConfigEpoch.st === "fresh" && e.fetchLog.length === 1,
   );
 
-  // kill switch beats gate flag
+  // opt-out kill switch (the retired opt-in key cannot override it)
   e = mkEnv(code);
   e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set("jellyfin.shell.configEpochDisabled", "1");
   await e.api.loadConfigEpoch(S);
   check(
-    label + ": kill switch -> st=off, no fetch",
-    e.window.__shellConfigEpoch.st === "off" && e.fetchLog.length === 0,
+    label + ": opt-out -> st=off, no fetch, CfgEM 0",
+    e.window.__shellConfigEpoch.st === "off" &&
+      e.fetchLog.length === 0 &&
+      e.window.__shellCfgEM === 0,
   );
 
   // manifest without field
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.setManifest({ version: "1.0.13.0", sha256: "x" });
   await e.api.loadConfigEpoch(S);
   check(
@@ -171,7 +173,6 @@ async function driveShell(label, code) {
 
   // fetch error
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.setManifest("neterr");
   await e.api.loadConfigEpoch(S);
   check(
@@ -181,7 +182,6 @@ async function driveShell(label, code) {
 
   // fresh + write-after-adopt shape
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.setManifest({ configEpoch: "E1", components: COMPS });
   await e.api.loadConfigEpoch(S);
   check(
@@ -202,10 +202,14 @@ async function driveShell(label, code) {
 
   // match
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
-    JSON.stringify({ origin: S, epoch: "E1", components: COMPS, ts: Date.now() }),
+    JSON.stringify({
+      origin: S,
+      epoch: "E1",
+      components: COMPS,
+      ts: Date.now(),
+    }),
   );
   e.setManifest({ configEpoch: "E1", components: COMPS });
   await e.api.loadConfigEpoch(S);
@@ -218,7 +222,6 @@ async function driveShell(label, code) {
 
   // origin switch
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
     JSON.stringify({
@@ -237,7 +240,6 @@ async function driveShell(label, code) {
 
   // soft-TTL
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
     JSON.stringify({
@@ -258,10 +260,14 @@ async function driveShell(label, code) {
 
   // scripts mismatch -> selective invalidation + write-after-adopt
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
-    JSON.stringify({ origin: S, epoch: "E1", components: COMPS, ts: Date.now() }),
+    JSON.stringify({
+      origin: S,
+      epoch: "E1",
+      components: COMPS,
+      ts: Date.now(),
+    }),
   );
   e.store.set("jellyfin.shell.webIndexHtml", "IDX");
   e.store.set(
@@ -301,10 +307,14 @@ async function driveShell(label, code) {
 
   // web mismatch -> the four web body caches, JSI kept
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
-    JSON.stringify({ origin: S, epoch: "E1", components: COMPS, ts: Date.now() }),
+    JSON.stringify({
+      origin: S,
+      epoch: "E1",
+      components: COMPS,
+      ts: Date.now(),
+    }),
   );
   e.store.set("jellyfin.shell.webIndexHtml", "IDX");
   e.store.set("jellyfin.shell.webConfig", "CFG");
@@ -327,10 +337,14 @@ async function driveShell(label, code) {
 
   // tx-drop manifest suppression (point (c))
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.store.set(
     "jellyfin.shell.configEpoch",
-    JSON.stringify({ origin: S, epoch: "E1", components: COMPS, ts: Date.now() }),
+    JSON.stringify({
+      origin: S,
+      epoch: "E1",
+      components: COMPS,
+      ts: Date.now(),
+    }),
   );
   e.setManifest({ configEpoch: "E1", components: COMPS });
   e.api.ceTxmWrite(S, { deadbeef: "tx/deadbeef.js" });
@@ -349,7 +363,6 @@ async function driveShell(label, code) {
   );
 
   e = mkEnv(code);
-  e.store.set("jellyfin.shell.configEpochGate", "1");
   e.setManifest({
     configEpoch: "E1",
     components: COMPS,
@@ -419,7 +432,6 @@ async function driveShell(label, code) {
   ]) {
     const min = fs.readFileSync(minPath, "utf8");
     for (const lit of [
-      "jellyfin.shell.configEpochGate",
       "jellyfin.shell.configEpochDisabled",
       "jellyfin.shell.configEpoch",
       "jellyfin.shell.txDropCache",

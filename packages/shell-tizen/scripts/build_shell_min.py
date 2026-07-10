@@ -99,7 +99,13 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # code, leaving >= SOFT_HEADROOM of room after the raise; never absorb the
 # bump silently in an unrelated change. The build warns (does not fail) when
 # headroom drops below SOFT_HEADROOM so the wall is visible one ticket early.
-HARD_CAP = 180224
+# JELA-61 raised it 180224 -> 196608 (192 KiB): the JELA-59 config-epoch
+# boot gate had left the blob 117 B under the old cap (the build was
+# warning), and JELA-61 is the next shell-touching ticket (config-epoch
+# default-ON flip, mirrored in boot-shell) — the flip itself shrinks the
+# code slightly, so the raise restores full SOFT_HEADROOM per the policy
+# above rather than absorbing the WS-2 growth silently.
+HARD_CAP = 196608
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
