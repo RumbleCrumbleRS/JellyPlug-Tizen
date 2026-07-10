@@ -1,6 +1,6 @@
 {
   "name": "@jellyfin-tv/shell-tizen-bootstrap",
-  "version": "2.0.21",
+  "version": "2.0.22",
   "private": true,
   "description": "Hosted Shell Bootstrap (HSB) WGT — installed once on a Tizen TV via Samsung Device Manager GUI. Fetches ${server}/shell/shell.min.js at launch with a baked boot-shell.min.js fallback so every shell update afterwards is a server-side file swap (no sdb shell, no pkgcmd).",
   "license": "GPL-2.0-only",
