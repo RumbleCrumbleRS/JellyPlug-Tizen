@@ -4408,19 +4408,16 @@
   //   today's behavior (match stays 0, nothing is invalidated).
   // Soft TTL: even on a match, a full-revalidation boot runs every 20
   // boots or 7 days so a fingerprint bug cannot pin caches forever.
-  // Rollout (JELA-48/51 discipline): OPT-IN via
-  // localStorage['jellyfin.shell.configEpochGate']='1'; the kill switch
-  // 'jellyfin.shell.configEpochDisabled'='1' is honored NOW as the future
-  // default-ON opt-out. QA counters (WS-3) live on
+  // Rollout (JELA-61 flip, JELA-54 settle-dismiss precedent): DEFAULT-ON
+  // with the opt-out kill switch 'jellyfin.shell.configEpochDisabled'='1'
+  // (drill-verified on-device in WS-3 before the flip; the WS-2 opt-in key
+  // 'jellyfin.shell.configEpochGate' is retired and ignored). QA counters
+  // (WS-3) live on
   // window.__shellConfigEpoch {st,e,inv,sup:{idx,txm,jsi,q,css}} plus the
   // boot-scoped match flag window.__shellCfgEM (1 = suppression active).
   function ceGateOn() {
     try {
-      var ls = localStorage;
-      return (
-        ls.getItem("jellyfin.shell.configEpochGate") === "1" &&
-        ls.getItem("jellyfin.shell.configEpochDisabled") !== "1"
-      );
+      return localStorage.getItem("jellyfin.shell.configEpochDisabled") !== "1";
     } catch (_) {
       return false;
     }
