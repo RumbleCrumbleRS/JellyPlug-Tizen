@@ -6209,11 +6209,19 @@
       app = L && L.boot ? L.boot(window, document) : null;
     } catch (_) {
       d.st = "exec-err";
+      // The cached bytes are proven bad on THIS engine — restock with
+      // haveSha=null so the chain replaces them even though rec.sha still
+      // matches what it fetched them under. Without this a TV that cached
+      // a bad blob was stuck on exec-err every boot (found live on the
+      // Q60R when the pre-es5-target build cached its catch{} blob).
+      liteRestock(serverUrl, null);
       return false;
     }
     if (!app) {
       // No stored session — the SPA owns login; Lite re-engages next boot.
+      // Still revalidate so the cache tracks the server while logged out.
       d.st = "no-session";
+      liteRestock(serverUrl, rec.sha);
       return false;
     }
     window.__shellLiteHandled = 1;

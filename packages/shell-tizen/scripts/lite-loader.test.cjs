@@ -297,9 +297,18 @@ async function main() {
     env.ctx.__liteNoSession = 1;
     check("no-session: SPA path", env.boot() === false);
     check("no-session: st", env.ctx.__shellLite.st === "no-session");
+    env.flushTimers();
+    await drain();
+    check(
+      "no-session: still revalidates (manifest-only on match)",
+      env.fetchLog.length === 1 && env.ctx.__shellLite.restock === "fresh",
+    );
   }
 
-  // 6. throwing body -> exec-err, SPA path
+  // 6. throwing body -> exec-err, SPA path, and the bad blob gets REPLACED
+  // (haveSha=null restock — found live on the Q60R: a cached blob the M63
+  // could not parse stuck the TV on exec-err every boot because rec.sha
+  // still matched the fetch sha).
   {
     const body = 'throw new Error("boom")';
     const env = mkEnv({
@@ -307,10 +316,17 @@ async function main() {
         "jellyfin.shell.liteEnabled": "1",
         "jellyfin.lite.body": mkRec(body, SHA),
       },
-      manifest: { liteSha256: SHA },
+      manifest: { liteSha256: SHA2 },
     });
     check("exec-err: SPA path", env.boot() === false);
     check("exec-err: st", env.ctx.__shellLite.st === "exec-err");
+    env.flushTimers();
+    await drain();
+    const rec = JSON.parse(env.store.get("jellyfin.lite.body"));
+    check(
+      "exec-err: restock replaces the bad blob",
+      rec.sha === SHA2 && rec.body === GOOD_BODY,
+    );
   }
 
   // 7. sha mismatch -> restock new bytes for the NEXT boot (SWR)
