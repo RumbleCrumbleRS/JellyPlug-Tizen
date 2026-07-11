@@ -132,6 +132,7 @@ assert.ok(
 const anonRoutes = [
   '[HttpGet("manifest.json")]',
   '[HttpGet("shell.min.js")]',
+  '[HttpGet("lite.min.js")]', // JELA-67: Lite blob, fetched pre-login like shell.min.js
   '[HttpGet("babel.min.js")]',
   '[HttpGet("tx-manifest.json")]',
   '[HttpGet("tx/{hash}.js")]',

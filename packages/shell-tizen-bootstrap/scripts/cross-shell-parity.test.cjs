@@ -243,8 +243,8 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "loadRemoteWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document.",
-    retail: "80a874ce27323381",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document, and gates the whole SPA load on maybeBootLite (JELA-67, opt-in Lite canvas home — hosted shell is the fielded target; the baked fallback deliberately omits it like the other retail-only opt-ins).",
+    retail: "9bfed3288cbc9c4c",
     boot: "dc1d75fef51c2df8",
   },
   {

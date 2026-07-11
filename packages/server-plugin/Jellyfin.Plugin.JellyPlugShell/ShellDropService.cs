@@ -22,13 +22,21 @@ public class ShellDropService
     {
         ShellBytes = ReadResource("JellyPlugShell.Resources.shell.min.js");
         BabelBytes = ReadResource("JellyPlugShell.Resources.babel.min.js");
+        LiteBytes = ReadResource("JellyPlugShell.Resources.lite.min.js");
         BabelTransformSource = Encoding.UTF8.GetString(
             ReadResource("JellyPlugShell.Resources.babel-transform.min.js"));
 
         ShellSha256 = Sha256Hex(ShellBytes);
         BabelSha256 = Sha256Hex(BabelBytes);
+        LiteSha256 = Sha256Hex(LiteBytes);
         var shellVersion = ExtractShellVersion(Encoding.UTF8.GetString(ShellBytes));
 
+        // liteSha256 is ADDITIVE like the JELA-58 fingerprint fields: old
+        // TVs JSON.parse the manifest and ignore keys they do not know, and
+        // every legacy key keeps its exact shape/order. The shell's Lite
+        // loader (JELA-67, opt-in flag) keys its localStorage byte cache on
+        // this sha exactly like the HSB bootstrap keys the shell cache on
+        // sha256.
         _baseManifest = new Dictionary<string, object?>
         {
             ["version"] = shellVersion,
@@ -37,6 +45,7 @@ public class ShellDropService
             ["babelSha256"] = BabelSha256,
             ["minBootstrapVersion"] = MinBootstrapVersion,
             ["bootstrapWgt"] = null,
+            ["liteSha256"] = LiteSha256,
         };
         ManifestJson = JsonSerializer.SerializeToUtf8Bytes(_baseManifest);
 
@@ -51,9 +60,14 @@ public class ShellDropService
 
     public byte[] BabelBytes { get; }
 
+    /// <summary>JELA-67: JellyPlug Lite canvas home (packages/jellyplug-lite dist blob).</summary>
+    public byte[] LiteBytes { get; }
+
     public string ShellSha256 { get; }
 
     public string BabelSha256 { get; }
+
+    public string LiteSha256 { get; }
 
     /// <summary>
     /// Legacy manifest.json body (emit_manifest.py schema) — the exact bytes

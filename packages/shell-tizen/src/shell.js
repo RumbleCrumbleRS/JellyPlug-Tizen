@@ -6070,7 +6070,191 @@
       }
     });
   }
+  // ---- JellyPlug Lite (JELA-67) ------------------------------------------
+  //
+  // Netflix-style canvas home: ~12 KB of purpose-built ES5
+  // (packages/jellyplug-lite, served by the server plugin at
+  // /shell/lite.min.js) draws the home rows on a single <canvas> — the
+  // multi-MB jellyfin-web SPA never parses on the boot path. Strictly
+  // opt-in per TV: localStorage["jellyfin.shell.liteEnabled"]="1" (default
+  // OFF); any miss/failure falls through to the normal SPA boot unchanged.
+  //
+  // Delivery is the JELA-66 byte-cache shape: the blob rides a sha-keyed
+  // localStorage record (jellyfin.lite.body = {v,sha,len,h,ts,body};
+  // h = txFnv1a corruption check, sha = the manifest's liteSha256 the
+  // bytes were fetched under) and boots from LS with ZERO Lite network on
+  // the critical path. A background revalidate compares rec.sha against
+  // the live manifest and restocks for the NEXT boot — stale-one-boot by
+  // design, the same SWR stance as the HSB shell cache. The first flagged
+  // boot has no record: the SPA boots as today while the restock chain
+  // fills the cache, so Lite appears from boot 2 on.
+  //
+  // The restock chain schedules every attempt on window-level timers
+  // (JELA-66 v2.0.23 lesson: the SPA handoff's document.open ABORTS this
+  // document's in-flight fetches — a timer re-issued fetch survives).
+  //
+  // Diag: window.__shellLite = {st, sha, ms, restock} with st one of
+  // off|miss|exec-err|no-session|live|handoff. QA recipe: st==="live"
+  // and no /web/ traffic until the user presses OK/Back (which tears
+  // Lite down and runs the normal SPA boot — the M2 warm handoff will
+  // replace that with a background-warmed SPA).
+  var LITE_FLAG_KEY = "jellyfin.shell.liteEnabled";
+  var LITE_REC_KEY = "jellyfin.lite.body";
+  var LITE_RESTOCK_MS = [0, 12000, 30000];
+  function liteWanted() {
+    try {
+      return localStorage.getItem(LITE_FLAG_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function liteReadRec() {
+    try {
+      var rec = JSON.parse(localStorage.getItem(LITE_REC_KEY));
+      if (!rec || rec.v !== 1 || !rec.sha || typeof rec.body !== "string") {
+        return null;
+      }
+      if (rec.body.length !== rec.len || txFnv1a(rec.body) !== rec.h) {
+        return null;
+      }
+      return rec;
+    } catch (_) {
+      return null;
+    }
+  }
+  function liteRestock(serverUrl, haveSha) {
+    if (window.__shellLitePending) return;
+    window.__shellLitePending = 1;
+    var attempt = 0;
+    function note(s) {
+      try {
+        if (window.__shellLite) window.__shellLite.restock = s;
+      } catch (_) {}
+    }
+    function fail(why) {
+      attempt++;
+      if (attempt >= LITE_RESTOCK_MS.length) {
+        note("failed:" + why);
+        window.__shellLitePending = 0;
+        return;
+      }
+      note("retry" + attempt + ":" + why);
+      setTimeout(run, LITE_RESTOCK_MS[attempt]);
+    }
+    function run() {
+      fetch(serverUrl + "/shell/manifest.json?__lt=" + Date.now(), {
+        credentials: "omit",
+        cache: "no-store",
+      })
+        .then(function (r) {
+          return r && r.ok ? r.json() : null;
+        })
+        .then(function (m) {
+          var sha = m && m.liteSha256;
+          if (!sha || sha === haveSha) {
+            // Up to date, or the server plugin predates Lite — stop quietly.
+            note(sha ? "fresh" : "no-lite");
+            window.__shellLitePending = 0;
+            return null;
+          }
+          return fetch(serverUrl + "/shell/lite.min.js?v=" + sha, {
+            credentials: "omit",
+          })
+            .then(function (r2) {
+              if (!r2 || !r2.ok) throw new Error("http");
+              return r2.text();
+            })
+            .then(function (body) {
+              try {
+                localStorage.setItem(
+                  LITE_REC_KEY,
+                  JSON.stringify({
+                    v: 1,
+                    sha: sha,
+                    len: body.length,
+                    h: txFnv1a(body),
+                    ts: +new Date(),
+                    body: body,
+                  }),
+                );
+                note("stored b=" + body.length);
+              } catch (_) {
+                note("failed:setitem");
+              }
+              window.__shellLitePending = 0;
+              return null;
+            });
+        })
+        .catch(function () {
+          fail("net");
+        });
+    }
+    setTimeout(run, LITE_RESTOCK_MS[0]);
+  }
+  function maybeBootLite(serverUrl) {
+    if (!liteWanted() || window.__shellLiteHandled) return false;
+    var d = (window.__shellLite = { st: "off" });
+    var rec = liteReadRec();
+    if (!rec) {
+      d.st = "miss";
+      liteRestock(serverUrl, null);
+      return false;
+    }
+    var app = null;
+    try {
+      if (!window.JellyPlugLite) {
+        new Function(rec.body)();
+      }
+      var L = window.JellyPlugLite;
+      app = L && L.boot ? L.boot(window, document) : null;
+    } catch (_) {
+      d.st = "exec-err";
+      return false;
+    }
+    if (!app) {
+      // No stored session — the SPA owns login; Lite re-engages next boot.
+      d.st = "no-session";
+      return false;
+    }
+    window.__shellLiteHandled = 1;
+    d.st = "live";
+    d.sha = rec.sha;
+    d.ms = +new Date() - (window.__shellT0 || 0);
+    // The widget-document instant-home snapshot (injected by bootstrap()
+    // before this ran) would sit above the canvas and its input shield
+    // would eat the remote keys — dismiss it exactly like a settle would.
+    try {
+      var ih = document.getElementById("__shell_instant_home");
+      if (ih && ih.parentNode) ih.parentNode.removeChild(ih);
+      var g = window.__shellIH;
+      if (g && !g.dismissed) {
+        g.dismissed = 1;
+        g.why = "lite";
+      }
+    } catch (_) {}
+    var toSpa = function () {
+      if (d.st === "handoff") return;
+      d.st = "handoff";
+      try {
+        app.destroy();
+      } catch (_) {}
+      // __shellLiteHandled stays set: this loadRemoteWebClient run takes
+      // the normal SPA path.
+      loadRemoteWebClient(serverUrl).catch(function () {});
+    };
+    app.onOpen = toSpa;
+    app.onBack = toSpa;
+    liteRestock(serverUrl, rec.sha);
+    return true;
+  }
   function loadRemoteWebClient(serverUrl) {
+    // JELA-67: opt-in Lite canvas home — when it boots from the LS byte
+    // cache, the SPA below never loads this boot (OK/Back hands off).
+    try {
+      if (maybeBootLite(serverUrl)) {
+        return Promise.resolve();
+      }
+    } catch (_) {}
     var baseUrl = serverUrl + "/web/";
     // JELA-59: kick the config-epoch probe first — loadTxDropManifest and
     // the SWR revalidation below chain on window.__shellEpochReady.

@@ -76,6 +76,20 @@ public class ShellController : ControllerBase
         return File(_drop.ShellBytes, "application/javascript");
     }
 
+    /// <summary>
+    /// JELA-67: JellyPlug Lite canvas home. Anonymous like the other TV-facing
+    /// assets — a TV fetches it pre-login exactly as it fetches shell.min.js;
+    /// whether it RUNS is gated on-device (jellyfin.shell.liteEnabled, default
+    /// OFF). TVs cache-bust with ?v=&lt;manifest liteSha256&gt;.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("lite.min.js")]
+    public IActionResult GetLite()
+    {
+        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
+        return File(_drop.LiteBytes, "application/javascript");
+    }
+
     [AllowAnonymous]
     [HttpGet("babel.min.js")]
     public IActionResult GetBabel()
