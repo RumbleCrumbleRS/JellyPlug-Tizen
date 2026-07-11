@@ -6,6 +6,6 @@
   "license": "GPL-2.0-only",
   "scripts": {
     "build": "node scripts/build-lite.mjs",
-    "test": "node scripts/layout.test.cjs && node scripts/nav.test.cjs && node scripts/swr.test.cjs && node scripts/api.test.cjs && node scripts/es5-guard.test.cjs"
+    "test": "node scripts/layout.test.cjs && node scripts/nav.test.cjs && node scripts/swr.test.cjs && node scripts/api.test.cjs && node scripts/es5-guard.test.cjs && node scripts/dist-freshness.test.cjs"
   }
 }

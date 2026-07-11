@@ -1,5 +1,11 @@
 node_modules/
 dist/
+# JELA-67: the built Lite blob is committed — the server plugin embeds it
+# as the /shell/lite.min.js resource (same pattern as shell-tizen's
+# committed shell.min.js). dist-freshness.test.cjs guards staleness.
+!packages/jellyplug-lite/dist/
+packages/jellyplug-lite/dist/*
+!packages/jellyplug-lite/dist/lite.min.js
 build/
 .turbo/
 *.tsbuildinfo

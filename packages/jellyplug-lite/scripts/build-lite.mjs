@@ -7,37 +7,47 @@
 // ~100KB of purpose-built ES5 instead of the multi-MB SPA bundle, and
 // the JELA-66 localStorage byte-cache rail that delivers it has finite
 // headroom.
+//
+// dist/lite.min.js is COMMITTED (JELA-67 M1 slice 2): the server plugin
+// embeds it as a resource exactly like shell-tizen/src/shell.min.js, so
+// the repo must always carry the bytes the plugin will serve.
+// dist-freshness.test.cjs fails CI when the committed blob goes stale
+// relative to src/lite.src.js (or an esbuild bump churns the output —
+// re-run `pnpm --filter @jellyfin-tv/jellyplug-lite build` either way).
 
-import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
+import { transform } from "esbuild";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pkgRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = join(pkgRoot, "src", "lite.src.js");
-const out = join(pkgRoot, "dist", "lite.min.js");
+export const out = join(pkgRoot, "dist", "lite.min.js");
 
-const BUDGET_BYTES = 96 * 1024;
+export const BUDGET_BYTES = 96 * 1024;
 
-const result = await build({
-  entryPoints: [src],
-  outfile: out,
-  bundle: false,
-  minifyWhitespace: true,
-  minifySyntax: true,
-  minifyIdentifiers: false,
-  legalComments: "inline",
-  write: true,
-});
-
-if (result.errors.length) {
-  console.error(result.errors);
-  process.exit(1);
+// Pure build: source text -> minified text. Shared by the CLI below and
+// dist-freshness.test.cjs so the two can never drift on esbuild options.
+export async function buildLite() {
+  const result = await transform(readFileSync(src, "utf8"), {
+    loader: "js",
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
+    legalComments: "inline",
+  });
+  return result.code;
 }
 
-const bytes = readFileSync(out).length;
-console.log(`lite.min.js: ${bytes} bytes (budget ${BUDGET_BYTES})`);
-if (bytes > BUDGET_BYTES) {
-  console.error("lite.min.js exceeds the size budget");
-  process.exit(1);
+const isCli = process.argv[1] === fileURLToPath(import.meta.url);
+if (isCli) {
+  const code = await buildLite();
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, code);
+  const bytes = Buffer.byteLength(code);
+  console.log(`lite.min.js: ${bytes} bytes (budget ${BUDGET_BYTES})`);
+  if (bytes > BUDGET_BYTES) {
+    console.error("lite.min.js exceeds the size budget");
+    process.exit(1);
+  }
 }
