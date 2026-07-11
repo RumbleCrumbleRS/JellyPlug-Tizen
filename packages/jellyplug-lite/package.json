@@ -1,0 +1,11 @@
+{
+  "name": "@jellyfin-tv/jellyplug-lite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JellyPlug Lite (JELA-67): Netflix-style canvas home for Tizen TVs. A hand-written ES5 layer driving a scene-graph renderer on a single <canvas> — no DOM tree, no CSS layout, no jellyfin-web SPA on the boot path. Delivered to TVs over the JELA-66 sha-keyed localStorage byte-cache rail.",
+  "license": "GPL-2.0-only",
+  "scripts": {
+    "build": "node scripts/build-lite.mjs",
+    "test": "node scripts/layout.test.cjs && node scripts/nav.test.cjs && node scripts/swr.test.cjs && node scripts/api.test.cjs && node scripts/es5-guard.test.cjs"
+  }
+}
