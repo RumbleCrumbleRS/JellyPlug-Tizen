@@ -9,17 +9,24 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-let src = fs.readFileSync(
+// Scan the source AND the committed dist blob: esbuild's minifySyntax can
+// INTRODUCE newer syntax the source never had (it upgraded `catch(e){` to
+// the ES2019 optional catch binding `catch{` until build-lite.mjs pinned
+// target:"es5" — on-device SyntaxError on the Q60R's ES2018-max engine,
+// JELA-67 slice-2 QA).
+const FILES = [
   path.join(__dirname, "..", "src", "lite.src.js"),
-  "utf8",
-);
+  path.join(__dirname, "..", "dist", "lite.min.js"),
+];
 
 // strip block comments, line comments, and string literals
-src = src
-  .replace(/\/\*[\s\S]*?\*\//g, " ")
-  .replace(/\/\/[^\n]*/g, " ")
-  .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
-  .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+function stripped(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+}
 
 const FORBIDDEN = [
   [/=>/, "arrow function"],
@@ -38,17 +45,22 @@ const FORBIDDEN = [
   [/\bArray\.from\b/, "Array.from (ES2015 runtime)"],
   [/\.includes\s*\(/, "String/Array.includes (ES2015+ runtime)"],
   [/\bfetch\s*\(/, "fetch() (use the injected fetchJson / XHR)"],
+  [/catch\s*\{/, "optional catch binding (ES2019 — M63 throws)"],
+  [/\*\*/, "exponentiation operator (ES2016)"],
 ];
 
-for (const [re, what] of FORBIDDEN) {
-  const m = src.match(re);
-  assert.ok(
-    !m,
-    `lite.src.js contains ${what}: ...${src.slice(Math.max(0, m ? m.index - 40 : 0), m ? m.index + 40 : 0)}...`,
-  );
+for (const file of FILES) {
+  const name = path.basename(file);
+  const src = stripped(fs.readFileSync(file, "utf8"));
+  for (const [re, what] of FORBIDDEN) {
+    const m = src.match(re);
+    assert.ok(
+      !m,
+      `${name} contains ${what}: ...${src.slice(Math.max(0, m ? m.index - 40 : 0), m ? m.index + 40 : 0)}...`,
+    );
+  }
+  // and it must still be parseable at all
+  new Function(src);
 }
-
-// and it must still be parseable at all
-new Function(src);
 
 console.log("es5-guard.test.cjs OK");
