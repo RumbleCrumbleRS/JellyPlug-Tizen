@@ -57,12 +57,16 @@ assert.strictEqual(nav2.cols.length, 1);
 // key map covers the Tizen remote set
 assert.deepStrictEqual(Object.keys(Lite.KEYS).sort(), [
   "10009",
+  "10182",
   "13",
   "37",
   "38",
   "39",
   "40",
+  "403",
 ]);
 assert.strictEqual(Lite.KEYS[10009], "back");
+assert.strictEqual(Lite.KEYS[10182], "escape");
+assert.strictEqual(Lite.KEYS[403], "escape");
 
 console.log("nav.test.cjs OK");

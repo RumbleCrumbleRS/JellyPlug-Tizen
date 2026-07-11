@@ -6228,6 +6228,7 @@
     d.st = "live";
     d.sha = rec.sha;
     d.ms = +new Date() - (window.__shellT0 || 0);
+    d.app = app; // exposed for CDP key-nav counter QA
     // The widget-document instant-home snapshot (injected by bootstrap()
     // before this ran) would sit above the canvas and its input shield
     // would eat the remote keys — dismiss it exactly like a settle would.
@@ -6252,6 +6253,7 @@
     };
     app.onOpen = toSpa;
     app.onBack = toSpa;
+    app.onMenu = toSpa; // menu-key SPA escape hatch (search/settings/admin)
     liteRestock(serverUrl, rec.sha);
     return true;
   }
