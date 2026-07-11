@@ -54,10 +54,11 @@ nav2.setRowCounts([2]); // rows removed under focus
 assert.strictEqual(nav2.row, 0);
 assert.strictEqual(nav2.cols.length, 1);
 
-// key map covers the Tizen remote set
+// key map covers the Tizen remote set. 10182 (SmartHub/Home) is
+// deliberately ABSENT: Samsung reserves the Home key and never delivers
+// it (physical-remote QA 2026-07-11) — Red is the only escape mapping.
 assert.deepStrictEqual(Object.keys(Lite.KEYS).sort(), [
   "10009",
-  "10182",
   "13",
   "37",
   "38",
@@ -66,7 +67,7 @@ assert.deepStrictEqual(Object.keys(Lite.KEYS).sort(), [
   "403",
 ]);
 assert.strictEqual(Lite.KEYS[10009], "back");
-assert.strictEqual(Lite.KEYS[10182], "escape");
 assert.strictEqual(Lite.KEYS[403], "escape");
+assert.strictEqual(Lite.KEYS[10182], undefined);
 
 console.log("nav.test.cjs OK");

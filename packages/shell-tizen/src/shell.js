@@ -6093,14 +6093,20 @@
   // (JELA-66 v2.0.23 lesson: the SPA handoff's document.open ABORTS this
   // document's in-flight fetches — a timer re-issued fetch survives).
   //
-  // Diag: window.__shellLite = {st, sha, ms, restock} with st one of
-  // off|miss|exec-err|no-session|live|handoff. QA recipe: st==="live"
-  // and no /web/ traffic until the user presses OK/Back (which tears
-  // Lite down and runs the normal SPA boot — the M2 warm handoff will
-  // replace that with a background-warmed SPA).
+  // Diag: window.__shellLite = {st, sha, ms, restock, warm} with st one
+  // of off|miss|exec-err|no-session|live|handoff. QA recipe: st==="live"
+  // and no /web/ traffic on the critical path; ~4s after settle the M2
+  // pre-warm fetches /web/index.html+config.json into __shellPrefetch
+  // (warm=1) so OK/Back/Red hand off without paying that RTT pair. OK on
+  // a card deep-links the SPA to #/details?id=…&serverId=… while the
+  // canvas shows an "Opening…" overlay until document.write clears it.
   var LITE_FLAG_KEY = "jellyfin.shell.liteEnabled";
   var LITE_REC_KEY = "jellyfin.lite.body";
   var LITE_RESTOCK_MS = [0, 12000, 30000];
+  // M2 handoff pre-warm: fire after Lite settles (off the boot path),
+  // expire so a long-lived Lite session never adopts a stale index.html.
+  var LITE_WARM_MS = 4000;
+  var LITE_WARM_TTL_MS = 600000;
   function liteWanted() {
     try {
       return localStorage.getItem(LITE_FLAG_KEY) === "1";
@@ -6241,20 +6247,86 @@
         g.why = "lite";
       }
     } catch (_) {}
-    var toSpa = function () {
+    var toSpa = function (hash, msg) {
       if (d.st === "handoff") return;
       d.st = "handoff";
+      // M2 deep link: set the SPA route BEFORE the client loads. Hash
+      // routing survives the document.write teardown (same-document URL
+      // mutation), so the SPA router boots straight to the target
+      // instead of #/home. No hash = the normal home boot.
+      if (hash) {
+        try {
+          window.location.hash = hash;
+        } catch (_) {}
+      }
       try {
-        app.destroy();
-      } catch (_) {}
+        // Slice-4+ lite bytes keep the canvas up with an "Opening…"
+        // overlay until document.write clears it (no black screen while
+        // the SPA loads); older cached bytes only have destroy().
+        if (app.handoff) {
+          app.handoff(msg);
+        } else {
+          app.destroy();
+        }
+      } catch (_) {
+        try {
+          app.destroy();
+        } catch (_2) {}
+      }
       // __shellLiteHandled stays set: this loadRemoteWebClient run takes
       // the normal SPA path.
       loadRemoteWebClient(serverUrl).catch(function () {});
     };
-    app.onOpen = toSpa;
-    app.onBack = toSpa;
-    app.onMenu = toSpa; // menu-key SPA escape hatch (search/settings/admin)
+    app.onOpen = function (item) {
+      // OK on a card deep-links into the SPA at the item's details page
+      // (Play is the default focus there); OK on nothing = generic
+      // handoff, same as Back.
+      var id = item && item.id;
+      var sid = app.serverId;
+      toSpa(
+        id
+          ? "#/details?id=" +
+              encodeURIComponent(id) +
+              (sid ? "&serverId=" + encodeURIComponent(sid) : "")
+          : null,
+        item && item.name ? "Opening " + item.name + "…" : null,
+      );
+    };
+    app.onBack = function () {
+      toSpa(null, null);
+    };
+    app.onMenu = function () {
+      // menu-key SPA escape hatch (search/settings/admin)
+      toSpa(null, null);
+    };
     liteRestock(serverUrl, rec.sha);
+    // M2 pre-warm: populate the same __shellPrefetch slot the head-IIFE
+    // fills, so a later handoff ADOPTS an already-resolved /web/ RTT
+    // pair (mkIdxF/mkCfgF) instead of paying it live. Off the boot path
+    // (timer), skipped when the head prefetch is still unconsumed, and
+    // TTL-capped so an hours-long Lite session can't hand a stale
+    // index.html to the SPA boot. A failed warm clears the slot so the
+    // handoff falls back to a fresh fetch instead of adopting a
+    // rejected promise.
+    setTimeout(function () {
+      try {
+        if (window.__shellPrefetch) return;
+        var wb = serverUrl + "/web/";
+        var pf = {
+          baseUrl: wb,
+          index: fetch(wb + "index.html", { credentials: "omit" }),
+          config: fetch(wb + "config.json", { credentials: "omit" }),
+        };
+        var clear = function () {
+          if (window.__shellPrefetch === pf) window.__shellPrefetch = null;
+        };
+        pf.index.catch(clear);
+        pf.config.catch(clear);
+        window.__shellPrefetch = pf;
+        d.warm = 1;
+        setTimeout(clear, LITE_WARM_TTL_MS);
+      } catch (_) {}
+    }, LITE_WARM_MS);
     return true;
   }
   function loadRemoteWebClient(serverUrl) {

@@ -25,10 +25,20 @@
  *     quietly ("no-lite"), nothing stored
  *   - restock fetch failure -> retries on window timers
  *     (LITE_RESTOCK_MS chain), then restock="failed:net"
- *   - OK/Back/Menu from a live Lite app -> app.destroy() + hands off to
- *     the stubbed loadRemoteWebClient (st="handoff"), exactly once
+ *   - OK/Back/Menu from a live Lite app -> hands off to the stubbed
+ *     loadRemoteWebClient (st="handoff"), exactly once; new lite bytes
+ *     get app.handoff(msg) (canvas stays up with an "Opening…" overlay),
+ *     old cached bytes fall back to app.destroy()
+ *   - OK with a focused item deep-links: location.hash becomes
+ *     #/details?id=<id>[&serverId=<sid>] BEFORE loadRemoteWebClient runs
+ *     (M2); Back/Menu never touch the hash
  *   - d.app exposed on __shellLite for CDP key-nav counter QA
  *   - onMenu wired to toSpa (menu-key SPA escape hatch)
+ *   - M2 pre-warm: ~4s after a live boot the loader fills
+ *     window.__shellPrefetch with the /web/ index+config fetch pair
+ *     (d.warm=1); skipped when the head-IIFE slot is already populated;
+ *     a failed warm CLEARS the slot (handoff falls back to fresh
+ *     fetches); the TTL timer clears it too
  * Plus static pins: the flag / record-key / manifest-key literals ship in
  * the committed retail shell.min.js and do NOT ship in the baked
  * boot-shell.min.js (the divergence is deliberate).
@@ -83,10 +93,20 @@ function fnv(s) {
   return h.toString(36);
 }
 
+// Models slice-4+ lite bytes: handoff() present, serverId exposed.
 const GOOD_BODY =
   "window.JellyPlugLite={boot:function(w,d){" +
   "w.__liteBootCalls=(w.__liteBootCalls||0)+1;" +
   "if(w.__liteNoSession)return null;" +
+  "return w.__liteApp={destroyed:0,handoffs:0,handoffMsg:null," +
+  "serverId:w.__liteNoServerId?null:'srv1'," +
+  "onOpen:null,onBack:null,onMenu:null," +
+  "handoff:function(m){this.handoffs++;this.handoffMsg=m}," +
+  "destroy:function(){this.destroyed++}}}};";
+
+// Models slice-2/3 bytes still cached on TVs: destroy() only.
+const OLD_BODY =
+  "window.JellyPlugLite={boot:function(w,d){" +
   "return w.__liteApp={destroyed:0,onOpen:null,onBack:null,onMenu:null," +
   "destroy:function(){this.destroyed++}}}};";
 
@@ -150,8 +170,14 @@ function mkEnv(opts) {
           text: () => Promise.resolve(opts.liteBody || GOOD_BODY),
         });
       }
+      if (url.indexOf("/web/") >= 0) {
+        // M2 pre-warm pair (index.html + config.json)
+        if (opts.webFails) return Promise.reject(new Error("net"));
+        return Promise.resolve({ ok: true, text: () => Promise.resolve("") });
+      }
       return Promise.reject(new Error("unexpected " + url));
     },
+    location: { hash: "" },
   };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -246,11 +272,29 @@ async function main() {
     );
     env.flushTimers();
     await drain();
+    const shellFetches = env.fetchLog.filter((u) => u.indexOf("/shell/") >= 0);
+    const webFetches = env.fetchLog.filter((u) => u.indexOf("/web/") >= 0);
     check(
       "live: revalidate is manifest-only on sha match",
-      env.fetchLog.length === 1 &&
+      shellFetches.length === 1 &&
         env.ctx.__shellLite.restock === "fresh" &&
         JSON.parse(env.store.get("jellyfin.lite.body")).sha === SHA,
+    );
+    // M2 pre-warm: the /web/ pair lands in the __shellPrefetch slot
+    check(
+      "live: pre-warm fetched /web/ index+config into __shellPrefetch",
+      webFetches.length === 2 &&
+        webFetches.indexOf("http://srv/web/index.html") >= 0 &&
+        webFetches.indexOf("http://srv/web/config.json") >= 0 &&
+        env.ctx.__shellPrefetch &&
+        env.ctx.__shellPrefetch.baseUrl === "http://srv/web/" &&
+        env.ctx.__shellLite.warm === 1,
+    );
+    // TTL timer (queued by the warm) clears the slot when it fires
+    env.flushTimers();
+    check(
+      "live: warm TTL clears __shellPrefetch",
+      env.ctx.__shellPrefetch === null,
     );
     // d.app exposed for CDP key-nav QA
     check(
@@ -262,15 +306,21 @@ async function main() {
       "live: onMenu is wired (not null)",
       typeof env.ctx.__liteApp.onMenu === "function",
     );
-    // OK -> handoff to the SPA, exactly once
+    // OK (no focused item) -> handoff to the SPA, exactly once. New lite
+    // bytes keep the canvas up via handoff(); destroy() is not called.
     const app = env.ctx.__liteApp;
     app.onOpen();
     app.onBack();
     check(
-      "live: OK/Back hands off once, destroys app",
+      "live: OK/Back hands off once via app.handoff (no destroy)",
       env.ctx.__shellLite.st === "handoff" &&
-        app.destroyed === 1 &&
+        app.handoffs === 1 &&
+        app.destroyed === 0 &&
         vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+    check(
+      "live: itemless OK never touches the hash",
+      env.ctx.location.hash === "",
     );
     check(
       "live: handoff boot will not re-enter lite",
@@ -293,14 +343,122 @@ async function main() {
     check(
       "menu-key: onMenu hands off to SPA once",
       env.ctx.__shellLite.st === "handoff" &&
-        app2.destroyed === 1 &&
+        app2.handoffs === 1 &&
         vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+    check(
+      "menu-key: escape never touches the hash",
+      env.ctx.location.hash === "",
     );
     // second onMenu is a no-op (idempotent once st="handoff")
     app2.onMenu();
     check(
       "menu-key: second onMenu is a no-op",
       vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3c. M2 deep link: OK on a focused item routes the SPA to #/details
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it/1", name: "The Thing", type: "Movie" });
+    check(
+      "deep link: hash set to #/details with id+serverId before the SPA",
+      env.ctx.location.hash ===
+        "#/details?id=" + encodeURIComponent("it/1") + "&serverId=srv1" &&
+        env.ctx.__shellLite.st === "handoff" &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+    check(
+      "deep link: handoff overlay names the item",
+      app.handoffMsg === "Opening The Thing…",
+    );
+  }
+
+  // 3d. deep link degrades without a credentials server id
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.ctx.__liteNoServerId = 1;
+    env.boot();
+    env.ctx.__liteApp.onOpen({ id: "it2", name: "X" });
+    check(
+      "deep link: no serverId -> #/details?id=… only",
+      env.ctx.location.hash === "#/details?id=it2",
+    );
+  }
+
+  // 3e. OLD cached lite bytes (no handoff()) still hand off via destroy
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(OLD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it3", name: "Y" });
+    check(
+      "old bytes: destroy fallback + deep link still set (no serverId)",
+      app.destroyed === 1 &&
+        env.ctx.__shellLite.st === "handoff" &&
+        env.ctx.location.hash === "#/details?id=it3" &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3f. pre-warm defers to a live head-IIFE prefetch slot
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    const headPf = { baseUrl: "http://srv/web/" };
+    env.ctx.__shellPrefetch = headPf;
+    env.boot();
+    env.flushTimers();
+    await drain();
+    check(
+      "pre-warm: head prefetch present -> no /web/ fetches, slot untouched",
+      env.fetchLog.filter((u) => u.indexOf("/web/") >= 0).length === 0 &&
+        env.ctx.__shellPrefetch === headPf,
+    );
+  }
+
+  // 3g. failed pre-warm clears the slot (handoff falls back to fresh)
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+      webFails: true,
+    });
+    env.boot();
+    env.flushTimers();
+    await drain();
+    check(
+      "pre-warm: fetch failure clears __shellPrefetch",
+      env.ctx.__shellPrefetch === null,
     );
   }
 
