@@ -31,6 +31,14 @@ export const BUDGET_BYTES = 96 * 1024;
 export async function buildLite() {
   const result = await transform(readFileSync(src, "utf8"), {
     loader: "js",
+    // Pin the OUTPUT syntax. Without a target, minifySyntax "upgrades"
+    // constructs to the newest equivalent — it rewrote `catch(e){` as the
+    // ES2019 optional catch binding `catch{`, which the Q60R's ES2018-max
+    // M63 engine refuses with "SyntaxError: Unexpected token {" (found
+    // on-device, JELA-67 slice-2 QA). Input is ES5, so es5 out = no
+    // upgrades and nothing to lower. es5-guard.test.cjs now scans the
+    // dist blob too, so this class of build-introduced syntax fails CI.
+    target: "es5",
     minifyWhitespace: true,
     minifySyntax: true,
     minifyIdentifiers: false,
