@@ -31,7 +31,19 @@ const norm = (x) => JSON.parse(JSON.stringify(x));
     base: BASE,
     token: "tok",
     userId: "u1",
+    serverId: "live",
   });
+}
+
+// server record without an Id still works — serverId is null, the M2
+// deep link degrades to #/details?id=… (SPA resolves the current server)
+{
+  const st = fakeStorage({
+    jellyfin_credentials: JSON.stringify({
+      Servers: [{ AccessToken: "tok", UserId: "u1", ManualAddress: BASE }],
+    }),
+  });
+  assert.strictEqual(norm(Lite.readCreds(st)).serverId, null);
 }
 
 // junk / missing storage never throws

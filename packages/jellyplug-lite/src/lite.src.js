@@ -221,8 +221,9 @@
     13: "ok",
     10009: "back",
     // Escape hatch → full SPA (search / settings / admin).
-    // 10182 = SmartHub/Home key; 403 = Red colour button (common alt).
-    10182: "escape",
+    // 403 = Red colour button. 10182 (SmartHub/Home) was dropped after
+    // the 2026-07-11 physical-remote QA: Samsung reserves the Home key
+    // and never delivers it to the app, so the mapping was dead code.
     403: "escape",
   };
 
@@ -339,6 +340,9 @@
             base: String(base).replace(/\/+$/, ""),
             token: s.AccessToken,
             userId: s.UserId,
+            // The SPA's #/details route wants the credentials server id
+            // alongside the item id (M2 deep-link handoff).
+            serverId: s.Id || null,
           };
         }
       }
@@ -887,11 +891,21 @@
       canvas: canvas,
       renderer: renderer,
       nav: nav,
-      // M2 wires onOpen to the SPA-warm playback handoff; until then
-      // the host decides what OK/Back/Menu do.
+      // Credentials server id — the shell's M2 deep-link handoff appends
+      // it to the SPA #/details route next to the item id.
+      serverId: creds.serverId || null,
+      // The host (shell lite-loader) decides what OK/Back/Menu do.
       onOpen: null,
       onBack: null,
       onMenu: null, // escape hatch to full SPA (search/settings/admin)
+      // M2 handoff: stop input but KEEP the canvas up showing a message,
+      // so the screen isn't black for the seconds until the SPA's
+      // document.write teardown replaces the document (canvas included).
+      handoff: function (message) {
+        doc.removeEventListener("keydown", onKey, true);
+        renderer.setMessage(message || "Opening…");
+        schedule();
+      },
       destroy: function () {
         doc.removeEventListener("keydown", onKey, true);
         if (canvas.parentNode) {
