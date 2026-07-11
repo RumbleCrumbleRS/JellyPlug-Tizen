@@ -220,6 +220,10 @@
     40: "down",
     13: "ok",
     10009: "back",
+    // Escape hatch → full SPA (search / settings / admin).
+    // 10182 = SmartHub/Home key; 403 = Red colour button (common alt).
+    10182: "escape",
+    403: "escape",
   };
 
   /* ------------------------------------------------------------------
@@ -593,6 +597,7 @@
     var targetY = 0;
     var focus = { row: 0, col: 0 };
     var dirty = true;
+    var msg = null; // non-null string → overlay message (error / empty)
 
     function lerp(cur, target) {
       var d = target - cur;
@@ -643,6 +648,11 @@
       },
 
       invalidate: function () {
+        dirty = true;
+      },
+
+      setMessage: function (text) {
+        msg = text || null;
         dirty = true;
       },
 
@@ -723,6 +733,17 @@
             rect.w,
             rect.h,
           );
+        }
+
+        // Overlay message (error / loading / empty) drawn last.
+        if (msg) {
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = COLORS.title;
+          ctx.font = "400 36px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
+          ctx.textAlign = "left";
         }
       },
     };
@@ -815,6 +836,15 @@
     });
 
     swr.load(function (sections) {
+      if (!sections || !sections.length) {
+        // No data yet (first-ever boot before SWR fills) or fetch error
+        // while cache is also empty.  Show a polite placeholder — the
+        // background restock will populate it on next boot.
+        renderer.setMessage("Loading…");
+        schedule();
+        return;
+      }
+      renderer.setMessage(null);
       renderer.setScene(sections);
       nav.setRowCounts(renderer.rowCounts());
       renderer.setFocus(nav.row, nav.col());
@@ -839,6 +869,12 @@
         }
         return;
       }
+      if (action === "escape") {
+        if (app.onMenu) {
+          app.onMenu();
+        }
+        return;
+      }
       if (nav.move(action)) {
         renderer.setFocus(nav.row, nav.col());
         schedule();
@@ -852,9 +888,10 @@
       renderer: renderer,
       nav: nav,
       // M2 wires onOpen to the SPA-warm playback handoff; until then
-      // the host decides what OK/Back do.
+      // the host decides what OK/Back/Menu do.
       onOpen: null,
       onBack: null,
+      onMenu: null, // escape hatch to full SPA (search/settings/admin)
       destroy: function () {
         doc.removeEventListener("keydown", onKey, true);
         if (canvas.parentNode) {

@@ -25,8 +25,10 @@
  *     quietly ("no-lite"), nothing stored
  *   - restock fetch failure -> retries on window timers
  *     (LITE_RESTOCK_MS chain), then restock="failed:net"
- *   - OK/Back from a live Lite app -> app.destroy() + hands off to the
- *     stubbed loadRemoteWebClient (st="handoff"), exactly once
+ *   - OK/Back/Menu from a live Lite app -> app.destroy() + hands off to
+ *     the stubbed loadRemoteWebClient (st="handoff"), exactly once
+ *   - d.app exposed on __shellLite for CDP key-nav counter QA
+ *   - onMenu wired to toSpa (menu-key SPA escape hatch)
  * Plus static pins: the flag / record-key / manifest-key literals ship in
  * the committed retail shell.min.js and do NOT ship in the baked
  * boot-shell.min.js (the divergence is deliberate).
@@ -85,7 +87,7 @@ const GOOD_BODY =
   "window.JellyPlugLite={boot:function(w,d){" +
   "w.__liteBootCalls=(w.__liteBootCalls||0)+1;" +
   "if(w.__liteNoSession)return null;" +
-  "return w.__liteApp={destroyed:0,onOpen:null,onBack:null," +
+  "return w.__liteApp={destroyed:0,onOpen:null,onBack:null,onMenu:null," +
   "destroy:function(){this.destroyed++}}}};";
 
 function mkRec(body, sha) {
@@ -250,6 +252,16 @@ async function main() {
         env.ctx.__shellLite.restock === "fresh" &&
         JSON.parse(env.store.get("jellyfin.lite.body")).sha === SHA,
     );
+    // d.app exposed for CDP key-nav QA
+    check(
+      "live: d.app exposed on __shellLite",
+      env.ctx.__shellLite.app === env.ctx.__liteApp,
+    );
+    // onMenu wired to toSpa escape hatch
+    check(
+      "live: onMenu is wired (not null)",
+      typeof env.ctx.__liteApp.onMenu === "function",
+    );
     // OK -> handoff to the SPA, exactly once
     const app = env.ctx.__liteApp;
     app.onOpen();
@@ -263,6 +275,32 @@ async function main() {
     check(
       "live: handoff boot will not re-enter lite",
       env.ctx.__shellLiteHandled === 1 && env.boot() === false,
+    );
+  }
+
+  // 3b. menu-key escape hatch -> same handoff path as OK/Back
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app2 = env.ctx.__liteApp;
+    app2.onMenu();
+    check(
+      "menu-key: onMenu hands off to SPA once",
+      env.ctx.__shellLite.st === "handoff" &&
+        app2.destroyed === 1 &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+    // second onMenu is a no-op (idempotent once st="handoff")
+    app2.onMenu();
+    check(
+      "menu-key: second onMenu is a no-op",
+      vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
     );
   }
 
