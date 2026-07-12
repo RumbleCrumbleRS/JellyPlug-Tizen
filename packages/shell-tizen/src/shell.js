@@ -6093,13 +6093,17 @@
   // (JELA-66 v2.0.23 lesson: the SPA handoff's document.open ABORTS this
   // document's in-flight fetches — a timer re-issued fetch survives).
   //
-  // Diag: window.__shellLite = {st, sha, ms, restock, warm} with st one
-  // of off|miss|exec-err|no-session|live|handoff. QA recipe: st==="live"
-  // and no /web/ traffic on the critical path; ~4s after settle the M2
-  // pre-warm fetches /web/index.html+config.json into __shellPrefetch
-  // (warm=1) so OK/Back/Red hand off without paying that RTT pair. OK on
-  // a card deep-links the SPA to #/details?id=…&serverId=… while the
-  // canvas shows an "Opening…" overlay until document.write clears it.
+  // Diag: window.__shellLite = {st, sha, ms, restock, warm, bgwarm,
+  // bgwarmMs} with st one of off|miss|exec-err|no-session|live|handoff.
+  // QA recipe: st==="live" and no /web/ traffic on the critical path;
+  // ~4s after settle the M2 pre-warm fetches /web/index.html+config.json
+  // into __shellPrefetch (warm=1, reset to 0 when the slot clears) so
+  // OK/Back/Red hand off without paying that RTT pair; after ~5s of
+  // remote-input idle the bg-warm boots the full SPA once in a hidden
+  // iframe (bgwarm: warming->warm->done) so the handoff's document.write
+  // boot hits warm HTTP/code caches. OK on a card deep-links the SPA to
+  // #/details?id=…&serverId=… while the canvas shows an "Opening…"
+  // overlay until document.write clears it.
   var LITE_FLAG_KEY = "jellyfin.shell.liteEnabled";
   var LITE_REC_KEY = "jellyfin.lite.body";
   var LITE_RESTOCK_MS = [0, 12000, 30000];
@@ -6107,6 +6111,16 @@
   // expire so a long-lived Lite session never adopts a stale index.html.
   var LITE_WARM_MS = 4000;
   var LITE_WARM_TTL_MS = 600000;
+  // M2 bg-warm (JELA-67 jank spike on the Q60R M63): a hidden-iframe
+  // /web/ warm costs ~4-5s of cumulative main-thread stall in a ~7s
+  // window, so warm-on-boot was REJECTED — the warm may start only after
+  // this much remote-input idle (any keydown re-arms the countdown) and
+  // runs once per boot. The iframe is dropped after a post-load linger
+  // (the payoff is the warmed HTTP/code caches, not the live document)
+  // and abandoned outright if a wedged server never fires load.
+  var LITE_BGWARM_IDLE_MS = 5000;
+  var LITE_BGWARM_LINGER_MS = 20000;
+  var LITE_BGWARM_TIMEOUT_MS = 45000;
   function liteWanted() {
     try {
       return localStorage.getItem(LITE_FLAG_KEY) === "1";
@@ -6247,9 +6261,31 @@
         g.why = "lite";
       }
     } catch (_) {}
+    // M2 bg-warm plumbing shared with toSpa below: the warm iframe and
+    // its pending timer die the moment a handoff starts, so the SPA boot
+    // never competes with its own warm-up for the single M63 main thread.
+    var bgw = { fr: null, t: 0, arm: null };
+    var bgwKill = function (why) {
+      try {
+        if (bgw.arm) {
+          document.removeEventListener("keydown", bgw.arm, true);
+          bgw.arm = null;
+        }
+        if (bgw.t) {
+          clearTimeout(bgw.t);
+          bgw.t = 0;
+        }
+        if (bgw.fr) {
+          if (bgw.fr.parentNode) bgw.fr.parentNode.removeChild(bgw.fr);
+          bgw.fr = null;
+          if (why) d.bgwarm = why;
+        }
+      } catch (_) {}
+    };
     var toSpa = function (hash, msg) {
       if (d.st === "handoff") return;
       d.st = "handoff";
+      bgwKill(null);
       // M2 deep link: set the SPA route BEFORE the client loads. Hash
       // routing survives the document.write teardown (same-document URL
       // mutation), so the SPA router boots straight to the target
@@ -6318,7 +6354,13 @@
           config: fetch(wb + "config.json", { credentials: "omit" }),
         };
         var clear = function () {
-          if (window.__shellPrefetch === pf) window.__shellPrefetch = null;
+          if (window.__shellPrefetch === pf) {
+            window.__shellPrefetch = null;
+            // A cleared slot means a dead warm (fetch failed or TTL
+            // expired) — flip the diag back so QA never reads warm=1
+            // against an empty slot (PR #116 review nit).
+            d.warm = 0;
+          }
         };
         pf.index.catch(clear);
         pf.config.catch(clear);
@@ -6327,6 +6369,66 @@
         setTimeout(clear, LITE_WARM_TTL_MS);
       } catch (_) {}
     }, LITE_WARM_MS);
+    // M2 bg-warm: boot the full SPA once in a hidden iframe so the later
+    // handoff's document.write boot hits warm HTTP/code caches instead of
+    // cold ones. Idle-deferred per the jank-spike verdict: the warm costs
+    // ~4-5s of main-thread stall on the M63, so it kicks only after
+    // LITE_BGWARM_IDLE_MS with no remote input — every keydown re-arms
+    // the countdown, and a handoff first (or one earlier this boot)
+    // cancels it entirely.
+    var bgwKick = function () {
+      bgw.t = 0;
+      if (bgw.arm) {
+        document.removeEventListener("keydown", bgw.arm, true);
+        bgw.arm = null;
+      }
+      if (window.__shellLiteBgWarm || d.st === "handoff") return;
+      window.__shellLiteBgWarm = 1;
+      var t0 = +new Date();
+      try {
+        var fr = document.createElement("iframe");
+        // The exact geometry the jank spike measured: hidden 1280x720 so
+        // the SPA lays out at TV size and pulls the same lazy chunks and
+        // images a real boot would, all landing in cache.
+        fr.setAttribute(
+          "style",
+          "position:absolute;left:0;top:0;width:1280px;height:720px;" +
+            "visibility:hidden;pointer-events:none;border:0;",
+        );
+        fr.onload = function () {
+          if (bgw.fr !== fr) return;
+          d.bgwarm = "warm";
+          d.bgwarmMs = +new Date() - t0;
+          if (bgw.t) clearTimeout(bgw.t);
+          // Linger past load so the SPA finishes its lazy chunk + skin
+          // fetches, then drop the live document — an evening-long Lite
+          // session must not carry a whole SPA in memory when the warmed
+          // caches are the only part the handoff reuses.
+          bgw.t = setTimeout(function () {
+            bgwKill("done");
+          }, LITE_BGWARM_LINGER_MS);
+        };
+        fr.src = serverUrl + "/web/index.html";
+        bgw.fr = fr;
+        document.body.appendChild(fr);
+        d.bgwarm = "warming";
+        // An unreachable or wedged server never fires load — abandon the
+        // iframe rather than keep a half-loading SPA alive all session.
+        bgw.t = setTimeout(function () {
+          bgwKill("timeout");
+        }, LITE_BGWARM_TIMEOUT_MS);
+      } catch (_) {
+        d.bgwarm = "err";
+      }
+    };
+    bgw.arm = function () {
+      if (bgw.t) clearTimeout(bgw.t);
+      bgw.t = setTimeout(bgwKick, LITE_BGWARM_IDLE_MS);
+    };
+    try {
+      document.addEventListener("keydown", bgw.arm, true);
+      bgw.arm();
+    } catch (_) {}
     return true;
   }
   function loadRemoteWebClient(serverUrl) {
