@@ -38,7 +38,14 @@
  *     window.__shellPrefetch with the /web/ index+config fetch pair
  *     (d.warm=1); skipped when the head-IIFE slot is already populated;
  *     a failed warm CLEARS the slot (handoff falls back to fresh
- *     fetches); the TTL timer clears it too
+ *     fetches) and resets d.warm to 0; the TTL timer clears both too
+ *   - M2 bg-warm (idle-deferred per the JELA-67 jank-spike verdict on
+ *     the Q60R M63): a live boot arms a capture keydown listener + idle
+ *     countdown; any key re-arms it; after ~5s of input idle a hidden
+ *     1280x720 /web/ iframe warms the full SPA ONCE per boot
+ *     (bgwarm: warming->warm->done, bgwarmMs on load); the iframe is
+ *     dropped after a post-load linger, on a load-timeout, or the
+ *     instant a handoff starts (never competes with the real SPA boot)
  * Plus static pins: the flag / record-key / manifest-key literals ship in
  * the committed retail shell.min.js and do NOT ship in the baked
  * boot-shell.min.js (the divergence is deliberate).
@@ -127,8 +134,12 @@ function mkEnv(opts) {
   if (opts.storage)
     Object.keys(opts.storage).forEach((k) => store.set(k, opts.storage[k]));
   const timers = [];
+  let timerSeq = 0;
+  const timerIds = new Map();
   const fetchLog = [];
   const removedNodes = [];
+  const keyListeners = [];
+  const frames = [];
   const spaCalls = [];
   const ctx = {
     console,
@@ -142,8 +153,15 @@ function mkEnv(opts) {
       removeItem: (k) => store.delete(k),
     },
     setTimeout: (fn, ms) => {
-      timers.push({ fn, ms });
-      return timers.length;
+      const t = { fn, ms };
+      timers.push(t);
+      timerIds.set(++timerSeq, t);
+      return timerSeq;
+    },
+    clearTimeout: (id) => {
+      const t = timerIds.get(id);
+      const i = t ? timers.indexOf(t) : -1;
+      if (i >= 0) timers.splice(i, 1);
     },
     document: {
       getElementById: (id) =>
@@ -154,6 +172,38 @@ function mkEnv(opts) {
               },
             }
           : null,
+      addEventListener: (type, fn) => {
+        if (type === "keydown") keyListeners.push(fn);
+      },
+      removeEventListener: (type, fn) => {
+        const i = keyListeners.indexOf(fn);
+        if (i >= 0) keyListeners.splice(i, 1);
+      },
+      createElement: (tag) => {
+        const el = {
+          tag,
+          attrs: {},
+          setAttribute(k, v) {
+            this.attrs[k] = v;
+          },
+          onload: null,
+          src: "",
+          parentNode: null,
+          removed: false,
+        };
+        if (tag === "iframe") frames.push(el);
+        return el;
+      },
+      body: {
+        appendChild: (el) => {
+          el.parentNode = {
+            removeChild: (n) => {
+              n.removed = true;
+            },
+          };
+          return el;
+        },
+      },
     },
     fetch: (url, o) => {
       fetchLog.push(url);
@@ -195,11 +245,22 @@ function mkEnv(opts) {
     timers,
     fetchLog,
     removedNodes,
+    keyListeners,
+    frames,
     boot: () => vm.runInContext('maybeBootLite("http://srv")', ctx),
     flushTimers: () => {
       const due = timers.splice(0);
       due.forEach((t) => t.fn());
     },
+    // Fire exactly one pending timer by its delay (bg-warm timers all use
+    // distinct constants: idle 5000, timeout 45000, linger 20000).
+    fire: (ms) => {
+      const i = timers.findIndex((t) => t.ms === ms);
+      if (i < 0) throw new Error("no pending timer with ms=" + ms);
+      timers.splice(i, 1)[0].fn();
+    },
+    // Simulate a remote keydown reaching the shell's capture listener.
+    key: () => keyListeners.slice().forEach((fn) => fn({ keyCode: 39 })),
   };
 }
 
@@ -293,8 +354,8 @@ async function main() {
     // TTL timer (queued by the warm) clears the slot when it fires
     env.flushTimers();
     check(
-      "live: warm TTL clears __shellPrefetch",
-      env.ctx.__shellPrefetch === null,
+      "live: warm TTL clears __shellPrefetch and resets warm to 0",
+      env.ctx.__shellPrefetch === null && env.ctx.__shellLite.warm === 0,
     );
     // d.app exposed for CDP key-nav QA
     check(
@@ -459,6 +520,148 @@ async function main() {
     check(
       "pre-warm: fetch failure clears __shellPrefetch",
       env.ctx.__shellPrefetch === null,
+    );
+    // CEO nit (PR #116): a cleared slot must flip the diag back
+    check(
+      "pre-warm: fetch failure resets __shellLite.warm to 0",
+      env.ctx.__shellLite.warm === 0,
+    );
+  }
+
+  // 3h. M2 bg-warm: idle countdown kicks a hidden full-SPA iframe once,
+  // load -> linger -> the live document is dropped (caches stay warm)
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    check(
+      "bgwarm: armed on live boot (capture keydown listener + idle timer)",
+      env.keyListeners.length === 1 &&
+        env.timers.filter((t) => t.ms === 5000).length === 1,
+    );
+    check(
+      "bgwarm: nothing warms before the idle fires",
+      env.frames.length === 0,
+    );
+    env.fire(5000);
+    const fr = env.frames[0];
+    check(
+      "bgwarm: idle kick appends the hidden 1280x720 /web/ iframe",
+      env.frames.length === 1 &&
+        fr.src === "http://srv/web/index.html" &&
+        fr.attrs.style.indexOf("visibility:hidden") >= 0 &&
+        fr.attrs.style.indexOf("width:1280px") >= 0 &&
+        fr.attrs.style.indexOf("pointer-events:none") >= 0 &&
+        env.ctx.__shellLite.bgwarm === "warming" &&
+        env.ctx.__shellLiteBgWarm === 1,
+    );
+    check(
+      "bgwarm: keydown listener detached at kick (once per boot)",
+      env.keyListeners.length === 0,
+    );
+    check(
+      "bgwarm: load-timeout guard armed",
+      env.timers.some((t) => t.ms === 45000),
+    );
+    fr.onload();
+    check(
+      "bgwarm: load flips diag to warm + bgwarmMs, timeout swapped for linger",
+      env.ctx.__shellLite.bgwarm === "warm" &&
+        typeof env.ctx.__shellLite.bgwarmMs === "number" &&
+        !env.timers.some((t) => t.ms === 45000) &&
+        env.timers.some((t) => t.ms === 20000),
+    );
+    env.fire(20000);
+    check(
+      "bgwarm: linger drops the live iframe (bgwarm=done)",
+      fr.removed === true && env.ctx.__shellLite.bgwarm === "done",
+    );
+  }
+
+  // 3i. any keydown re-arms the idle countdown — the warm never starts
+  // while the user is driving the remote
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.key();
+    env.key();
+    check(
+      "bgwarm: keys re-arm — exactly one pending idle timer, no iframe",
+      env.timers.filter((t) => t.ms === 5000).length === 1 &&
+        env.frames.length === 0,
+    );
+    env.fire(5000);
+    check("bgwarm: idle after keys still warms", env.frames.length === 1);
+  }
+
+  // 3j. handoff mid-warm kills the iframe — the SPA boot must never
+  // compete with its own warm-up for the single M63 main thread
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.fire(5000);
+    const fr = env.frames[0];
+    env.ctx.__liteApp.onBack();
+    check(
+      "bgwarm: handoff removes the warming iframe + its timeout guard",
+      fr.removed === true &&
+        !env.timers.some((t) => t.ms === 45000) &&
+        env.ctx.__shellLite.st === "handoff",
+    );
+  }
+
+  // 3k. handoff before the countdown disarms the warm entirely
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.ctx.__liteApp.onMenu();
+    check(
+      "bgwarm: handoff disarms — listener gone, idle timer cleared, no iframe",
+      env.keyListeners.length === 0 &&
+        !env.timers.some((t) => t.ms === 5000) &&
+        env.frames.length === 0,
+    );
+  }
+
+  // 3l. wedged server: load never fires -> timeout abandons the iframe
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.fire(5000);
+    env.fire(45000);
+    check(
+      "bgwarm: load-timeout abandons the iframe (bgwarm=timeout)",
+      env.frames[0].removed === true &&
+        env.ctx.__shellLite.bgwarm === "timeout",
     );
   }
 
