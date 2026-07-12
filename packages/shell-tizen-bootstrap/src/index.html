@@ -43,6 +43,7 @@
         </div>
     </div>
     <div id="hsb-status" class="hsb-hidden"></div>
+    <script src="$WEBAPIS/webapis/webapis.js"></script>
     <script>
         // JEL-2040 HSB bootloader.
         // Order:
@@ -95,7 +96,7 @@
             // selftest.cjs asserts this equality so it can never silently drift
             // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
             // on the diagnostic label without polluting the version itself.
-            var HSB_VERSION = '2.0.23';
+            var HSB_VERSION = '2.0.25';
             var HSB_CODENAME = 'ac3';
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
