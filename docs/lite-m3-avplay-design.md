@@ -1,6 +1,6 @@
 # JELA-67 M3 — Native AVPlay playback for JellyPlug Lite (design)
 
-Status: DRAFT — awaiting CEO design review, then a go/no-go device spike on the Q60R.
+Status: APPROVED — CEO design review 2026-07-12 (PR #118 comment 4951415733); next: go/no-go device spike on the Q60R.
 Scope: the M3 phase of JELA-67 ("Native playback: Tizen AVPlay pipeline for
 direct-play items so the 90% path — boot → browse → play → resume — never
 touches the SPA"). Everything here is flag-dark and independent of the
@@ -99,7 +99,7 @@ Same pattern as the rest of Lite: pure-ES5, dependency-injected, node-testable.
   reports "unsupported" and onOpen falls back to toSpa. Node tests fake the
   adapter (same trick as `fetchJson` / image pool).
 - **Lifecycle**: `open(url) → setListener → setDisplayRect(0,0,vw,vh) →
-  prepareAsync → (resume? seekTo(posMs)) → play`. `back`/error/exit →
+prepareAsync → (resume? seekTo(posMs)) → play`. `back`/error/exit →
   `stop() + close()` ALWAYS (leaked players wedge the platform pipeline).
 - **Video plane / canvas hole**: AVPlay renders on a plane BEHIND the web
   layer; pixels above it must be transparent. The Lite home canvas paints an
@@ -145,17 +145,22 @@ Needs: Q60R re-debugged (known recipe), dev WGT v2.0.25-dev side-loaded,
 a LAN test movie (h264/mp4 + one hevc/mkv). Panels are currently OFF —
 spike runs whenever one comes back.
 
-| Gate | Pass bar |
-|---|---|
-| G1 prepare→first-frame | < 3s, LAN h264 mp4 direct-play |
-| G2 canvas hole | video visible under transparent OSD canvas; OSD text renders above video |
-| G3 seek | ±10s seek settles < 1.5s median (5 seeks) |
-| G4 exit | back → Lite home interactive < 500ms, `close()` verified, second playback works (no pipeline leak) |
-| G5 resume loop | Progress lands server-side (UserData position moves); re-entering item resumes within ±5s |
+| Gate                   | Pass bar                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 prepare→first-frame | < 3s, LAN h264 mp4 direct-play                                                                                                                                |
+| G2 canvas hole         | video visible under transparent OSD canvas; OSD text renders above video                                                                                      |
+| G3 seek                | ±10s seek settles < 1.5s median (5 seeks)                                                                                                                     |
+| G4 exit                | back → Lite home interactive < 500ms, `close()` verified **and `getCurrentTime()` stops advancing after `close()`**, second playback works (no pipeline leak) |
+| G5 resume loop         | Progress lands server-side (UserData position moves); re-entering item resumes within ±5s                                                                     |
 
 Verdict handling: all-pass → M3 GO, slices below. G2-only failure →
 DOM-OSD variant, re-spike. G1/G3/G4 fail → M3 NO-GO, SPA stays the playback
 path permanently (M2 bg-warm already softens it), issue re-scoped.
+
+Additional check (CEO review, non-gating): once the `webapis.js` include
+ships in a WGT (v2.0.25-dev for the spike, v2.0.25 for production),
+stopwatch one full Lite boot to confirm the extra script include does not
+move the launch→navigable-home number.
 
 ## 6. Slices after a GO verdict
 
@@ -170,10 +175,9 @@ path permanently (M2 bg-warm already softens it), issue re-scoped.
    selection, external subtitle rendering (setExternalSubtitlePath is
    model-flaky), trickplay thumbnails, DRM, 4K UHD property tuning.
 
-## 7. Open questions for review
+## 7. Open questions — RESOLVED (CEO review 2026-07-12, PR #118 comment 4951415733)
 
-1. Direct-play only in the spike, DirectStream as slice 3 — agreed?
-2. `v2.0.25` as its own tiny WGT release after v2.0.24 (recommended above)
-   vs asking the user to fold privileges into the held v2.0.24 scope?
-3. Seek step left/right = −10s/+30s (Netflix-style asymmetric) vs symmetric
-   ±10s?
+1. Direct-play only in the spike, DirectStream as slice 3 — **agreed**.
+2. `v2.0.25` as its own tiny WGT release after v2.0.24 — **agreed**; do NOT
+   reopen the held v2.0.24 scope.
+3. Seek step left/right = −10s/+30s (Netflix-style asymmetric) — **keep**.
