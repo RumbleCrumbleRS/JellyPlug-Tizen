@@ -122,3 +122,123 @@
   }
 //@@END:injectConnectStylesheet@@
 
+
+//@@BEGIN:installResumeEpochCheck@@
+  function installResumeEpochCheck() {
+    // JELA-66 (v2.0.24): config.xml now ships background-support="enable",
+    // so leaving the app SUSPENDS it instead of killing it — a relaunch is
+    // a warm resume (~1-2 s) that skips every boot-time freshness check.
+    // This hook re-runs the config-epoch comparison on each background →
+    // foreground transition: fetch /shell/manifest.json (3 s bound) and
+    // compare configEpoch against the record the last adopted boot
+    // persisted (write-after-adopt, see loadConfigEpoch). Only a REAL
+    // mismatch tears the resumed document down — the reload re-enters
+    // the widget's index.html (document.write never changed the
+    // URL), so the bootstrap re-runs the full per-component invalidation
+    // and repopulate machinery. Every other outcome — match, manifest
+    // unreachable, configEpoch field absent, no adopted record, no saved
+    // server — keeps the resumed DOM untouched: offline resumes must stay
+    // instant.
+    //
+    // Attached to window, not document, so the listener survives the
+    // document.open()/write() handoff (same contract as
+    // installBackHandler); visibilitychange fires at the document with
+    // bubbles=true, so it reaches window from the written document too.
+    //
+    // Never reloads out from under active playback: a live Lite AVPlay
+    // session (window.__shellLite.player.st not terminal) or a playing
+    // SPA <video> defers the reload to the next resume or cold boot.
+    // Kill switch: 'jellyfin.shell.resumeEpochDisabled'='1' (this hook
+    // alone); the config-epoch master switch (ceGateOn) is honored too.
+    // QA surface: window.__shellResumeEpoch {n,st,last} — st
+    // idle|check|match|nofield|err|defer|reload.
+    var g = { n: 0, st: "idle", last: 0 };
+    window.__shellResumeEpoch = g;
+    var inflight = false;
+    function resumeCheckOff() {
+      try {
+        return (
+          localStorage.getItem("jellyfin.shell.resumeEpochDisabled") === "1"
+        );
+      } catch (_) {
+        return true;
+      }
+    }
+    function playbackLive() {
+      try {
+        var lp = window.__shellLite && window.__shellLite.player;
+        if (lp && lp.st && lp.st !== "closed" && lp.st !== "err") return true;
+      } catch (_) {}
+      try {
+        var vids = document.getElementsByTagName("video");
+        for (var i = 0; i < vids.length; i++) {
+          if (!vids[i].paused && !vids[i].ended) return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+    window.addEventListener("visibilitychange", function () {
+      try {
+        if (document.hidden) return;
+      } catch (_) {
+        return;
+      }
+      if (inflight || resumeCheckOff() || !ceGateOn()) return;
+      var now = Date.now();
+      if (g.last && now - g.last < 5000) return;
+      var url = loadServerUrl();
+      if (!url) return;
+      var rec = null;
+      try {
+        rec = JSON.parse(localStorage.getItem("jellyfin.shell.configEpoch"));
+      } catch (_) {}
+      if (!rec || rec.origin !== url || !rec.epoch) return;
+      inflight = true;
+      g.n++;
+      g.last = now;
+      g.st = "check";
+      withBootTimeout(
+        fetch(url + "/shell/manifest.json?__sb=" + now, {
+          credentials: "omit",
+          cache: "no-store",
+        }),
+        "resume epoch",
+        3000,
+      )
+        .then(function (r) {
+          return r && r.ok ? r.json() : null;
+        })
+        .then(function (m) {
+          inflight = false;
+          if (!m || !m.configEpoch) {
+            g.st = m ? "nofield" : "err";
+            return;
+          }
+          if (String(m.configEpoch) === String(rec.epoch)) {
+            g.st = "match";
+            return;
+          }
+          if (playbackLive()) {
+            g.st = "defer";
+            g.last = 0;
+            return;
+          }
+          g.st = "reload";
+          try {
+            localStorage.setItem(
+              "jellyfin.shell.resumeReload",
+              JSON.stringify({
+                e: String(m.configEpoch).slice(0, 8),
+                ts: Date.now(),
+              }),
+            );
+          } catch (_) {}
+          location.reload();
+        })
+        .catch(function () {
+          inflight = false;
+          g.st = "err";
+        });
+    });
+  }
+//@@END:installResumeEpochCheck@@

@@ -20,9 +20,11 @@
 // the TV WebView and in a desktop browser tab. We prove that transparency.
 //
 // HOW THE SHELL COULD (BUT DOES NOT) INTERFERE WITH RESUME — surfaces checked:
-//   (a) lifecycle events — the shell binds NO visibilitychange / pagehide /
-//       pageshow / freeze / resume / pause / blur / focus listener, so it can
-//       neither reset state, re-route, nor throw when the app is paused/resumed.
+//   (a) lifecycle events — the shell binds NO pagehide / pageshow / freeze /
+//       resume / pause / blur / focus listener and exactly ONE sanctioned
+//       visibilitychange listener (JELA-66 v2.0.24 installResumeEpochCheck,
+//       window-level, config-epoch check on foreground; see (e)), so it can
+//       neither reset state, re-route, nor throw on a normal pause/resume.
 //   (b) focus on resume — the body-focus rescue + proactive auto-focuser only
 //       act when activeElement is BODY/HTML (isBodyF gate); they RESTORE focus
 //       to a focusable, never move it OFF a live element. A warm resume keeps
@@ -36,10 +38,13 @@
 //       every data call passes through to the native transport and the
 //       WebSocket constructor is NOT shimmed at all, so jellyfin-web's ApiClient
 //       and socket reconnect natively on resume (cf. JEL-64).
-//   (e) no forced reload/teardown — the shell never calls location.reload on a
-//       visibility change, and its server-state teardown / connect-form lives
-//       ONLY in the boot-time loadRemoteWebClient(stored).catch, never wired to
-//       a visibility event.
+//   (e) no forced reload/teardown on a NORMAL resume — the shell's single
+//       location.reload() lives in installResumeEpochCheck (JELA-66 v2.0.24)
+//       and fires ONLY when a resume-time /shell/manifest.json fetch proves
+//       the server config epoch changed while the app was suspended (and
+//       never mid-playback). Match / offline / no-record resumes keep the
+//       DOM; the server-state teardown / connect-form still lives ONLY in
+//       the boot-time loadRemoteWebClient(stored).catch.
 //
 // WHY "TV vs browser" REDUCES TO A SOURCE CHECK — backgrounding is delivered by
 // the Page Visibility API on both platforms; nothing in the shell decides
@@ -97,9 +102,15 @@ function note(msg) {
   notes++;
 }
 
-const tvSrc = fs.readFileSync(TV_SHELL, "utf8");
+// JELA-66 (v2.0.24): the resume-epoch hook is a shell-core fragment; expand
+// the //@@SHELL_CORE:name@@ markers so the src scans see the real code the
+// build splices in (the .min blobs already carry it expanded).
+const { expand } = require(
+  path.join(REPO, "packages", "shell-core", "expand.cjs"),
+);
+const tvSrc = expand(fs.readFileSync(TV_SHELL, "utf8"));
 const tvMin = fs.readFileSync(TV_SHELL_MIN, "utf8");
-const bootSrc = fs.readFileSync(BOOT_SRC, "utf8");
+const bootSrc = expand(fs.readFileSync(BOOT_SRC, "utf8"));
 const bootMin = fs.readFileSync(BOOT_MIN, "utf8");
 
 const SRC_SHELLS = [
@@ -113,10 +124,14 @@ const MIN_SHELLS = [
 const ALL_SHELLS = SRC_SHELLS.concat(MIN_SHELLS);
 
 // The Page Visibility / lifecycle event names a host could bind to react to the
-// app being paused/resumed. The shell must bind NONE of these so jellyfin-web's
-// own handling runs identically on TV and in a browser tab.
+// app being paused/resumed. The shell must bind NONE of these — with ONE
+// sanctioned exception since v2.0.24 (JELA-66): installResumeEpochCheck binds
+// exactly one window-level 'visibilitychange' listener whose only teardown
+// path is a config-epoch MISMATCH against a freshly fetched manifest (Part D3
+// pins those gates). Every match / offline / no-record resume falls through
+// untouched, so jellyfin-web's own handling still runs identically on TV and
+// in a browser tab.
 const LIFECYCLE_EVENTS = [
-  "visibilitychange",
   "webkitvisibilitychange",
   "pagehide",
   "pageshow",
@@ -130,10 +145,13 @@ const LIFECYCLE_EVENTS = [
 // ============================================================================
 // PART A — NO SHELL LIFECYCLE LISTENER (req 1 & 3: same state, no errors)
 // ============================================================================
-// If the shell bound any background/foreground listener it could reset SPA
-// state, navigate, or throw on pause/resume. It binds none, so the WebView's
-// preserved state (route, heap, focus) is handed straight back to jellyfin-web.
-console.log("=== PART A: the shell binds NO background/foreground listener ===");
+// If the shell bound an unsanctioned background/foreground listener it could
+// reset SPA state, navigate, or throw on pause/resume. It binds only the
+// v2.0.24 resume-epoch visibilitychange hook, so the WebView's preserved
+// state (route, heap, focus) is handed straight back to jellyfin-web.
+console.log(
+  "=== PART A: the shell binds NO background/foreground listener ===",
+);
 
 for (const [label, src] of ALL_SHELLS) {
   for (const ev of LIFECYCLE_EVENTS) {
@@ -152,6 +170,20 @@ for (const [label, src] of ALL_SHELLS) {
       bound ? "found a " + ev + " registration" : "",
     );
   }
+  // The single sanctioned visibilitychange registration (JELA-66 v2.0.24):
+  // exactly ONE, and it is window-level so it survives the
+  // document.open()/write() handoff (same contract as installBackHandler).
+  const vis = src.match(/addEventListener\(\s*["']visibilitychange["']/g) || [];
+  check(
+    "exactly one 'visibilitychange' listener (resume-epoch hook) in " + label,
+    vis.length === 1,
+    "found " + vis.length + " registrations",
+  );
+  check(
+    "the visibilitychange listener is window-level (survives doc.write) in " +
+      label,
+    /window\.addEventListener\(\s*["']visibilitychange["']/.test(src),
+  );
 }
 
 // ============================================================================
@@ -163,7 +195,9 @@ for (const [label, src] of ALL_SHELLS) {
 // is ALREADY lost. It RESTORES focus to a focusable; it never moves focus off a
 // live element, so it cannot disturb a resume that preserved focus.
 console.log("");
-console.log("=== PART B: focus restorer is gated to BODY focus (preserve-safe) ===");
+console.log(
+  "=== PART B: focus restorer is gated to BODY focus (preserve-safe) ===",
+);
 
 for (const [label, src] of SRC_SHELLS) {
   check(
@@ -197,16 +231,13 @@ for (const [label, src] of SRC_SHELLS) {
 console.log("");
 console.log("=== PART C: playback pause/resume belongs to jellyfin-web ===");
 
-const MEDIA_KEYS = [
-  "MediaPlay",
-  "MediaPause",
-  "MediaPlayPause",
-  "MediaStop",
-];
+const MEDIA_KEYS = ["MediaPlay", "MediaPause", "MediaPlayPause", "MediaStop"];
 for (const [label, src] of SRC_SHELLS) {
   for (const k of MEDIA_KEYS) {
     check(
-      'media key "' + k + '" is registerKey-registered (handed to web client) in ' +
+      'media key "' +
+        k +
+        '" is registerKey-registered (handed to web client) in ' +
         label,
       new RegExp('"' + k + '"').test(src),
     );
@@ -287,14 +318,48 @@ for (const [label, src] of SRC_SHELLS) {
   );
 }
 
-// D3. No forced reload/teardown on resume: the shell never reloads on a
-//     visibility change, and its connect-form teardown is boot-only (Part A
-//     already proved there is no visibility listener to wire it to).
+// D3. No forced reload/teardown on a NORMAL resume: since v2.0.24 (JELA-66)
+//     the resume-epoch hook owns the shell's ONLY location.reload() call, and
+//     it fires solely on a config-epoch MISMATCH against a freshly fetched
+//     manifest — never while playback is live, never when the manifest is
+//     unreachable/field-less (offline resumes keep the DOM), never without an
+//     adopted epoch record. Pin each gate so the reload cannot silently grow
+//     new trigger paths.
 for (const [label, src] of ALL_SHELLS) {
+  const reloads = src.match(/location\s*\.\s*reload\s*\(/g) || [];
   check(
-    "shell never calls location.reload() (so resume needs no app restart) in " +
+    "location.reload() appears exactly once (resume-epoch mismatch only) in " +
       label,
-    !/location\s*\.\s*reload\s*\(/.test(src),
+    reloads.length === 1,
+    "found " + reloads.length + " call(s)",
+  );
+}
+for (const [label, src] of SRC_SHELLS) {
+  check(
+    "resume reload is gated on epoch mismatch (match path returns first) in " +
+      label,
+    /String\(m\.configEpoch\) === String\(rec\.epoch\)/.test(src) &&
+      /g\.st = "match";\s*\n\s*return;/.test(src),
+  );
+  check(
+    "resume reload defers while playback is live (Lite AVPlay or SPA <video>) in " +
+      label,
+    /if \(playbackLive\(\)\) \{\s*\n\s*g\.st = "defer";/.test(src),
+  );
+  check(
+    "manifest unreachable / field absent keeps the resumed DOM in " + label,
+    /g\.st = m \? "nofield" : "err";\s*\n\s*return;/.test(src),
+  );
+  check(
+    "no adopted epoch record -> no check (boot path owns first adoption) in " +
+      label,
+    /if \(!rec \|\| rec\.origin !== url \|\| !rec\.epoch\) return;/.test(src),
+  );
+  check(
+    "resume-epoch hook honors its kill switch + the config-epoch master switch in " +
+      label,
+    /resumeCheckOff\(\) \|\| !ceGateOn\(\)/.test(src) &&
+      /jellyfin\.shell\.resumeEpochDisabled/.test(src),
   );
 }
 
@@ -311,12 +376,16 @@ for (const [label, src] of SRC_SHELLS) {
   // Match actual property accesses (`tizen.application.<...>`), not the bare
   // `tizen.application)` truthiness guard in exitApp().
   const appCalls = src.match(/tizen\.application\.[^\n;]*/g) || [];
-  const onlyExit = appCalls.every((c) => /getCurrentApplication\(\)\.exit/.test(c));
+  const onlyExit = appCalls.every((c) =>
+    /getCurrentApplication\(\)\.exit/.test(c),
+  );
   check(
     "tizen.application is used ONLY for exit() (no pause/resume branch) in " +
       label,
     appCalls.length > 0 && onlyExit,
-    appCalls.length === 0 ? "no tizen.application reference found" : appCalls.join(" | "),
+    appCalls.length === 0
+      ? "no tizen.application reference found"
+      : appCalls.join(" | "),
   );
 }
 
@@ -336,7 +405,9 @@ note(
   "QA beacon is the only document.hidden reader: it merely PAUSES telemetry " +
     "while backgrounded (gated behind jellyfin.qa.overlay==='1', off in retail). " +
     "It is parity-neutral — draws nothing, mutates no web-client state. " +
-    (beaconHiddenGate ? "(beacon comment confirms the pause-on-hidden gate)" : ""),
+    (beaconHiddenGate
+      ? "(beacon comment confirms the pause-on-hidden gate)"
+      : ""),
 );
 
 // The one genuine TV-specific divergence from a browser tab: under memory
@@ -353,7 +424,9 @@ note(
     "skips the pre-flight); jellyfin-web restores its own last route from its " +
     "persisted state. Analogous to reopening a closed browser tab, not a warm " +
     "resume. " +
-    (coldResumePath ? "(both shells re-enter via loadRemoteWebClient(stored))" : ""),
+    (coldResumePath
+      ? "(both shells re-enter via loadRemoteWebClient(stored))"
+      : ""),
 );
 note(
   "On-device (Tizen 5.0 / M63) repro + evidence channel: see " +
