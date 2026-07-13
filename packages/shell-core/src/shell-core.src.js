@@ -140,19 +140,26 @@
     // server — keeps the resumed DOM untouched: offline resumes must stay
     // instant.
     //
-    // Attached to window, not document, so the listener survives the
-    // document.open()/write() handoff (same contract as
-    // installBackHandler); visibilitychange fires at the document with
-    // bubbles=true, so it reaches window from the written document too.
+    // Attached to window, not document — visibilitychange fires at the
+    // document with bubbles=true, so it reaches window from the written
+    // document too. BUT window listeners do NOT reliably survive the
+    // document.open()/write() SPA handoff: engines on the Chrome 68+
+    // spec (QN90B Tizen 6.5 — proven on-device 2026-07-13) wipe window
+    // listeners at document.open(), while Chromium 63 (Q60R Tizen 5.0)
+    // keeps them. So the listener is re-armed on a window TIMER (timers
+    // DO survive the handoff on both engines — the same contract the
+    // HSB store-retry chain ships on): remove-then-add of the same
+    // function ref is idempotent, so old engines never accumulate
+    // duplicate listeners.
     //
     // Never reloads out from under active playback: a live Lite AVPlay
     // session (window.__shellLite.player.st not terminal) or a playing
     // SPA <video> defers the reload to the next resume or cold boot.
     // Kill switch: 'jellyfin.shell.resumeEpochDisabled'='1' (this hook
     // alone); the config-epoch master switch (ceGateOn) is honored too.
-    // QA surface: window.__shellResumeEpoch {n,st,last} — st
+    // QA surface: window.__shellResumeEpoch {n,st,last,armN} — st
     // idle|check|match|nofield|err|defer|reload.
-    var g = { n: 0, st: "idle", last: 0 };
+    var g = { n: 0, st: "idle", last: 0, armN: 0 };
     window.__shellResumeEpoch = g;
     var inflight = false;
     function resumeCheckOff() {
@@ -177,7 +184,7 @@
       } catch (_) {}
       return false;
     }
-    window.addEventListener("visibilitychange", function () {
+    function onVisible() {
       try {
         if (document.hidden) return;
       } catch (_) {
@@ -239,6 +246,17 @@
           inflight = false;
           g.st = "err";
         });
-    });
+    }
+    function arm() {
+      try {
+        window.removeEventListener("visibilitychange", onVisible);
+      } catch (_) {}
+      try {
+        window.addEventListener("visibilitychange", onVisible);
+        g.armN++;
+      } catch (_) {}
+    }
+    arm();
+    setInterval(arm, 5000);
   }
 //@@END:installResumeEpochCheck@@

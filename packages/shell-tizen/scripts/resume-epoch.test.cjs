@@ -89,6 +89,16 @@ function mkEnv(opts) {
       addEventListener: (ev, fn) => {
         (listeners[ev] = listeners[ev] || []).push(fn);
       },
+      removeEventListener: (ev, fn) => {
+        const a = listeners[ev] || [];
+        const i = a.indexOf(fn);
+        if (i >= 0) a.splice(i, 1);
+      },
+    },
+    intervals: [],
+    setInterval: (fn, ms) => {
+      env.intervals.push({ fn, ms });
+      return env.intervals.length;
     },
     document: { hidden: false, getElementsByTagName: () => [] },
     location: {
@@ -305,6 +315,37 @@ function seed(env, epoch) {
   check(
     "5 s debounce -> back-to-back visible transitions fetch once",
     e.fetchLog.length === 1 && e.g.n === 1,
+  );
+
+  // Timer re-arm heals the document.open() listener wipe (Chrome 68+ spec
+  // engines, e.g. QN90B Tizen 6.5 — found on-device): a window timer
+  // re-attaches the listener after the SPA handoff killed it.
+  e = mkEnv();
+  seed(e, "E1");
+  e.setManifest({ configEpoch: "E1" });
+  check(
+    "install schedules the re-arm window timer",
+    e.intervals.length === 1 && e.g.armN === 1,
+  );
+  e.listeners.visibilitychange.length = 0; // simulate document.open() wipe
+  e.intervals[0].fn(); // timer tick re-arms
+  check(
+    "re-arm timer restores the listener after a document.open() wipe",
+    e.listeners.visibilitychange.length === 1 && e.g.armN === 2,
+  );
+  fire(e, false);
+  await flush();
+  check(
+    "re-armed listener still runs the check (match path)",
+    e.g.st === "match" && e.fetchLog.length === 1,
+  );
+  // On engines that do NOT wipe (Chromium 63), repeated ticks must not
+  // stack duplicate listeners: remove-then-add of the same ref stays 1.
+  e.intervals[0].fn();
+  e.intervals[0].fn();
+  check(
+    "repeated re-arm ticks never accumulate duplicate listeners",
+    e.listeners.visibilitychange.length === 1,
   );
 
   // static pins: the shipped .min blobs carry the hook
