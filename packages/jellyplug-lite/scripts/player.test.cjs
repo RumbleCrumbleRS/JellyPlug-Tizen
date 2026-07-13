@@ -18,9 +18,10 @@
  *     (the Resume-row local patch reads it after Back)
  *   - a failed resume-seek degrades to playing from 0, never to an
  *     error (bouncing to the SPA would be worse than losing the seek)
- *   - openNative in slice 1 ALWAYS declines (no PlaybackInfo client
- *     yet) and never touches the adapter — the shell fork falls
- *     through to the M2 SPA deep-link, flag-dark end to end
+ *   - openNative declines synchronously for container items / missing
+ *     adapter, and takes playable leaves optimistically — the async
+ *     PlaybackInfo outcome and the full press-to-restore loop are
+ *     native-flow.test.cjs territory (M3 slice 2)
  */
 "use strict";
 const assert = require("node:assert");
@@ -334,7 +335,7 @@ function mkPlayer(av, extra) {
   }
 }
 
-// --- Lite.boot surface: nativeSupported + slice-1 openNative stance --------
+// --- Lite.boot surface: nativeSupported + openNative routing stance --------
 function fakeXhr() {
   return { open() {}, setRequestHeader() {}, send() {} };
 }
@@ -352,6 +353,7 @@ function fakeDoc() {
   };
 }
 function fakeWin(webapis) {
+  let seq = 1;
   return {
     localStorage: fakeStorage({
       jellyfin_credentials: JSON.stringify({
@@ -366,6 +368,10 @@ function fakeWin(webapis) {
       }),
     }),
     requestAnimationFrame: () => {},
+    setTimeout: () => seq++,
+    clearTimeout: () => {},
+    setInterval: () => seq++,
+    clearInterval: () => {},
     webapis,
   };
 }
@@ -376,11 +382,13 @@ function fakeWin(webapis) {
   const app = LiteB.boot(fakeWin({ avplay: av.api }), fakeDoc());
   assert.ok(app, "boot returns an app with stored creds");
   assert.strictEqual(app.nativeSupported, true);
-  // slice 1: every press declines — and the adapter is NEVER touched
-  assert.strictEqual(app.openNative({ id: "i", type: "Movie" }), false);
+  // slice 2: playable leaves are taken optimistically (PlaybackInfo
+  // decides async); containers/nothing decline; and the adapter is
+  // never touched before a direct-play GO
   assert.strictEqual(app.openNative({ id: "i", type: "Series" }), false);
   assert.strictEqual(app.openNative(null), false);
-  assert.strictEqual(av.calls.length, 0, "openNative never hits the adapter");
+  assert.strictEqual(app.openNative({ id: "i", type: "Movie" }), true);
+  assert.strictEqual(av.calls.length, 0, "no adapter call before the GO");
 }
 
 {
