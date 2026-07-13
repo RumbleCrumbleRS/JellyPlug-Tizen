@@ -115,6 +115,7 @@ const EXPECTED_MIRRORED = [
   "validateServer",
   "registerRemoteKeys",
   "installBackHandler",
+  "installResumeEpochCheck",
   "exitApp",
   "generateDeviceId",
   "getDeviceId",
@@ -251,8 +252,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "bootstrap",
     class: "retail-feature",
     why: "retail injects the JELA-29 Direct-Home measurement prototype (injectDirectHome, opt-in via jellyfin.shell.directHome=1) into the widget document; the baked boot fallback is not the measurement target and deliberately omits it",
-    retail: "aa2d3e5ab9a377a2",
-    boot: "4b72f5f74e5fa5fc",
+    retail: "7906e16f255748aa",
+    boot: "4bbb637102403ca7",
   },
 ];
 

@@ -646,6 +646,8 @@
     window.close();
   }
 
+  //@@SHELL_CORE:installResumeEpochCheck@@
+
   // ---- NativeShell contract ---------------------------------------------
   //
   // Subset required by jellyfin-web (see jellyfin-web grep on JEL-3):
@@ -6913,6 +6915,7 @@
   function bootstrap() {
     registerRemoteKeys();
     installBackHandler();
+    installResumeEpochCheck();
 
     var stored = loadServerUrl();
     if (stored) {
