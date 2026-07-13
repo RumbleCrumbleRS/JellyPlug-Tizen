@@ -1817,19 +1817,37 @@
     var playback = { session: null, pending: false, declineId: null };
     var pbInfo = null;
 
+    // A consumed key must stop HERE: the widget keeps a window-level
+    // Back backstop that EXITS THE APP on 10009 until the SPA flags
+    // boot-done — which never happens on the Lite path. Found live on
+    // the Q60R (slice-2 QA): Back-exit from native playback closed the
+    // pipeline cleanly, then the bubbled keydown reached the backstop
+    // and the platform tore down the whole widget ~0.5s later.
+    // stopPropagation still lets other document-level listeners run
+    // (the shell's bg-warm re-arm rides document capture too).
+    function eatKey(ev) {
+      if (ev.preventDefault) {
+        ev.preventDefault();
+      }
+      if (ev.stopPropagation) {
+        ev.stopPropagation();
+      }
+    }
+
     function onKey(ev) {
       // While a native session is live it owns EVERY key: mapped codes
       // act on the player, unmapped ones are swallowed so nothing
       // leaks into home nav under the video plane.
       if (playback.session && playback.session.active()) {
         playback.session.key(ev.keyCode);
-        ev.preventDefault();
+        eatKey(ev);
         return;
       }
       var action = Lite.KEYS[ev.keyCode];
       if (!action) {
         return;
       }
+      eatKey(ev);
       if (action === "ok") {
         var item = renderer.focusedItem();
         if (item && app.onOpen) {
@@ -1853,7 +1871,6 @@
         renderer.setFocus(nav.row, nav.col());
         schedule();
       }
-      ev.preventDefault();
     }
     doc.addEventListener("keydown", onKey, true);
 

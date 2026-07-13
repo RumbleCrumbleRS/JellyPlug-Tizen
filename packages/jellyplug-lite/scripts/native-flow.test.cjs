@@ -116,9 +116,25 @@ function fakeDoc() {
       if (i >= 0) a.splice(i, 1);
     },
     key(keyCode) {
+      // JELA-67 back-exit regression: the widget keeps a window-level
+      // Back backstop that exits the app pre-boot-done, so every key
+      // Lite consumes must be propagation-stopped. The returned event
+      // records what a real bubble would have seen.
+      const ev = {
+        keyCode,
+        defaultPrevented: false,
+        propagationStopped: false,
+        preventDefault() {
+          ev.defaultPrevented = true;
+        },
+        stopPropagation() {
+          ev.propagationStopped = true;
+        },
+      };
       for (const fn of listeners.keydown || []) {
-        fn({ keyCode, preventDefault: () => {} });
+        fn(ev);
       }
+      return ev;
     },
   };
 }
@@ -205,7 +221,18 @@ function harness(opts) {
 
   const pbXhr = () => sentXhr.filter((x) => x.url.indexOf("PlaybackInfo") >= 0);
   const beacons = (p) => sentXhr.filter((x) => x.url.indexOf(p) >= 0);
-  return { Lite, app, av, doc, win, timers, sentXhr, deepLinks, pbXhr, beacons };
+  return {
+    Lite,
+    app,
+    av,
+    doc,
+    win,
+    timers,
+    sentXhr,
+    deepLinks,
+    pbXhr,
+    beacons,
+  };
 }
 
 const movie = () => ({
@@ -277,8 +304,9 @@ const movie = () => ({
 
   // keys route to the session while it is live — home nav never moves
   const navRow = h.app.nav.row;
-  h.doc.key(40); // down would move home focus
+  const evDown = h.doc.key(40); // down would move home focus
   assert.strictEqual(h.app.nav.row, navRow, "home nav untouched");
+  assert.ok(evDown.propagationStopped, "session swallows keys fully");
   h.doc.key(13); // OK = pause
   assert.strictEqual(h.win.__shellLite.player.st, "paused");
   const pauseBeacon = h.beacons("/Sessions/Playing/Progress").pop();
@@ -287,7 +315,11 @@ const movie = () => ({
 
   // back: Stopped beacon, restore, local Resume patch
   h.av.time = 120000;
-  h.doc.key(10009);
+  const evBack = h.doc.key(10009);
+  assert.ok(
+    evBack.propagationStopped,
+    "Back must never bubble to the widget exit backstop (Q60R app-kill)",
+  );
   assert.strictEqual(h.av.calls.filter((c) => c[0] === "stop").length, 1);
   assert.strictEqual(h.av.calls.filter((c) => c[0] === "close").length, 1);
   const stopped = h.beacons("/Sessions/Playing/Stopped");
@@ -299,8 +331,11 @@ const movie = () => ({
   assert.strictEqual(item.posTicks, 120000 * 10000, "local Resume patch");
   assert.strictEqual(h.timers.size, 0, "no timer leaks");
 
-  // home nav works again
-  h.doc.key(40);
+  // home nav works again — consumed, and still propagation-stopped
+  const evHomeNav = h.doc.key(40);
+  assert.ok(evHomeNav.propagationStopped, "home nav keys are eaten");
+  const evUnmapped = h.doc.key(999);
+  assert.ok(!evUnmapped.propagationStopped, "unmapped keys still bubble");
 
   // …and a SECOND native playback starts clean (G4 shape)
   h.app.onOpen(item);
@@ -328,7 +363,12 @@ const movie = () => ({
   h.app.onOpen(item);
   h.pbXhr()[0].respond(200, {
     MediaSources: [
-      { Id: "x", Container: "mkv", SupportsDirectPlay: false, TranscodingUrl: "/t" },
+      {
+        Id: "x",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        TranscodingUrl: "/t",
+      },
     ],
   });
   assert.deepStrictEqual(h.deepLinks, ["m1"], "fell through to the deep-link");
