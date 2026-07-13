@@ -622,6 +622,12 @@
       // Tizen BACK = keyCode 10009
       if (ev.keyCode === 10009) {
         if (window.__jellyfinShellBootDone) return; // web client owns it
+        // Lite owns BACK while its canvas home is resident or handing
+        // off (JELA-67): current lite bytes stop propagation before
+        // this backstop can fire, but OLD cached bytes predate that —
+        // never let the pre-boot exit path kill a live Lite app.
+        var lite = window.__shellLite;
+        if (lite && (lite.st === "live" || lite.st === "handoff")) return;
         ev.preventDefault();
         exitApp();
       }

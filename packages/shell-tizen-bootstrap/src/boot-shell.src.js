@@ -602,6 +602,8 @@
     window.addEventListener("keydown", function (ev) {
       if (ev.keyCode === 10009) {
         if (window.__jellyfinShellBootDone) return;
+        var lite = window.__shellLite;
+        if (lite && (lite.st === "live" || lite.st === "handoff")) return;
         (ev.preventDefault(), exitApp());
       }
     });
