@@ -6094,7 +6094,8 @@
   // document's in-flight fetches — a timer re-issued fetch survives).
   //
   // Diag: window.__shellLite = {st, sha, ms, restock, warm, bgwarm,
-  // bgwarmMs} with st one of off|miss|exec-err|no-session|live|handoff.
+  // bgwarmMs, native} with st one of
+  // off|miss|exec-err|no-session|live|handoff.
   // QA recipe: st==="live" and no /web/ traffic on the critical path;
   // ~4s after settle the M2 pre-warm fetches /web/index.html+config.json
   // into __shellPrefetch (warm=1, reset to 0 when the slot clears) so
@@ -6104,7 +6105,19 @@
   // boot hits warm HTTP/code caches. OK on a card deep-links the SPA to
   // #/details?id=…&serverId=… while the canvas shows an "Opening…"
   // overlay until document.write clears it.
+  //
+  // M3 (docs/lite-m3-avplay-design.md): a second opt-in flag,
+  // localStorage["jellyfin.lite.native"]="1" (default OFF), forks OK on
+  // a card to the lite bytes' native AVPlay path (app.openNative) BEFORE
+  // the SPA deep-link. openNative returning true means the native
+  // pipeline took the press (d.native counts the takes, st stays
+  // "live" — Lite home remains resident under the video plane); false,
+  // a throw, or old cached bytes without openNative fall through to the
+  // deep-link below unchanged, so the worst case is exactly the M2
+  // behaviour. Both flags dark fleet-wide until the v2.0.25 widget
+  // (avplay privilege + webapis.js include) is on the panels.
   var LITE_FLAG_KEY = "jellyfin.shell.liteEnabled";
+  var LITE_NATIVE_FLAG_KEY = "jellyfin.lite.native";
   var LITE_REC_KEY = "jellyfin.lite.body";
   var LITE_RESTOCK_MS = [0, 12000, 30000];
   // M2 handoff pre-warm: fire after Lite settles (off the boot path),
@@ -6124,6 +6137,13 @@
   function liteWanted() {
     try {
       return localStorage.getItem(LITE_FLAG_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function liteNativeWanted() {
+    try {
+      return localStorage.getItem(LITE_NATIVE_FLAG_KEY) === "1";
     } catch (_) {
       return false;
     }
@@ -6314,6 +6334,24 @@
       loadRemoteWebClient(serverUrl).catch(function () {});
     };
     app.onOpen = function (item) {
+      // M3 native fork (design doc §1), flag-dark behind
+      // jellyfin.lite.native: when the lite bytes' native path takes
+      // the OK (openNative === true) the SPA never loads — Lite home
+      // stays resident and the AVPlay plane plays under it. ANY other
+      // outcome (decline, throw, old cached bytes without openNative)
+      // falls through to the M2 deep-link unchanged.
+      if (liteNativeWanted() && app.openNative && d.st !== "handoff") {
+        var took = false;
+        try {
+          took = app.openNative(item) === true;
+        } catch (_) {
+          took = false;
+        }
+        if (took) {
+          d.native = (d.native || 0) + 1;
+          return;
+        }
+      }
       // OK on a card deep-links into the SPA at the item's details page
       // (Play is the default focus there); OK on nothing = generic
       // handoff, same as Back.
