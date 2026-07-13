@@ -1032,6 +1032,600 @@
   };
 
   /* ------------------------------------------------------------------
+   * PlaybackInfo — the direct-play decision (M3 slice 2, design §3).
+   *
+   * One POST decides native-vs-SPA. Anything that is not a clean
+   * SupportsDirectPlay source — transcode-only answer, HTTP error,
+   * timeout — is a decline, and the caller falls back to the M2 SPA
+   * deep-link. The timeout matters: PlaybackInfo is one POST on a LAN
+   * server, but a wedged server must bounce OK to the SPA promptly,
+   * not hang Lite with a "Loading…" overlay.
+   * ---------------------------------------------------------------- */
+
+  // Conservative M63 (2019, Tizen 5.0) device profile — design §3.
+  // Widened only with on-device evidence (slice 3): this library's hevc
+  // is all HDR10/HDR10+ and server 10.11 denies those direct-play under
+  // a conservative profile, which lands on the designed SPA fallback.
+  Lite.deviceProfile = function () {
+    return {
+      MaxStreamingBitrate: 40000000,
+      DirectPlayProfiles: [
+        {
+          Container: "mp4,mov,mkv",
+          Type: "Video",
+          VideoCodec: "h264,hevc",
+          AudioCodec: "aac,mp3,ac3,eac3",
+        },
+      ],
+      TranscodingProfiles: [],
+      CodecProfiles: [
+        {
+          Type: "Video",
+          Codec: "h264",
+          Conditions: [
+            {
+              Condition: "LessThanEqual",
+              Property: "VideoLevel",
+              Value: "51",
+              IsRequired: false,
+            },
+          ],
+        },
+        {
+          Type: "Video",
+          Codec: "hevc",
+          Conditions: [
+            {
+              Condition: "EqualsAny",
+              Property: "VideoProfile",
+              Value: "main|main 10",
+              IsRequired: false,
+            },
+          ],
+        },
+      ],
+      SubtitleProfiles: [],
+    };
+  };
+
+  // postJson(url, headers, body, cb?) is injected; the default XHR
+  // implementation lives in boot() so this stays node-testable.
+  Lite.createPlaybackInfo = function (opts) {
+    var base = opts.base;
+    var token = opts.token;
+    var userId = opts.userId;
+    var postJson = opts.postJson;
+    var timeoutMs = opts.timeoutMs || 3000;
+    var setT = opts.setTimeout;
+    var clearT = opts.clearTimeout;
+
+    return {
+      // cb(err, {url, playSessionId, mediaSourceId, container}) — cb
+      // fires exactly once; a reply that loses the race against the
+      // timeout is dropped (the SPA handoff already started).
+      resolve: function (item, cb) {
+        var done = false;
+        var timer = setT(function () {
+          if (done) {
+            return;
+          }
+          done = true;
+          cb(new Error("timeout"), null);
+        }, timeoutMs);
+        postJson(
+          base + "/Items/" + item.id + "/PlaybackInfo?userId=" + userId,
+          { "X-Emby-Token": token },
+          { DeviceProfile: Lite.deviceProfile(), AutoOpenLiveStream: false },
+          function (err, body) {
+            if (done) {
+              return;
+            }
+            done = true;
+            clearT(timer);
+            if (err) {
+              cb(err, null);
+              return;
+            }
+            var sources = (body && body.MediaSources) || [];
+            var ms = null;
+            var i;
+            for (i = 0; i < sources.length; i++) {
+              if (sources[i] && sources[i].SupportsDirectPlay === true) {
+                ms = sources[i];
+                break;
+              }
+            }
+            if (!ms || !ms.Id || !ms.Container) {
+              cb(new Error("no-direct-play"), null);
+              return;
+            }
+            cb(null, {
+              // The server normalizes Container ("mov" for an mp4 in
+              // this library) — always build stream.{ms.Container},
+              // never a literal extension (M3 spike gotcha).
+              url:
+                base +
+                "/Videos/" +
+                item.id +
+                "/stream." +
+                ms.Container +
+                "?static=true&mediaSourceId=" +
+                ms.Id +
+                "&api_key=" +
+                token,
+              playSessionId: (body && body.PlaySessionId) || null,
+              mediaSourceId: ms.Id,
+              container: ms.Container,
+            });
+          },
+        );
+      },
+    };
+  };
+
+  /* ------------------------------------------------------------------
+   * Progress reporter — what makes "resume" real (design §4, gate G5).
+   * Fire-and-forget POSTs to /Sessions/Playing[/Progress|/Stopped];
+   * the final Stopped PositionTicks is what the server persists as
+   * UserData, and what the next boot's Continue Watching row reads.
+   * ---------------------------------------------------------------- */
+
+  Lite.TICKS_PER_MS = 10000;
+
+  Lite.createReporter = function (opts) {
+    var base = opts.base;
+    var token = opts.token;
+    var postJson = opts.postJson;
+    var itemId = opts.itemId;
+    var mediaSourceId = opts.mediaSourceId;
+    var playSessionId = opts.playSessionId;
+    var positionMs = opts.positionMs; // function () -> current position
+    var isPaused = opts.isPaused; // function () -> bool
+    var intervalMs = opts.intervalMs || 10000;
+    var setI = opts.setInterval;
+    var clearI = opts.clearInterval;
+
+    var timer = null;
+    var stopped = false;
+
+    function body(extra) {
+      var b = {
+        ItemId: itemId,
+        MediaSourceId: mediaSourceId,
+        PlaySessionId: playSessionId,
+        PositionTicks: Math.round(positionMs() * Lite.TICKS_PER_MS),
+        PlayMethod: "DirectPlay",
+        CanSeek: true,
+      };
+      var k;
+      for (k in extra) {
+        if (extra.hasOwnProperty(k)) {
+          b[k] = extra[k];
+        }
+      }
+      return b;
+    }
+
+    function post(path, b) {
+      // fire-and-forget: a lost beacon must never disturb playback
+      try {
+        postJson(base + path, { "X-Emby-Token": token }, b, null);
+      } catch (_) {}
+    }
+
+    var reporter = {
+      start: function () {
+        if (stopped) {
+          return;
+        }
+        post("/Sessions/Playing", body({}));
+        if (!timer) {
+          timer = setI(function () {
+            reporter.progress("timeupdate");
+          }, intervalMs);
+        }
+      },
+      progress: function (eventName) {
+        if (stopped) {
+          return;
+        }
+        post(
+          "/Sessions/Playing/Progress",
+          body({
+            IsPaused: !!isPaused(),
+            EventName: eventName || "timeupdate",
+          }),
+        );
+      },
+      // One-shot: after stop() every other beacon is inert, so a late
+      // interval tick or key can never resurrect a finished session
+      // server-side.
+      stop: function (finalMs) {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        if (timer) {
+          clearI(timer);
+          timer = null;
+        }
+        post("/Sessions/Playing/Stopped", {
+          ItemId: itemId,
+          MediaSourceId: mediaSourceId,
+          PlaySessionId: playSessionId,
+          PositionTicks: Math.round(
+            (typeof finalMs === "number" ? finalMs : positionMs()) *
+              Lite.TICKS_PER_MS,
+          ),
+        });
+      },
+    };
+    return reporter;
+  };
+
+  /* ------------------------------------------------------------------
+   * Playback OSD — drawn on a dedicated transparent canvas ABOVE the
+   * AVPlay video plane (the "canvas hole", spike gate G2). Everything
+   * here starts from clearRect, never an opaque fill: any opaque pixel
+   * covers the video. Redraws are driven by the session's 500ms tick +
+   * key presses — no rAF loop runs during playback.
+   * ---------------------------------------------------------------- */
+
+  Lite.fmtTime = function (ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    var mm = (h && m < 10 ? "0" : "") + m;
+    var ss = (sec < 10 ? "0" : "") + sec;
+    return h ? h + ":" + mm + ":" + ss : mm + ":" + ss;
+  };
+
+  var OSD = {
+    barH: 8,
+    padX: 90,
+    padB: 60,
+    scrimH: 190,
+    accent: "#00a4dc",
+    hideMs: 4000,
+  };
+
+  Lite.createOsd = function (opts) {
+    var ctx = opts.ctx;
+    var vw = opts.vw || LAYOUT.vw;
+    var vh = opts.vh || LAYOUT.vh;
+    var title = opts.title || "";
+    var now = opts.now;
+    var hideMs = opts.hideMs || OSD.hideMs;
+
+    var shownAt = -1; // -1 = hidden
+    var clean = false; // canvas known fully transparent
+
+    var osd = {
+      show: function () {
+        shownAt = now();
+      },
+      hide: function () {
+        shownAt = -1;
+      },
+      // Auto-hide: visible() flips false hideMs after the last show().
+      // Paused/buffering keep the overlay up regardless (see draw).
+      visible: function () {
+        if (shownAt < 0) {
+          return false;
+        }
+        if (now() - shownAt >= hideMs) {
+          shownAt = -1;
+          return false;
+        }
+        return true;
+      },
+
+      // s: {posMs, durMs, paused, buffering}
+      draw: function (s) {
+        if (!osd.visible() && !s.paused && !s.buffering) {
+          if (!clean) {
+            ctx.clearRect(0, 0, vw, vh);
+            clean = true;
+          }
+          return false;
+        }
+        clean = false;
+        ctx.clearRect(0, 0, vw, vh);
+
+        // bottom scrim so the text reads over any video
+        ctx.fillStyle = "rgba(16,16,16,0.72)";
+        ctx.fillRect(0, vh - OSD.scrimH, vw, OSD.scrimH);
+
+        // state glyph (canvas paths — TV font glyph coverage is not
+        // trustworthy) + title
+        var gx = OSD.padX;
+        var gy = vh - 162;
+        ctx.fillStyle = COLORS.title;
+        if (s.paused) {
+          ctx.fillRect(gx, gy, 12, 34);
+          ctx.fillRect(gx + 22, gy, 12, 34);
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(gx, gy);
+          ctx.lineTo(gx, gy + 34);
+          ctx.lineTo(gx + 30, gy + 17);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.font = "600 32px sans-serif";
+        ctx.fillText(title, gx + 56, gy + 28);
+
+        // seek bar + clock
+        var barW = vw - 2 * OSD.padX;
+        var barY = vh - OSD.padB - OSD.barH;
+        ctx.fillStyle = "rgba(255,255,255,0.25)";
+        ctx.fillRect(OSD.padX, barY, barW, OSD.barH);
+        var frac = s.durMs > 0 ? clamp(s.posMs / s.durMs, 0, 1) : 0;
+        ctx.fillStyle = OSD.accent;
+        ctx.fillRect(OSD.padX, barY, Math.round(barW * frac), OSD.barH);
+        ctx.fillStyle = COLORS.title;
+        ctx.font = "400 24px sans-serif";
+        ctx.fillText(
+          Lite.fmtTime(s.posMs) + " / " + Lite.fmtTime(s.durMs),
+          OSD.padX,
+          barY - 12,
+        );
+
+        if (s.buffering) {
+          ctx.font = "400 34px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("Buffering…", vw / 2, vh / 2);
+          ctx.textAlign = "left";
+        }
+        return true;
+      },
+    };
+    return osd;
+  };
+
+  /* ------------------------------------------------------------------
+   * Playback session — one OK press end to end: player lifecycle,
+   * remote keys, OSD redraws, progress beacons, exit restore.
+   * ---------------------------------------------------------------- */
+
+  // Remote keys during native playback (design §4). The Media* codes
+  // are Samsung tvinputdevice codes; registration happens in boot.
+  // Red (403) exits playback like Back — the SPA escape hatch stays a
+  // home-screen affordance.
+  Lite.PLAYER_KEYS = {
+    13: "playpause", // OK
+    10252: "playpause", // MediaPlayPause
+    415: "play", // MediaPlay
+    19: "pause", // MediaPause
+    37: "rew", // left  = -10s (Netflix-style asymmetric, design §7)
+    412: "rew", // MediaRewind
+    39: "ff", // right = +30s
+    417: "ff", // MediaFastForward
+    38: "osd",
+    40: "osd",
+    10009: "back",
+    403: "back",
+  };
+
+  Lite.SEEK_BACK_MS = 10000;
+  Lite.SEEK_FWD_MS = 30000;
+  // Repeated left/right presses compound into ONE pipeline seek: each
+  // press moves a preview target on the OSD and re-arms this debounce;
+  // AVPlay only sees the settled target (G3: a seek costs ~0.4-1s on
+  // the Q60R — five queued seeks would wedge the pipeline for seconds).
+  Lite.SEEK_DEBOUNCE_MS = 350;
+  var OSD_TICK_MS = 500;
+  // Never seek into the last 2s: landing exactly on the tail races
+  // onstreamcompleted against the seek callback.
+  var SEEK_TAIL_GUARD_MS = 2000;
+
+  Lite.createPlaybackSession = function (opts) {
+    var avplay = opts.avplay;
+    var reporter = opts.reporter;
+    var osd = opts.osd;
+    var now = opts.now;
+    var setT = opts.setTimeout;
+    var clearT = opts.clearTimeout;
+    var setI = opts.setInterval;
+    var clearI = opts.clearInterval;
+    var runtimeMs = opts.runtimeMs || 0; // RunTimeTicks fallback clock
+    var diag = opts.diag || {};
+
+    var started = false; // first frame seen
+    var finished = false;
+    var pendingSeek = -1; // compound-seek preview target, -1 = none
+    var seekTimer = null;
+    var drawTimer = null;
+
+    var player = Lite.createPlayer({
+      avplay: avplay,
+      now: now,
+      diag: diag,
+      onFirstFrame: function () {
+        started = true;
+        reporter.start();
+        osd.show();
+        redraw();
+      },
+      onEnd: function () {
+        finish("end");
+      },
+      onError: function (why) {
+        if (started) {
+          finish("err");
+          return;
+        }
+        // Pre-first-frame failure → the caller falls back to the SPA
+        // deep-link (design §1); the player already tore itself down.
+        cleanup();
+        finished = true;
+        if (opts.onFallback) {
+          opts.onFallback(why);
+        }
+      },
+    });
+
+    function durMs() {
+      var d = player.durationMs();
+      return d > 0 ? d : runtimeMs;
+    }
+
+    function redraw() {
+      osd.draw({
+        posMs: pendingSeek >= 0 ? pendingSeek : player.currentTimeMs(),
+        durMs: durMs(),
+        paused: player.state() === "paused",
+        buffering: player.buffering(),
+      });
+    }
+
+    function cleanup() {
+      if (seekTimer) {
+        clearT(seekTimer);
+        seekTimer = null;
+      }
+      if (drawTimer) {
+        clearI(drawTimer);
+        drawTimer = null;
+      }
+    }
+
+    function finish(why) {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      cleanup();
+      // Position BEFORE stop(): currentTimeMs freezes at the last
+      // observed tick once the pipeline closes (G4), and that frozen
+      // value is both the Stopped beacon and the local Resume patch.
+      var ms = player.currentTimeMs();
+      player.stop();
+      reporter.stop(ms);
+      if (opts.onExit) {
+        opts.onExit(ms, why);
+      }
+    }
+
+    function applySeek() {
+      seekTimer = null;
+      var target = pendingSeek;
+      pendingSeek = -1;
+      player.seekTo(target, function () {
+        reporter.progress("timeupdate");
+        redraw();
+      });
+    }
+
+    function nudge(deltaMs) {
+      var base = pendingSeek >= 0 ? pendingSeek : player.currentTimeMs();
+      var d = durMs();
+      var t = base + deltaMs;
+      if (t < 0) {
+        t = 0;
+      }
+      if (d > 0 && t > d - SEEK_TAIL_GUARD_MS) {
+        t = Math.max(0, d - SEEK_TAIL_GUARD_MS);
+      }
+      pendingSeek = t;
+      if (seekTimer) {
+        clearT(seekTimer);
+      }
+      seekTimer = setT(applySeek, Lite.SEEK_DEBOUNCE_MS);
+      osd.show();
+      redraw();
+    }
+
+    var session = {
+      player: player,
+
+      start: function (url, resumeMs) {
+        var ok = player.open(url, resumeMs);
+        if (ok && !finished) {
+          osd.show();
+          drawTimer = setI(redraw, OSD_TICK_MS);
+        }
+        return ok;
+      },
+
+      active: function () {
+        return !finished;
+      },
+
+      // keyCode in, true when the key mapped to a player action. While
+      // a session is live the boot key handler swallows EVERY key, so
+      // an unmapped code is inert rather than leaking into home nav.
+      key: function (keyCode) {
+        if (finished) {
+          return false;
+        }
+        var action = Lite.PLAYER_KEYS[keyCode];
+        if (!action) {
+          return false;
+        }
+        if (action === "back") {
+          finish("back");
+          return true;
+        }
+        if (action === "rew") {
+          nudge(-Lite.SEEK_BACK_MS);
+          return true;
+        }
+        if (action === "ff") {
+          nudge(Lite.SEEK_FWD_MS);
+          return true;
+        }
+        if (action === "osd") {
+          osd.show();
+          redraw();
+          return true;
+        }
+        // play / pause / playpause
+        var st = player.state();
+        var toggled = false;
+        if (action === "playpause") {
+          toggled = player.playPause();
+        } else if (action === "play" && st === "paused") {
+          toggled = player.playPause();
+        } else if (action === "pause" && st === "playing") {
+          toggled = player.playPause();
+        }
+        if (toggled) {
+          reporter.progress(player.state() === "paused" ? "pause" : "unpause");
+        }
+        osd.show();
+        redraw();
+        return true;
+      },
+
+      // v2.0.24 interplay (design §4): once background-support=enable
+      // ships, the app suspends instead of dying — park/unpark the
+      // AVPlay pipeline on visibilitychange. Harmless today: pre-
+      // v2.0.24 the platform kills the whole app instead.
+      suspend: function () {
+        if (finished) {
+          return;
+        }
+        try {
+          avplay.suspend();
+        } catch (_) {}
+      },
+      restore: function () {
+        if (finished) {
+          return;
+        }
+        try {
+          avplay.restore();
+        } catch (_) {}
+      },
+
+      finish: finish,
+    };
+    return session;
+  };
+
+  /* ------------------------------------------------------------------
    * Boot — wire everything to a real window. Kept last and thin.
    * ---------------------------------------------------------------- */
 
@@ -1063,6 +1657,37 @@
     xhr.send();
   }
 
+  // POST twin of xhrFetchJson. cb is optional: the progress reporter
+  // fires beacons and never looks back.
+  function xhrPostJson(url, headers, body, cb) {
+    var xhr = new global.XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    var k;
+    for (k in headers) {
+      if (headers.hasOwnProperty(k)) {
+        xhr.setRequestHeader(k, headers[k]);
+      }
+    }
+    if (cb) {
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) {
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          cb(new Error("HTTP " + xhr.status + " " + url), null);
+          return;
+        }
+        try {
+          cb(null, xhr.responseText ? JSON.parse(xhr.responseText) : null);
+        } catch (e) {
+          cb(e, null);
+        }
+      };
+    }
+    xhr.send(JSON.stringify(body));
+  }
+
   // Returns the app handle, or null when Lite cannot run (no stored
   // session) — the caller (shell boot path, M1 slice 2) falls back to
   // the full SPA in that case.
@@ -1082,6 +1707,48 @@
         avplay = win.webapis.avplay;
       }
     } catch (_) {}
+
+    // Media transport keys are opt-in on Tizen: without registerKey the
+    // remote's MediaPlayPause/… codes never reach the page. Only worth
+    // registering when native playback is possible at all.
+    if (avplay) {
+      try {
+        var tid = win.tizen && win.tizen.tvinputdevice;
+        if (tid && tid.registerKey) {
+          var mediaKeys = [
+            "MediaPlayPause",
+            "MediaPlay",
+            "MediaPause",
+            "MediaRewind",
+            "MediaFastForward",
+          ];
+          var mki;
+          for (mki = 0; mki < mediaKeys.length; mki++) {
+            try {
+              tid.registerKey(mediaKeys[mki]);
+            } catch (_mk) {}
+          }
+        }
+      } catch (_tk) {}
+    }
+
+    // Timers come off the window so the node testkit (bare vm sandbox,
+    // no globals) can fake them per test.
+    function setT(f, ms) {
+      return win.setTimeout(f, ms);
+    }
+    function clearT(t) {
+      win.clearTimeout(t);
+    }
+    function setI(f, ms) {
+      return win.setInterval(f, ms);
+    }
+    function clearI(t) {
+      win.clearInterval(t);
+    }
+    function nowMs() {
+      return new global.Date().getTime();
+    }
 
     var canvas = doc.createElement("canvas");
     canvas.width = LAYOUT.vw;
@@ -1143,7 +1810,22 @@
       schedule();
     });
 
+    // Native playback state (M3 slice 2). pending covers the async gap
+    // between OK and the PlaybackInfo answer (double-OK must not spawn
+    // two sessions); declineId is the one-shot fallback latch (see
+    // startNative's bail).
+    var playback = { session: null, pending: false, declineId: null };
+    var pbInfo = null;
+
     function onKey(ev) {
+      // While a native session is live it owns EVERY key: mapped codes
+      // act on the player, unmapped ones are swallowed so nothing
+      // leaks into home nav under the video plane.
+      if (playback.session && playback.session.active()) {
+        playback.session.key(ev.keyCode);
+        ev.preventDefault();
+        return;
+      }
       var action = Lite.KEYS[ev.keyCode];
       if (!action) {
         return;
@@ -1175,6 +1857,172 @@
     }
     doc.addEventListener("keydown", onKey, true);
 
+    // v2.0.24 interplay (design §4): with background-support enabled
+    // the app suspends instead of dying — park/unpark the pipeline.
+    // Pre-v2.0.24 (today) the platform kills the app outright, so this
+    // listener simply never fires with a live session.
+    doc.addEventListener("visibilitychange", function () {
+      var s = playback.session;
+      if (!s || !s.active()) {
+        return;
+      }
+      if (doc.hidden) {
+        s.suspend();
+      } else {
+        s.restore();
+      }
+    });
+
+    // The whole native OK press: PlaybackInfo decision → canvas hole →
+    // player/reporter/OSD session → exit restore. Every pre-first-frame
+    // failure funnels into bail(), which re-enters app.onOpen with the
+    // decline latch set so the shell fork's second openNative call
+    // returns false and the M2 SPA deep-link runs unchanged.
+    function startNative(item) {
+      playback.pending = true;
+      var d = { st: "info" }; // __shellLite.player diag surface (§4)
+      try {
+        if (win.__shellLite) {
+          win.__shellLite.player = d;
+        }
+      } catch (_d) {}
+      if (!pbInfo) {
+        pbInfo = Lite.createPlaybackInfo({
+          base: creds.base,
+          token: creds.token,
+          userId: creds.userId,
+          postJson: xhrPostJson,
+          setTimeout: setT,
+          clearTimeout: clearT,
+        });
+      }
+      // Immediate feedback on the home canvas while PlaybackInfo runs;
+      // cleared on either outcome (player takes over / SPA handoff).
+      renderer.setMessage("Loading…");
+      schedule();
+
+      function bail(why) {
+        d.st = "err";
+        d.why = why;
+        playback.pending = false;
+        playback.session = null;
+        renderer.setMessage(null);
+        schedule();
+        playback.declineId = item.id;
+        if (app.onOpen) {
+          app.onOpen(item);
+        }
+      }
+
+      pbInfo.resolve(item, function (err, info) {
+        if (err) {
+          bail("info:" + (err && err.message));
+          return;
+        }
+        // Canvas hole (spike gate G2): AVPlay renders on a plane BEHIND
+        // the web layer. The home canvas paints an opaque bg, so hide
+        // it and put a dedicated transparent OSD canvas above the
+        // video; body must not paint either while the hole is open.
+        var osdCanvas = doc.createElement("canvas");
+        osdCanvas.width = LAYOUT.vw;
+        osdCanvas.height = LAYOUT.vh;
+        osdCanvas.style.cssText =
+          "position:fixed;left:0;top:0;width:100%;height:100%;" +
+          "background:transparent";
+        var prevBodyBg = doc.body.style.background;
+        var restored = false;
+        function restoreHome(patchMs) {
+          if (restored) {
+            return;
+          }
+          restored = true;
+          playback.pending = false;
+          try {
+            if (osdCanvas.parentNode) {
+              osdCanvas.parentNode.removeChild(osdCanvas);
+            }
+          } catch (_r) {}
+          doc.body.style.background = prevBodyBg;
+          canvas.style.display = "";
+          renderer.setMessage(null);
+          if (typeof patchMs === "number" && patchMs >= 0) {
+            // Local Resume patch: the card object lives in the scene,
+            // so the next OK resumes from here even before the server
+            // round-trip (SWR revalidate) catches up. Best-effort — a
+            // scene rebuild from fresher server data supersedes it.
+            item.posTicks = Math.round(patchMs * Lite.TICKS_PER_MS);
+          }
+          renderer.invalidate();
+          schedule();
+        }
+
+        doc.body.appendChild(osdCanvas);
+        doc.body.style.background = "transparent";
+        canvas.style.display = "none";
+        renderer.setMessage(null);
+
+        var osd = Lite.createOsd({
+          ctx: osdCanvas.getContext("2d"),
+          title: item.name || "",
+          now: nowMs,
+        });
+        var reporter = Lite.createReporter({
+          base: creds.base,
+          token: creds.token,
+          postJson: xhrPostJson,
+          itemId: item.id,
+          mediaSourceId: info.mediaSourceId,
+          playSessionId: info.playSessionId,
+          positionMs: function () {
+            return session.player.currentTimeMs();
+          },
+          isPaused: function () {
+            return session.player.state() === "paused";
+          },
+          setInterval: setI,
+          clearInterval: clearI,
+        });
+        var session = Lite.createPlaybackSession({
+          avplay: avplay,
+          reporter: reporter,
+          osd: osd,
+          now: nowMs,
+          setTimeout: setT,
+          clearTimeout: clearT,
+          setInterval: setI,
+          clearInterval: clearI,
+          runtimeMs: item.runtimeTicks
+            ? Math.round(item.runtimeTicks / Lite.TICKS_PER_MS)
+            : 0,
+          diag: d,
+          onExit: function (ms) {
+            playback.session = null;
+            restoreHome(ms);
+          },
+          onFallback: function (why) {
+            playback.session = null;
+            restoreHome(-1);
+            bail(why);
+          },
+        });
+        playback.session = session;
+        var resumeMs = item.posTicks
+          ? Math.round(item.posTicks / Lite.TICKS_PER_MS)
+          : 0;
+        session.start(info.url, resumeMs);
+      });
+    }
+
+    // Shared teardown-first guard for handoff()/destroy(): a leaked
+    // AVPlay pipeline wedges the platform until app restart (G4).
+    function stopSession() {
+      try {
+        if (playback.session && playback.session.active()) {
+          playback.session.finish("teardown");
+        }
+      } catch (_s) {}
+    }
+
     var app = {
       canvas: canvas,
       renderer: renderer,
@@ -1189,28 +2037,43 @@
       // M3 native playback surface for the shell's onOpen fork (behind
       // localStorage["jellyfin.lite.native"], default OFF). Returns
       // true when the native pipeline takes the OK press; false hands
-      // the caller back to the M2 SPA deep-link. Slice 1 ships the
-      // routing + the Lite.createPlayer skeleton only — there is no
-      // PlaybackInfo client yet, so every press still declines.
+      // the caller back to the M2 SPA deep-link. True is optimistic —
+      // the PlaybackInfo answer is async — so a native failure later
+      // re-enters app.onOpen with the decline latch set, and the
+      // shell fork's second call here returns false into the same M2
+      // deep-link (worst case = exactly today's behaviour, design §1).
       nativeSupported: !!avplay,
       openNative: function (item) {
         if (!avplay || !item || !Lite.isPlayableLeaf(item.type)) {
           return false;
         }
-        // Slice 2: POST /Items/{id}/PlaybackInfo, pick a
-        // SupportsDirectPlay source, hide the home canvas and run
-        // Lite.createPlayer({ avplay: avplay }).open(streamUrl, posMs).
-        return false;
+        if (playback.declineId && playback.declineId === item.id) {
+          playback.declineId = null;
+          return false;
+        }
+        if (
+          playback.pending ||
+          (playback.session && playback.session.active())
+        ) {
+          // one press in flight already — swallow the repeat
+          return true;
+        }
+        startNative(item);
+        return true;
       },
       // M2 handoff: stop input but KEEP the canvas up showing a message,
       // so the screen isn't black for the seconds until the SPA's
       // document.write teardown replaces the document (canvas included).
       handoff: function (message) {
+        stopSession();
         doc.removeEventListener("keydown", onKey, true);
         renderer.setMessage(message || "Opening…");
         schedule();
       },
       destroy: function () {
+        // §4 rule for the v2.0.24 configEpoch teardown: stop+close the
+        // player FIRST, then take the document apart.
+        stopSession();
         doc.removeEventListener("keydown", onKey, true);
         if (canvas.parentNode) {
           canvas.parentNode.removeChild(canvas);
