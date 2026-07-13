@@ -912,11 +912,11 @@
       // open → setListener → setDisplayRect → prepareAsync →
       // (posMs ? seekTo : nothing) → play. One-shot: false when this
       // instance already ran.
-      open: function (url, posMs) {
+      open: function (url, posMs, kind) {
         if (st !== "idle") {
           return false;
         }
-        diag.url = "direct";
+        diag.url = kind || "direct";
         try {
           avplay.open(url);
           avplay.setListener(listener);
@@ -1057,7 +1057,17 @@
           AudioCodec: "aac,mp3,ac3,eac3",
         },
       ],
-      TranscodingProfiles: [],
+      // Slice 3: accept DirectStream (container remux, no codec re-encode)
+      // for hevc/h264 items the server won't direct-play (e.g. HDR10 mkv).
+      TranscodingProfiles: [
+        {
+          Container: "mkv",
+          Type: "Video",
+          VideoCodec: "h264,hevc",
+          AudioCodec: "aac,mp3,ac3,eac3",
+          Protocol: "Http",
+        },
+      ],
       CodecProfiles: [
         {
           Type: "Video",
@@ -1128,34 +1138,54 @@
             }
             var sources = (body && body.MediaSources) || [];
             var ms = null;
+            var kind = "direct";
             var i;
             for (i = 0; i < sources.length; i++) {
               if (sources[i] && sources[i].SupportsDirectPlay === true) {
                 ms = sources[i];
+                kind = "direct";
                 break;
               }
             }
-            if (!ms || !ms.Id || !ms.Container) {
+            // Slice 3: DirectStream remux fallback — server re-muxes
+            // into mkv without re-encoding codecs; URL is in
+            // ms.TranscodingUrl (relative, prefix with base).
+            if (!ms) {
+              for (i = 0; i < sources.length; i++) {
+                if (
+                  sources[i] &&
+                  sources[i].SupportsDirectStream === true &&
+                  sources[i].TranscodingUrl
+                ) {
+                  ms = sources[i];
+                  kind = "remux";
+                  break;
+                }
+              }
+            }
+            if (!ms || !ms.Id || (!ms.Container && kind !== "remux")) {
               cb(new Error("no-direct-play"), null);
               return;
             }
             cb(null, {
-              // The server normalizes Container ("mov" for an mp4 in
-              // this library) — always build stream.{ms.Container},
-              // never a literal extension (M3 spike gotcha).
+              // Direct-play: build stream.{ms.Container} URL.
+              // Remux: use ms.TranscodingUrl (server-built, relative).
               url:
-                base +
-                "/Videos/" +
-                item.id +
-                "/stream." +
-                ms.Container +
-                "?static=true&mediaSourceId=" +
-                ms.Id +
-                "&api_key=" +
-                token,
+                kind === "remux"
+                  ? base + ms.TranscodingUrl
+                  : base +
+                    "/Videos/" +
+                    item.id +
+                    "/stream." +
+                    ms.Container +
+                    "?static=true&mediaSourceId=" +
+                    ms.Id +
+                    "&api_key=" +
+                    token,
               playSessionId: (body && body.PlaySessionId) || null,
               mediaSourceId: ms.Id,
-              container: ms.Container,
+              container: ms.Container || null,
+              kind: kind,
             });
           },
         );
@@ -1540,8 +1570,8 @@
     var session = {
       player: player,
 
-      start: function (url, resumeMs) {
-        var ok = player.open(url, resumeMs);
+      start: function (url, resumeMs, kind) {
+        var ok = player.open(url, resumeMs, kind);
         if (ok && !finished) {
           osd.show();
           drawTimer = setI(redraw, OSD_TICK_MS);
@@ -2026,7 +2056,7 @@
         var resumeMs = item.posTicks
           ? Math.round(item.posTicks / Lite.TICKS_PER_MS)
           : 0;
-        session.start(info.url, resumeMs);
+        session.start(info.url, resumeMs, info.kind);
       });
     }
 

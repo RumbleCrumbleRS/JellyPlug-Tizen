@@ -1,14 +1,14 @@
 /*
- * JELA-67 M3 slice 2: Lite.createPlaybackInfo — the direct-play
- * decision (design doc §3).
+ * JELA-67 M3 slice 3: Lite.createPlaybackInfo — direct-play + DirectStream
+ * remux decision (design doc §3, slice-3 extension).
  *
  * Pinned invariants:
  *   - one POST to /Items/{id}/PlaybackInfo?userId= with the M63
  *     profile and AutoOpenLiveStream:false
- *   - the FIRST MediaSource with SupportsDirectPlay===true wins; the
- *     stream URL is built from ms.Container (the server says "mov"
- *     for an mp4 in this library — never hardcode the extension),
- *     ms.Id and the token
+ *   - the FIRST MediaSource with SupportsDirectPlay===true wins (kind="direct");
+ *     URL built from ms.Container, ms.Id, token
+ *   - if no DirectPlay source, the FIRST source with SupportsDirectStream===true
+ *     AND TranscodingUrl wins (kind="remux"); URL = base + ms.TranscodingUrl
  *   - transcode-only / empty / malformed answers and HTTP errors are
  *     declines (cb(err)) — the caller falls back to the SPA deep-link
  *   - the 3s timeout wins races: a late server reply after the
@@ -60,7 +60,9 @@ function harness(opts) {
   assert.strictEqual(prof.DirectPlayProfiles.length, 1);
   assert.strictEqual(prof.DirectPlayProfiles[0].Container, "mp4,mov,mkv");
   assert.strictEqual(prof.DirectPlayProfiles[0].VideoCodec, "h264,hevc");
-  assert.strictEqual(prof.TranscodingProfiles.length, 0, "direct play only");
+  assert.strictEqual(prof.TranscodingProfiles.length, 1, "remux profile present (slice 3)");
+  assert.strictEqual(prof.TranscodingProfiles[0].Container, "mkv");
+  assert.strictEqual(prof.TranscodingProfiles[0].VideoCodec, "h264,hevc");
 }
 
 // --- first SupportsDirectPlay source wins, URL from ms.Container -----------
@@ -83,17 +85,73 @@ function harness(opts) {
   assert.strictEqual(res.playSessionId, "ps1");
   assert.strictEqual(res.mediaSourceId, "ms1");
   assert.strictEqual(res.container, "mov");
+  assert.strictEqual(res.kind, "direct");
   assert.strictEqual(timers.size, 0, "timeout cleared on settle");
 }
 
-// --- transcode-only answer is a decline -------------------------------------
+// --- transcode-only answer (no DirectPlay, no DirectStream) is a decline ----
 {
   const { pb, posts } = harness();
   let err;
   pb.resolve({ id: "m1" }, (e) => (err = e));
   posts[0].cb(null, {
     MediaSources: [
-      { Id: "x", Container: "mkv", SupportsDirectPlay: false, TranscodingUrl: "/t" },
+      {
+        Id: "x",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        TranscodingUrl: "/t",
+      },
+    ],
+  });
+  assert.strictEqual(err.message, "no-direct-play");
+}
+
+// --- DirectStream remux: first SupportsDirectStream source wins --------------
+{
+  const { pb, posts, timers } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (err, r) => (res = r));
+  posts[0].cb(null, {
+    PlaySessionId: "ps2",
+    MediaSources: [
+      { Id: "ms1", Container: "mkv", SupportsDirectPlay: false, SupportsDirectStream: false },
+      { Id: "ms2", Container: "mkv", SupportsDirectPlay: false, SupportsDirectStream: true, TranscodingUrl: "/Videos/m1/stream.mkv?videoCodec=hevc" },
+      { Id: "ms3", Container: "mkv", SupportsDirectPlay: false, SupportsDirectStream: true, TranscodingUrl: "/Videos/m1/stream.mkv?videoCodec=hevc&other=x" },
+    ],
+  });
+  assert.strictEqual(res.url, "http://srv/Videos/m1/stream.mkv?videoCodec=hevc");
+  assert.strictEqual(res.playSessionId, "ps2");
+  assert.strictEqual(res.mediaSourceId, "ms2");
+  assert.strictEqual(res.kind, "remux");
+  assert.strictEqual(timers.size, 0, "timeout cleared");
+}
+
+// --- DirectPlay beats DirectStream when both present -------------------------
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (err, r) => (res = r));
+  posts[0].cb(null, {
+    PlaySessionId: "ps3",
+    MediaSources: [
+      { Id: "ms1", Container: "mkv", SupportsDirectPlay: false, SupportsDirectStream: true, TranscodingUrl: "/t" },
+      { Id: "ms2", Container: "mov", SupportsDirectPlay: true },
+    ],
+  });
+  assert.strictEqual(res.kind, "direct");
+  assert.strictEqual(res.url, "http://srv/Videos/m1/stream.mov?static=true&mediaSourceId=ms2&api_key=tok");
+}
+
+// --- DirectStream without TranscodingUrl is not eligible ---------------------
+{
+  const { pb, posts } = harness();
+  let err;
+  pb.resolve({ id: "m1" }, (e) => (err = e));
+  posts[0].cb(null, {
+    MediaSources: [
+      { Id: "x", Container: "mkv", SupportsDirectPlay: false, SupportsDirectStream: true },
     ],
   });
   assert.strictEqual(err.message, "no-direct-play");
