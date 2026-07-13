@@ -385,6 +385,11 @@
             "/Images/Primary?maxWidth=400&tag=" +
             imgTag
           : null,
+        // M3 resume plumbing: the position already arrives on the
+        // home-sections payload, so the native player can seek without
+        // an extra fetch (design doc §4, "Resume entry").
+        posTicks: (item.UserData && item.UserData.PlaybackPositionTicks) || 0,
+        runtimeTicks: item.RunTimeTicks || 0,
       };
     }
 
@@ -755,6 +760,278 @@
   };
 
   /* ------------------------------------------------------------------
+   * Player — native AVPlay lifecycle skeleton (M3 slice 1).
+   *
+   * The adapter (opts.avplay) is webapis.avplay on a TV whose widget
+   * carries the avplay privilege + webapis.js include (WGT v2.0.25);
+   * node tests inject a fake. The one hard rule (M3 spike gate G4 and
+   * the design doc §4): stop()+close() ALWAYS run on any exit — error,
+   * stream end, back — even when individual adapter calls throw. A
+   * leaked player wedges the platform pipeline until app restart.
+   *
+   * One player instance = one playback. After teardown the instance is
+   * dead (st "closed" / "err"); the caller creates a fresh player for
+   * the next item — the spike's "second playback works" G4 check is
+   * exactly that sequence on-device.
+   * ---------------------------------------------------------------- */
+
+  // Item types whose OK-press may take the native path; everything
+  // else (Series/BoxSet/Playlist/…) is container navigation and stays
+  // on the SPA details deep-link (design doc §1).
+  Lite.isPlayableLeaf = function (type) {
+    return (
+      type === "Movie" ||
+      type === "Episode" ||
+      type === "Video" ||
+      type === "MusicVideo"
+    );
+  };
+
+  Lite.createPlayer = function (opts) {
+    var avplay = opts.avplay;
+    var vw = opts.vw || LAYOUT.vw;
+    var vh = opts.vh || LAYOUT.vh;
+    var now =
+      opts.now ||
+      function () {
+        return new global.Date().getTime();
+      };
+    // The __shellLite.player QA surface (design doc §4): st, ms
+    // (prepare → first frame), url kind ("direct"; "remux" is the
+    // slice-3 DirectStream candidate).
+    var diag = opts.diag || {};
+
+    var st;
+    var prepT0 = 0;
+    var firstFrameSeen = false;
+    var lastTimeMs = 0;
+    var buffering = false;
+
+    function setSt(next) {
+      st = next;
+      diag.st = next;
+    }
+    setSt("idle");
+
+    function dead() {
+      return st === "closed" || st === "err";
+    }
+
+    // The G4 rule: both calls, both guarded, in this order, no matter
+    // which of them throws or what state the pipeline is in.
+    function teardown(why) {
+      if (dead()) {
+        return;
+      }
+      try {
+        avplay.stop();
+      } catch (_) {}
+      try {
+        avplay.close();
+      } catch (_2) {}
+      setSt(why === "err" ? "err" : "closed");
+    }
+
+    function fail(why) {
+      teardown("err");
+      if (opts.onError) {
+        opts.onError(why);
+      }
+    }
+
+    var listener = {
+      oncurrentplaytime: function (ms) {
+        if (dead()) {
+          return;
+        }
+        lastTimeMs = ms || 0;
+        // The first playtime tick after play() is the closest signal
+        // the AVPlay API has to "first frame on the video plane" — the
+        // M3 spike's G1 numbers were measured exactly this way.
+        if (!firstFrameSeen && (st === "playing" || st === "paused")) {
+          firstFrameSeen = true;
+          diag.ms = now() - prepT0;
+          if (opts.onFirstFrame) {
+            opts.onFirstFrame(diag.ms);
+          }
+        }
+      },
+      onbufferingstart: function () {
+        buffering = true;
+      },
+      onbufferingprogress: function () {},
+      onbufferingcomplete: function () {
+        buffering = false;
+      },
+      onstreamcompleted: function () {
+        teardown("end");
+        if (opts.onEnd) {
+          opts.onEnd();
+        }
+      },
+      onerror: function (type) {
+        fail("avplay:" + type);
+      },
+      onevent: function () {},
+    };
+
+    var player = {
+      state: function () {
+        return st;
+      },
+      buffering: function () {
+        return buffering;
+      },
+      // Frozen at the last observed tick once the pipeline is closed —
+      // the caller patches the Resume row from this after Back.
+      currentTimeMs: function () {
+        if (dead()) {
+          return lastTimeMs;
+        }
+        try {
+          var t = avplay.getCurrentTime();
+          if (typeof t === "number" && t >= 0) {
+            lastTimeMs = t;
+          }
+        } catch (_) {}
+        return lastTimeMs;
+      },
+      durationMs: function () {
+        if (dead()) {
+          return 0;
+        }
+        try {
+          var d = avplay.getDuration();
+          return typeof d === "number" && d > 0 ? d : 0;
+        } catch (_) {
+          return 0;
+        }
+      },
+
+      // open(url, posMs): the whole §4 lifecycle in one shot —
+      // open → setListener → setDisplayRect → prepareAsync →
+      // (posMs ? seekTo : nothing) → play. One-shot: false when this
+      // instance already ran.
+      open: function (url, posMs) {
+        if (st !== "idle") {
+          return false;
+        }
+        diag.url = "direct";
+        try {
+          avplay.open(url);
+          avplay.setListener(listener);
+          avplay.setDisplayRect(0, 0, vw, vh);
+          setSt("preparing");
+          prepT0 = now();
+          avplay.prepareAsync(
+            function () {
+              if (dead()) {
+                return;
+              }
+              if (posMs > 0) {
+                avplay.seekTo(
+                  posMs,
+                  function () {
+                    player._go();
+                  },
+                  function () {
+                    // A failed resume-seek is not fatal: playing from
+                    // 0 beats bouncing the user to the SPA.
+                    player._go();
+                  },
+                );
+              } else {
+                player._go();
+              }
+            },
+            function (e) {
+              fail("prepare:" + e);
+            },
+          );
+        } catch (e2) {
+          fail("open");
+          return false;
+        }
+        return true;
+      },
+
+      // prepare-success continuation; internal, but on the object so
+      // the seek callbacks above reach it after `player` exists.
+      _go: function () {
+        if (dead()) {
+          return;
+        }
+        try {
+          avplay.play();
+          setSt("playing");
+        } catch (_) {
+          fail("play");
+        }
+      },
+
+      playPause: function () {
+        if (st === "playing") {
+          try {
+            avplay.pause();
+            setSt("paused");
+            return true;
+          } catch (_) {
+            fail("pause");
+          }
+        } else if (st === "paused") {
+          try {
+            avplay.play();
+            setSt("playing");
+            return true;
+          } catch (_2) {
+            fail("play");
+          }
+        }
+        return false;
+      },
+
+      // cb(ok) fires when the pipeline settles (G3 measured ~405ms
+      // paused / ~1.0s playing on the Q60R via exactly this success
+      // callback).
+      seekTo: function (ms, cb) {
+        if (st !== "playing" && st !== "paused") {
+          if (cb) {
+            cb(false);
+          }
+          return;
+        }
+        if (ms < 0) {
+          ms = 0;
+        }
+        try {
+          avplay.seekTo(
+            ms,
+            function () {
+              if (cb) {
+                cb(true);
+              }
+            },
+            function () {
+              if (cb) {
+                cb(false);
+              }
+            },
+          );
+        } catch (_) {
+          if (cb) {
+            cb(false);
+          }
+        }
+      },
+
+      stop: function () {
+        teardown("stop");
+      },
+    };
+    return player;
+  };
+
+  /* ------------------------------------------------------------------
    * Boot — wire everything to a real window. Kept last and thin.
    * ---------------------------------------------------------------- */
 
@@ -794,6 +1071,17 @@
     if (!creds) {
       return null;
     }
+
+    // M3: the AVPlay adapter exists only once the v2.0.25 widget
+    // (avplay privilege + webapis.js include) is installed — everywhere
+    // else native playback reports unsupported and OK stays on the SPA
+    // deep-link path.
+    var avplay = null;
+    try {
+      if (win.webapis && win.webapis.avplay) {
+        avplay = win.webapis.avplay;
+      }
+    } catch (_) {}
 
     var canvas = doc.createElement("canvas");
     canvas.width = LAYOUT.vw;
@@ -898,6 +1186,22 @@
       onOpen: null,
       onBack: null,
       onMenu: null, // escape hatch to full SPA (search/settings/admin)
+      // M3 native playback surface for the shell's onOpen fork (behind
+      // localStorage["jellyfin.lite.native"], default OFF). Returns
+      // true when the native pipeline takes the OK press; false hands
+      // the caller back to the M2 SPA deep-link. Slice 1 ships the
+      // routing + the Lite.createPlayer skeleton only — there is no
+      // PlaybackInfo client yet, so every press still declines.
+      nativeSupported: !!avplay,
+      openNative: function (item) {
+        if (!avplay || !item || !Lite.isPlayableLeaf(item.type)) {
+          return false;
+        }
+        // Slice 2: POST /Items/{id}/PlaybackInfo, pick a
+        // SupportsDirectPlay source, hide the home canvas and run
+        // Lite.createPlayer({ avplay: avplay }).open(streamUrl, posMs).
+        return false;
+      },
       // M2 handoff: stop input but KEEP the canvas up showing a message,
       // so the screen isn't black for the seconds until the SPA's
       // document.write teardown replaces the document (canvas included).

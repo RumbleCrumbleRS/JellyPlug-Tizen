@@ -100,7 +100,9 @@ function fnv(s) {
   return h.toString(36);
 }
 
-// Models slice-4+ lite bytes: handoff() present, serverId exposed.
+// Models M3-slice-1+ lite bytes: handoff() present, serverId exposed,
+// openNative controllable via w.__liteNativeMode ('take'|'throw'|other
+// = decline) with every call recorded on app.nativeCalls.
 const GOOD_BODY =
   "window.JellyPlugLite={boot:function(w,d){" +
   "w.__liteBootCalls=(w.__liteBootCalls||0)+1;" +
@@ -108,10 +110,15 @@ const GOOD_BODY =
   "return w.__liteApp={destroyed:0,handoffs:0,handoffMsg:null," +
   "serverId:w.__liteNoServerId?null:'srv1'," +
   "onOpen:null,onBack:null,onMenu:null," +
+  "nativeCalls:[]," +
+  "openNative:function(it){this.nativeCalls.push(it);" +
+  "if(w.__liteNativeMode==='throw')throw new Error('native boom');" +
+  "return w.__liteNativeMode==='take'}," +
   "handoff:function(m){this.handoffs++;this.handoffMsg=m}," +
   "destroy:function(){this.destroyed++}}}};";
 
-// Models slice-2/3 bytes still cached on TVs: destroy() only.
+// Models slice-2/3 bytes still cached on TVs: destroy() only, and no
+// openNative (the M3 fork must guard for it).
 const OLD_BODY =
   "window.JellyPlugLite={boot:function(w,d){" +
   "return w.__liteApp={destroyed:0,onOpen:null,onBack:null,onMenu:null," +
@@ -483,6 +490,139 @@ async function main() {
     );
   }
 
+  // 3m. M3 fork default-OFF: no jellyfin.lite.native flag -> OK never
+  // consults openNative, the M2 deep-link runs exactly as today
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it4", name: "Z", type: "Movie" });
+    check(
+      "native default-off: openNative never called, deep-link unchanged",
+      app.nativeCalls.length === 0 &&
+        env.ctx.location.hash === "#/details?id=it4&serverId=srv1" &&
+        env.ctx.__shellLite.st === "handoff" &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3n. M3 fork flag on + openNative takes the press -> NO SPA: no hash,
+  // no handoff, Lite stays live; a later Back still hands off normally
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.native": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.ctx.__liteNativeMode = "take";
+    const app = env.ctx.__liteApp;
+    const item = { id: "it5", name: "Heat", type: "Movie" };
+    app.onOpen(item);
+    check(
+      "native take: openNative got the item, no SPA load, no hash, st live",
+      app.nativeCalls.length === 1 &&
+        app.nativeCalls[0] === item &&
+        env.ctx.location.hash === "" &&
+        env.ctx.__shellLite.st === "live" &&
+        env.ctx.__shellLite.native === 1 &&
+        app.handoffs === 0 &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 0,
+    );
+    app.onOpen(item);
+    check(
+      "native take: d.native counts repeated takes",
+      env.ctx.__shellLite.native === 2 &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 0,
+    );
+    app.onBack();
+    check(
+      "native take: Back after native plays still hands off to the SPA",
+      env.ctx.__shellLite.st === "handoff" &&
+        app.handoffs === 1 &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3o. M3 fork flag on + openNative declines -> M2 deep-link fallback
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.native": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it6", name: "Y", type: "Series" });
+    check(
+      "native decline: falls through to the deep-link",
+      app.nativeCalls.length === 1 &&
+        env.ctx.location.hash === "#/details?id=it6&serverId=srv1" &&
+        env.ctx.__shellLite.st === "handoff" &&
+        env.ctx.__shellLite.native === undefined &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3p. M3 fork flag on + openNative THROWS -> deep-link fallback (the
+  // user is never stuck on a broken native path)
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.native": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.ctx.__liteNativeMode = "throw";
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it7", name: "W", type: "Movie" });
+    check(
+      "native throw: falls through to the deep-link",
+      app.nativeCalls.length === 1 &&
+        env.ctx.location.hash === "#/details?id=it7&serverId=srv1" &&
+        env.ctx.__shellLite.st === "handoff" &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
+  // 3q. M3 fork flag on + OLD cached bytes (no openNative) -> guarded,
+  // deep-link fallback via destroy()
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.native": "1",
+        "jellyfin.lite.body": mkRec(OLD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    const app = env.ctx.__liteApp;
+    app.onOpen({ id: "it8", name: "V", type: "Movie" });
+    check(
+      "native flag + old bytes: no openNative -> deep-link via destroy",
+      app.destroyed === 1 &&
+        env.ctx.location.hash === "#/details?id=it8" &&
+        env.ctx.__shellLite.st === "handoff" &&
+        vm.runInContext("loadRemoteWebClientCalls.length", env.ctx) === 1,
+    );
+  }
+
   // 3f. pre-warm defers to a live head-IIFE prefetch slot
   {
     const env = mkEnv({
@@ -795,6 +935,7 @@ async function main() {
     const bootMin = fs.readFileSync(BOOT_MIN, "utf8");
     for (const lit of [
       "jellyfin.shell.liteEnabled",
+      "jellyfin.lite.native",
       "jellyfin.lite.body",
       "liteSha256",
       "/shell/lite.min.js?v=",
