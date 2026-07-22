@@ -76,21 +76,10 @@ function harness(opts) {
     "aac,mp3,ac3,eac3",
     "JELA-138: remux audio stays narrow — -c copy must not imply audio re-encode",
   );
-  assert.strictEqual(
-    prof.SubtitleProfiles.length,
-    6,
-    "JELA-138: subs declared — empty SubtitleProfiles was the real hevc direct-play denier on 10.11",
-  );
   assert.deepStrictEqual(
-    j(prof.SubtitleProfiles.map((s) => s.Format + ":" + s.Method)),
-    [
-      "srt:External",
-      "subrip:Embed",
-      "ass:Embed",
-      "ssa:Embed",
-      "pgssub:Embed",
-      "dvdsub:Embed",
-    ],
+    j(prof.SubtitleProfiles),
+    [],
+    "JELA-151 decision: SubtitleProfiles stays EMPTY until JELA-152 gives Lite real sub delivery — sub-selecting answers must decline to the SPA",
   );
 }
 

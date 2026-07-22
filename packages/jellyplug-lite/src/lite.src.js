@@ -1106,10 +1106,9 @@
   // M63 (2019, Tizen 5.0) device profile — design §3, widened by
   // JELA-138 from the conservative slice-2 shape after a full-library
   // PlaybackInfo sweep against the real 10.11 server showed the actual
-  // deniers were the EMPTY SubtitleProfiles (any default-flagged sub
-  // stream = burn-in transcode = decline) and the missing audio/legacy
-  // video codecs — NOT the hevc HDR video, which 10.11 passes once a
-  // range declaration exists. Panel capability picks the hevc
+  // deniers were missing audio/legacy video codecs and sub selection —
+  // NOT the hevc HDR video, which 10.11 passes once a range
+  // declaration exists. Panel capability picks the hevc
   // VideoRangeType list: HDR panels take HDR10/HDR10+/HLG plus DoVi
   // profiles that carry an HDR10/SDR fallback layer (pure
   // DOVI/DOVIWithEL stays excluded — no base layer to fall back to);
@@ -1191,20 +1190,16 @@
           ],
         },
       ],
-      // JELA-138: declaring subs is what unblocks direct-play (the
-      // server burns-in for ANY selected sub it can't send otherwise).
-      // Embed keeps the sub bytes in the direct-played stream; whether
-      // Lite RENDERS them (avplay TEXT track) is the JELA-151 decision
-      // gating C5 default-ON — until then native-path sub users get
-      // picture without sub overlay, honestly traded for no transcode.
-      SubtitleProfiles: [
-        { Format: "srt", Method: "External" },
-        { Format: "subrip", Method: "Embed" },
-        { Format: "ass", Method: "Embed" },
-        { Format: "ssa", Method: "Embed" },
-        { Format: "pgssub", Method: "Embed" },
-        { Format: "dvdsub", Method: "Embed" },
-      ],
+      // JELA-151 DECISION (2026-07-22, data-backed): stays EMPTY for
+      // C5. Lite has no subtitle renderer, so any answer that selects
+      // a sub stream must decline the native path and ride the SPA,
+      // which renders subs correctly — playing picture WITHOUT a
+      // user-selected sub is worse than the fallback. Costs ~2.1% of
+      // items for the real fleet (7/7 real users are OnlyForced;
+      // 89/4206 items carry forced subs). The lift is JELA-152
+      // (External delivery + avplay setExternalSubtitlePath). Do NOT
+      // declare formats here before Lite can hand subs to avplay.
+      SubtitleProfiles: [],
     };
   };
 
