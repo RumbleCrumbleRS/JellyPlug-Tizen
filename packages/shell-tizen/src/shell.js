@@ -6424,6 +6424,18 @@
     // cancels it entirely.
     var bgwKick = function () {
       bgw.t = 0;
+      // JELA-137: a live native AVPlay session owns the single M63 main
+      // thread — the iframe warm mid-movie stalled the webview ~4-5s
+      // (one M3 G1 inflated to 4.1s). While the lite bytes report a
+      // non-terminal player state, DEFER: poll again after another idle
+      // window without consuming the once-per-boot latch or the keydown
+      // re-arm listener. Old lite bytes never set d.player → unchanged.
+      var pl = d.player;
+      if (pl && pl.st && pl.st !== "closed" && pl.st !== "err") {
+        d.bgwarm = "defer-native";
+        bgw.t = setTimeout(bgwKick, LITE_BGWARM_IDLE_MS);
+        return;
+      }
       if (bgw.arm) {
         document.removeEventListener("keydown", bgw.arm, true);
         bgw.arm = null;

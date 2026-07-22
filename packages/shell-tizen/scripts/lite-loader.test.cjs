@@ -805,6 +805,63 @@ async function main() {
     );
   }
 
+  // 3m. JELA-137: a live native AVPlay session defers the warm — the
+  // iframe boot stalls the single M63 main thread mid-movie (M3 QA:
+  // one G1 inflated to 4.1s). Poll again next idle window; latch and
+  // keydown re-arm listener stay intact; session end releases the warm.
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.ctx.__shellLite.player = { st: "playing" };
+    env.fire(5000);
+    check(
+      "bgwarm: native session live → defer, no iframe, latch unconsumed",
+      env.frames.length === 0 &&
+        env.ctx.__shellLite.bgwarm === "defer-native" &&
+        env.ctx.__shellLiteBgWarm === undefined &&
+        env.keyListeners.length === 1 &&
+        env.timers.filter((t) => t.ms === 5000).length === 1,
+    );
+    env.ctx.__shellLite.player.st = "paused";
+    env.fire(5000);
+    check(
+      "bgwarm: paused still defers (any non-terminal player state)",
+      env.frames.length === 0 &&
+        env.timers.filter((t) => t.ms === 5000).length === 1,
+    );
+    env.ctx.__shellLite.player.st = "closed";
+    env.fire(5000);
+    check(
+      "bgwarm: session end releases the deferred warm",
+      env.frames.length === 1 && env.ctx.__shellLiteBgWarm === 1,
+    );
+  }
+
+  // 3n. JELA-137: a bailed native attempt (player diag st=err) never
+  // blocks the warm — err is terminal
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "1",
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    env.boot();
+    env.ctx.__shellLite.player = { st: "err" };
+    env.fire(5000);
+    check(
+      "bgwarm: terminal player state does not defer",
+      env.frames.length === 1,
+    );
+  }
+
   // 4. corrupt record (fnv1a mismatch) -> miss, never exec'd
   {
     const bad = JSON.parse(mkRec(GOOD_BODY, SHA));

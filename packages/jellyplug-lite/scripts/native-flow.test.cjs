@@ -285,8 +285,8 @@ const movie = () => ({
   h.av.prepareOk();
   assert.deepStrictEqual(
     h.av.calls.filter((c) => c[0] === "seekTo"),
-    [["seekTo", 90000]],
-    "resume seek from the card's posTicks",
+    [["seekTo", 80000]],
+    "resume seek from the card's posTicks, backed off 10s (JELA-137 keyframe tolerance)",
   );
   h.av.seekOk();
   assert.strictEqual(h.av.calls.filter((c) => c[0] === "play").length, 1);
@@ -340,6 +340,102 @@ const movie = () => ({
   // …and a SECOND native playback starts clean (G4 shape)
   h.app.onOpen(item);
   assert.strictEqual(h.pbXhr().length, 2, "second press goes native again");
+}
+
+// --- JELA-137 remux (DirectStream) end to end: StartTimeTicks resume,
+// DirectStream beacons, seek = restart + ffmpeg reap, exit reap ---------------
+{
+  const h = harness();
+  const item = movie(); // resume at 90s
+  h.app.onOpen(item);
+  h.pbXhr()[0].respond(200, {
+    PlaySessionId: "ps9",
+    MediaSources: [
+      {
+        Id: "ms9",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: true,
+        TranscodingUrl: "/Videos/m1/stream.mkv?DeviceId=dev1&api_key=tok",
+      },
+    ],
+  });
+  // resume rides the URL: 90s posTicks − 10s keyframe back-off = 80s
+  assert.deepStrictEqual(h.av.calls[0], [
+    "open",
+    "http://srv/Videos/m1/stream.mkv?DeviceId=dev1&api_key=tok" +
+      "&StartTimeTicks=" + 80000 * 10000,
+  ]);
+  h.av.prepareOk();
+  assert.strictEqual(
+    h.av.calls.filter((c) => c[0] === "seekTo").length,
+    0,
+    "no pipeline seek on a remux",
+  );
+
+  // first frame: stream-relative tick 40 reads as 80.04s absolute
+  h.av.time = 40;
+  h.av.listener.oncurrentplaytime(40);
+  const started = h.sentXhr.filter(
+    (x) => x.url === "http://srv/Sessions/Playing",
+  );
+  assert.strictEqual(started.length, 1);
+  assert.strictEqual(started[0].body.PlayMethod, "DirectStream");
+  assert.strictEqual(started[0].body.PositionTicks, 80040 * 10000);
+
+  // +30s: debounce settles into a RESTART at 110.04s — old ffmpeg job
+  // DELETEd, fresh open on the new StartTimeTicks URL
+  h.doc.key(39);
+  const debE = [...h.timers.entries()].find(
+    ([, t]) => !t.interval && t.ms === h.Lite.SEEK_DEBOUNCE_MS,
+  );
+  assert.ok(debE, "seek debounce armed");
+  h.timers.delete(debE[0]); // a real timer evaporates when it fires
+  debE[1].fn();
+  let dels = h.sentXhr.filter((x) => x.method === "DELETE");
+  assert.strictEqual(dels.length, 1, "old encoding reaped before restart");
+  assert.strictEqual(
+    dels[0].url,
+    "http://srv/Videos/ActiveEncodings?deviceId=dev1&playSessionId=ps9",
+  );
+  assert.strictEqual(dels[0].headers["X-Emby-Token"], "tok");
+  const opens = h.av.calls.filter((c) => c[0] === "open");
+  assert.strictEqual(opens.length, 2);
+  assert.strictEqual(
+    opens[1][1],
+    "http://srv/Videos/m1/stream.mkv?DeviceId=dev1&api_key=tok" +
+      "&StartTimeTicks=" + 110040 * 10000,
+  );
+  assert.ok(
+    h.av.calls.filter((c) => c[0] === "stop").length === 1 &&
+      h.av.calls.filter((c) => c[0] === "close").length === 1,
+    "old player torn down for the restart",
+  );
+
+  // restarted stream settles → Progress beacon, never a second Playing
+  h.av.prepareOk();
+  h.av.time = 100;
+  h.av.listener.oncurrentplaytime(100);
+  assert.strictEqual(
+    h.sentXhr.filter((x) => x.url === "http://srv/Sessions/Playing").length,
+    1,
+    "one session across restarts",
+  );
+  const prog = h.beacons("/Sessions/Playing/Progress").pop();
+  assert.strictEqual(prog.body.PositionTicks, 110140 * 10000);
+  assert.strictEqual(prog.body.PlayMethod, "DirectStream");
+
+  // back: Stopped at the absolute position, encoding reaped again, restore
+  h.av.time = 5000;
+  h.doc.key(10009);
+  const stopped = h.beacons("/Sessions/Playing/Stopped");
+  assert.strictEqual(stopped.length, 1);
+  assert.strictEqual(stopped[0].body.PositionTicks, 115040 * 10000);
+  dels = h.sentXhr.filter((x) => x.method === "DELETE");
+  assert.strictEqual(dels.length, 2, "exit reaps the final encoding");
+  assert.strictEqual(item.posTicks, 115040 * 10000, "local Resume patch");
+  assert.strictEqual(h.timers.size, 0, "no timer leaks");
+  assert.strictEqual(h.doc.body.children.length, 1, "home restored");
 }
 
 // --- container items and no-adapter boots decline synchronously --------------
