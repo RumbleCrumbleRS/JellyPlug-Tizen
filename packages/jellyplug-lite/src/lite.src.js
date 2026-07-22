@@ -806,6 +806,19 @@
     var firstFrameSeen = false;
     var lastTimeMs = 0;
     var buffering = false;
+    // JELA-137 remux clock: a DirectStream opened with StartTimeTicks=T
+    // usually restamps output from 0 (ffmpeg -ss + copy), so the
+    // pipeline clock is stream-relative and every position read must
+    // add T back. Some server paths copy absolute timestamps instead —
+    // detected one-shot on the first playtime tick (a tick already past
+    // T/2 can only be an absolute clock) and the offset drops to 0.
+    var kind0 = "direct";
+    var remuxOffMs = 0;
+    var offDetected = false;
+
+    function absTime(t) {
+      return (t || 0) + remuxOffMs;
+    }
 
     function setSt(next) {
       st = next;
@@ -844,7 +857,13 @@
         if (dead()) {
           return;
         }
-        lastTimeMs = ms || 0;
+        if (!offDetected) {
+          offDetected = true;
+          if (remuxOffMs > 0 && (ms || 0) >= remuxOffMs / 2) {
+            remuxOffMs = 0;
+          }
+        }
+        lastTimeMs = absTime(ms);
         // The first playtime tick after play() is the closest signal
         // the AVPlay API has to "first frame on the video plane" — the
         // M3 spike's G1 numbers were measured exactly this way.
@@ -891,13 +910,17 @@
         try {
           var t = avplay.getCurrentTime();
           if (typeof t === "number" && t >= 0) {
-            lastTimeMs = t;
+            lastTimeMs = absTime(t);
           }
         } catch (_) {}
         return lastTimeMs;
       },
       durationMs: function () {
-        if (dead()) {
+        // Remux: the pipeline sees a growing offset-relative stream, so
+        // getDuration is meaningless — 0 hands the clock to the
+        // caller's RunTimeTicks fallback (exact for a remux: -c copy
+        // never changes the runtime).
+        if (dead() || kind0 === "remux") {
           return 0;
         }
         try {
@@ -912,11 +935,23 @@
       // open → setListener → setDisplayRect → prepareAsync →
       // (posMs ? seekTo : nothing) → play. One-shot: false when this
       // instance already ran.
+      //
+      // Remux (kind="remux"): the caller bakes the start position into
+      // the URL (StartTimeTicks) — a growing transcode output has no
+      // byte ranges, so a pipeline seek is not possible. posMs here is
+      // the URL's offset, kept only to translate the stream-relative
+      // clock back to absolute media time (see remuxOffMs above).
       open: function (url, posMs, kind) {
         if (st !== "idle") {
           return false;
         }
-        diag.url = kind || "direct";
+        kind0 = kind || "direct";
+        diag.url = kind0;
+        if (kind0 === "remux") {
+          remuxOffMs = posMs > 0 ? posMs : 0;
+          lastTimeMs = remuxOffMs;
+          posMs = 0;
+        }
         try {
           avplay.open(url);
           avplay.setListener(listener);
@@ -994,7 +1029,10 @@
       // paused / ~1.0s playing on the Q60R via exactly this success
       // callback).
       seekTo: function (ms, cb) {
-        if (st !== "playing" && st !== "paused") {
+        // Remux streams cannot pipeline-seek (see open) — the SESSION
+        // restarts the stream at the target instead; refusing here
+        // keeps a stray call from wedging the pipeline.
+        if (kind0 === "remux" || (st !== "playing" && st !== "paused")) {
           if (cb) {
             cb(false);
           }
@@ -1167,6 +1205,21 @@
               cb(new Error("no-direct-play"), null);
               return;
             }
+            // JELA-137: the DeviceId the server baked into the
+            // TranscodingUrl names the ffmpeg job — DELETE
+            // /Videos/ActiveEncodings needs it to reap the remux on
+            // exit (server CPU headroom). Absent → the Stopped beacon
+            // is the only reaper.
+            var deviceId = null;
+            if (kind === "remux") {
+              var dm = /[?&][Dd]eviceId=([^&]+)/.exec(ms.TranscodingUrl);
+              if (dm) {
+                deviceId = dm[1];
+                try {
+                  deviceId = global.decodeURIComponent(dm[1]);
+                } catch (_dm) {}
+              }
+            }
             cb(null, {
               // Direct-play: build stream.{ms.Container} URL.
               // Remux: use ms.TranscodingUrl (server-built, relative).
@@ -1186,6 +1239,7 @@
               mediaSourceId: ms.Id,
               container: ms.Container || null,
               kind: kind,
+              deviceId: deviceId,
             });
           },
         );
@@ -1211,6 +1265,9 @@
     var playSessionId = opts.playSessionId;
     var positionMs = opts.positionMs; // function () -> current position
     var isPaused = opts.isPaused; // function () -> bool
+    // JELA-137: remux sessions report DirectStream — the server keys
+    // transcode-session bookkeeping (and stats) off PlayMethod.
+    var playMethod = opts.playMethod || "DirectPlay";
     var intervalMs = opts.intervalMs || 10000;
     var setI = opts.setInterval;
     var clearI = opts.clearInterval;
@@ -1224,7 +1281,7 @@
         MediaSourceId: mediaSourceId,
         PlaySessionId: playSessionId,
         PositionTicks: Math.round(positionMs() * Lite.TICKS_PER_MS),
-        PlayMethod: "DirectPlay",
+        PlayMethod: playMethod,
         CanSeek: true,
       };
       var k;
@@ -1440,6 +1497,13 @@
 
   Lite.SEEK_BACK_MS = 10000;
   Lite.SEEK_FWD_MS = 30000;
+  // JELA-137 (G5 follow-up): AVPlay snaps a resume seek to a keyframe —
+  // observed +9.9s PAST the requested position after a seek burst on
+  // the Q60R. Resume therefore backs off by one worst-case keyframe
+  // interval so a forward snap can never overshoot the stop point;
+  // rewatching ≤10s beats skipping unseen footage (and matches the
+  // deliberate re-orientation preroll every major player ships).
+  Lite.RESUME_KEYFRAME_BACK_MS = 10000;
   // Repeated left/right presses compound into ONE pipeline seek: each
   // press moves a preview target on the OSD and re-arms this debounce;
   // AVPlay only sees the settled target (G3: a seek costs ~0.4-1s on
@@ -1467,34 +1531,48 @@
     var pendingSeek = -1; // compound-seek preview target, -1 = none
     var seekTimer = null;
     var drawTimer = null;
+    var kind = "direct";
 
-    var player = Lite.createPlayer({
-      avplay: avplay,
-      now: now,
-      diag: diag,
-      onFirstFrame: function () {
-        started = true;
-        reporter.start();
-        osd.show();
-        redraw();
-      },
-      onEnd: function () {
-        finish("end");
-      },
-      onError: function (why) {
-        if (started) {
-          finish("err");
-          return;
-        }
-        // Pre-first-frame failure → the caller falls back to the SPA
-        // deep-link (design §1); the player already tore itself down.
-        cleanup();
-        finished = true;
-        if (opts.onFallback) {
-          opts.onFallback(why);
-        }
-      },
-    });
+    // JELA-137: a remux seek is a stream RESTART (fresh one-shot player
+    // on a new StartTimeTicks URL), so player creation must be
+    // repeatable. session.player is re-pointed on every restart — the
+    // boot's reporter closures read it per call, so beacons follow.
+    function makePlayer() {
+      return Lite.createPlayer({
+        avplay: avplay,
+        now: now,
+        diag: diag,
+        onFirstFrame: function () {
+          if (!started) {
+            started = true;
+            reporter.start();
+          } else {
+            // a restarted remux stream settled at its new position
+            reporter.progress("timeupdate");
+          }
+          osd.show();
+          redraw();
+        },
+        onEnd: function () {
+          finish("end");
+        },
+        onError: function (why) {
+          if (started) {
+            finish("err");
+            return;
+          }
+          // Pre-first-frame failure → the caller falls back to the SPA
+          // deep-link (design §1); the player already tore itself down.
+          cleanup();
+          finished = true;
+          if (opts.onFallback) {
+            opts.onFallback(why);
+          }
+        },
+      });
+    }
+
+    var player = makePlayer();
 
     function durMs() {
       var d = player.durationMs();
@@ -1538,10 +1616,36 @@
       }
     }
 
+    // Remux seek = teardown + reopen at the target (no byte ranges on a
+    // growing transcode output). The old ffmpeg job is reaped first
+    // (stopEncoding) so two remuxes never run concurrently — the whole
+    // point of the JELA-137 server-CPU-headroom rule. Same reporter,
+    // same PlaySessionId: the server sees one continuous session.
+    function restartAt(targetMs) {
+      if (finished || !opts.urlAt) {
+        return;
+      }
+      player.stop();
+      if (opts.stopEncoding) {
+        try {
+          opts.stopEncoding();
+        } catch (_) {}
+      }
+      player = makePlayer();
+      session.player = player;
+      player.open(opts.urlAt(targetMs), targetMs, "remux");
+      osd.show();
+      redraw();
+    }
+
     function applySeek() {
       seekTimer = null;
       var target = pendingSeek;
       pendingSeek = -1;
+      if (kind === "remux") {
+        restartAt(target);
+        return;
+      }
       player.seekTo(target, function () {
         reporter.progress("timeupdate");
         redraw();
@@ -1570,8 +1674,24 @@
     var session = {
       player: player,
 
-      start: function (url, resumeMs, kind) {
-        var ok = player.open(url, resumeMs, kind);
+      start: function (url, resumeMs, kindArg) {
+        kind = kindArg || "direct";
+        // Keyframe-snap tolerance (G5): back the resume target off so a
+        // forward snap lands at-or-before the stop point. Applies to
+        // both kinds — ffmpeg's -ss also snaps to a keyframe.
+        var pos =
+          resumeMs > 0
+            ? Math.max(0, resumeMs - Lite.RESUME_KEYFRAME_BACK_MS)
+            : 0;
+        if (kind === "remux" && pos > 0) {
+          // The start position rides the URL, not a pipeline seek.
+          if (opts.urlAt) {
+            url = opts.urlAt(pos);
+          } else {
+            pos = 0; // no URL builder → play from the head, never lie
+          }
+        }
+        var ok = player.open(url, pos, kind);
         if (ok && !finished) {
           osd.show();
           drawTimer = setI(redraw, OSD_TICK_MS);
@@ -1716,6 +1836,21 @@
       };
     }
     xhr.send(JSON.stringify(body));
+  }
+
+  // Fire-and-forget request with no body and no reply handling —
+  // JELA-137: DELETE /Videos/ActiveEncodings reaps the server-side
+  // ffmpeg remux job on exit and before every seek-restart.
+  function xhrSend(method, url, headers) {
+    var xhr = new global.XMLHttpRequest();
+    xhr.open(method, url, true);
+    var k;
+    for (k in headers) {
+      if (headers.hasOwnProperty(k)) {
+        xhr.setRequestHeader(k, headers[k]);
+      }
+    }
+    xhr.send();
   }
 
   // Returns the app handle, or null when Lite cannot run (no stored
@@ -2008,6 +2143,29 @@
         canvas.style.display = "none";
         renderer.setMessage(null);
 
+        // JELA-137 server CPU headroom: a remux leaves an ffmpeg job
+        // running server-side. The Stopped beacon usually reaps it, but
+        // that beacon is fire-and-forget — kill the job explicitly on
+        // every exit and before every seek-restart. Best-effort: needs
+        // the DeviceId the server baked into TranscodingUrl.
+        function killEncoding() {
+          if (info.kind !== "remux" || !info.deviceId) {
+            return;
+          }
+          try {
+            xhrSend(
+              "DELETE",
+              creds.base +
+                "/Videos/ActiveEncodings?deviceId=" +
+                encodeURIComponent(info.deviceId) +
+                (info.playSessionId
+                  ? "&playSessionId=" + encodeURIComponent(info.playSessionId)
+                  : ""),
+              { "X-Emby-Token": creds.token },
+            );
+          } catch (_k) {}
+        }
+
         var osd = Lite.createOsd({
           ctx: osdCanvas.getContext("2d"),
           title: item.name || "",
@@ -2026,6 +2184,7 @@
           isPaused: function () {
             return session.player.state() === "paused";
           },
+          playMethod: info.kind === "remux" ? "DirectStream" : "DirectPlay",
           setInterval: setI,
           clearInterval: clearI,
         });
@@ -2042,12 +2201,29 @@
             ? Math.round(item.runtimeTicks / Lite.TICKS_PER_MS)
             : 0,
           diag: d,
+          // Remux plumbing (JELA-137): every start/seek position rides
+          // the URL as StartTimeTicks — the transcode output has no
+          // byte ranges for the pipeline to seek over.
+          urlAt:
+            info.kind === "remux"
+              ? function (ms) {
+                  return (
+                    info.url +
+                    (info.url.indexOf("?") >= 0 ? "&" : "?") +
+                    "StartTimeTicks=" +
+                    Math.round(ms * Lite.TICKS_PER_MS)
+                  );
+                }
+              : null,
+          stopEncoding: killEncoding,
           onExit: function (ms) {
             playback.session = null;
+            killEncoding();
             restoreHome(ms);
           },
           onFallback: function (why) {
             playback.session = null;
+            killEncoding();
             restoreHome(-1);
             bail(why);
           },

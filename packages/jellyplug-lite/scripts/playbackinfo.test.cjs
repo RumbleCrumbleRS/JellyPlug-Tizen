@@ -86,6 +86,7 @@ function harness(opts) {
   assert.strictEqual(res.mediaSourceId, "ms1");
   assert.strictEqual(res.container, "mov");
   assert.strictEqual(res.kind, "direct");
+  assert.strictEqual(res.deviceId, null, "direct-play never parses a DeviceId");
   assert.strictEqual(timers.size, 0, "timeout cleared on settle");
 }
 
@@ -125,7 +126,30 @@ function harness(opts) {
   assert.strictEqual(res.playSessionId, "ps2");
   assert.strictEqual(res.mediaSourceId, "ms2");
   assert.strictEqual(res.kind, "remux");
+  assert.strictEqual(res.deviceId, null, "no DeviceId in the url → null");
   assert.strictEqual(timers.size, 0, "timeout cleared");
+}
+
+// --- remux carries the TranscodingUrl's DeviceId (ActiveEncodings reaper) ----
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (err, r) => (res = r));
+  posts[0].cb(null, {
+    PlaySessionId: "ps9",
+    MediaSources: [
+      {
+        Id: "ms9",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: true,
+        TranscodingUrl:
+          "/Videos/m1/stream.mkv?DeviceId=dev%201&PlaySessionId=ps9",
+      },
+    ],
+  });
+  assert.strictEqual(res.kind, "remux");
+  assert.strictEqual(res.deviceId, "dev 1", "parsed + percent-decoded");
 }
 
 // --- DirectPlay beats DirectStream when both present -------------------------

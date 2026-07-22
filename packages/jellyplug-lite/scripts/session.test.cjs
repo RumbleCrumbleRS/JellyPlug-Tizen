@@ -122,6 +122,8 @@ function harness(opts) {
     setInterval: timers.api.setInterval,
     clearInterval: timers.api.clearInterval,
     runtimeMs: opts.runtimeMs || 0,
+    urlAt: opts.urlAt || null,
+    stopEncoding: opts.stopEncoding || null,
     diag: {},
     onExit: (ms, why) => events.push(["exit", ms, why]),
     onFallback: (why) => events.push(["fallback", why]),
@@ -327,6 +329,109 @@ function firstFrame(h) {
   h.session.start("u", 0);
   firstFrame(h);
   assert.strictEqual(h.session.key(65), false);
+}
+
+/* ---------------------------------------------------------------------------
+ * JELA-137: keyframe resume tolerance + DirectStream (remux) sessions
+ * ------------------------------------------------------------------------- */
+
+// --- direct resume backs off the keyframe window (G5 +9.9s outlier) ----------
+{
+  const h = harness();
+  h.session.start("u", 90000);
+  h.av.prepareOk();
+  assert.deepStrictEqual(
+    h.av.calls.filter((c) => c[0] === "seekTo"),
+    [["seekTo", 80000]],
+    "resume target backed off by RESUME_KEYFRAME_BACK_MS",
+  );
+}
+
+// --- a resume inside the back-off window plays from the head ------------------
+{
+  const h = harness();
+  h.session.start("u", 8000);
+  h.av.prepareOk();
+  assert.strictEqual(h.av.calls.filter((c) => c[0] === "seekTo").length, 0);
+  assert.strictEqual(h.av.calls.filter((c) => c[0] === "play").length, 1);
+}
+
+// --- remux: resume + seeks ride StartTimeTicks URLs, never the pipeline -------
+{
+  const urls = [];
+  const kills = [];
+  const h = harness({
+    runtimeMs: 600000,
+    urlAt: (ms) => {
+      urls.push(ms);
+      return "R?st=" + ms;
+    },
+    stopEncoding: () => kills.push(1),
+  });
+  h.session.start("R", 90000, "remux");
+  assert.deepStrictEqual(
+    h.av.calls[0],
+    ["open", "R?st=80000"],
+    "biased resume rides the URL",
+  );
+  h.av.prepareOk();
+  assert.strictEqual(
+    h.av.calls.filter((c) => c[0] === "seekTo").length,
+    0,
+    "no pipeline seek on a remux",
+  );
+  h.av.time = 0;
+  h.av.listener.oncurrentplaytime(1); // stream-relative tick
+  assert.deepStrictEqual(h.events, [["rep:start"]]);
+
+  // the clock is absolute media time: URL offset + stream tick
+  h.av.time = 5000;
+  h.session.key(38); // OSD
+  const shown = h.osd.draws[h.osd.draws.length - 1];
+  assert.strictEqual(shown.posMs, 85000, "offset + tick");
+  assert.strictEqual(
+    shown.durMs,
+    600000,
+    "remux ignores pipeline duration — RunTimeTicks drives the bar",
+  );
+
+  // +30s settles into ONE restart: old player torn down, old ffmpeg job
+  // reaped, fresh player on the new StartTimeTicks URL
+  h.session.key(39);
+  h.timers.fire((t) => !t.interval && t.ms === Lite.SEEK_DEBOUNCE_MS);
+  assert.deepStrictEqual(kills, [1], "encoding reaped before the restart");
+  const opens = h.av.calls.filter((c) => c[0] === "open");
+  assert.deepStrictEqual(opens[1], ["open", "R?st=115000"]);
+  assert.deepStrictEqual(urls, [80000, 115000]);
+  const stopI = h.av.calls.findIndex((c) => c[0] === "stop");
+  const secondOpenI = h.av.calls.lastIndexOf(
+    h.av.calls.filter((c) => c[0] === "open")[1],
+  );
+  assert.ok(stopI >= 0 && stopI < secondOpenI, "teardown before reopen");
+
+  // the restarted stream settles as a progress beacon, not a second start
+  h.av.prepareOk();
+  h.av.time = 10;
+  h.av.listener.oncurrentplaytime(10);
+  assert.strictEqual(
+    h.events.filter((e) => e[0] === "rep:start").length,
+    1,
+    "reporter started exactly once across restarts",
+  );
+  assert.deepStrictEqual(h.events[h.events.length - 1], [
+    "rep:progress",
+    "timeupdate",
+  ]);
+
+  // back: frozen position is absolute (new offset + last tick)
+  h.av.time = 2000;
+  assert.strictEqual(h.session.key(10009), true);
+  assert.deepStrictEqual(h.events.slice(-2), [
+    ["rep:stop", 117000],
+    ["exit", 117000, "back"],
+  ]);
+  assert.strictEqual(h.timers.live.size, 0, "no timer leaks across restarts");
+  assert.strictEqual(h.session.player.state(), "closed");
 }
 
 /* ---------------------------------------------------------------------------

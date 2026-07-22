@@ -398,6 +398,71 @@ function fakeWin(webapis) {
   assert.strictEqual(app.openNative({ id: "i", type: "Movie" }), false);
 }
 
+/* ---------------------------------------------------------------------------
+ * JELA-137: remux (DirectStream) player semantics
+ * ------------------------------------------------------------------------- */
+
+// --- remux open: posMs is a clock offset, never a pipeline seek --------------
+{
+  const av = fakeAvplay();
+  const { player, diag } = mkPlayer(av);
+  assert.strictEqual(player.open("R?st=1", 80000, "remux"), true);
+  assert.strictEqual(diag.url, "remux");
+  av.prepareOk();
+  assert.strictEqual(named(av.calls, "seekTo").length, 0, "no resume seek");
+  assert.strictEqual(named(av.calls, "play").length, 1, "straight to play");
+  assert.strictEqual(player.state(), "playing");
+  // before any tick the clock already reads the URL offset
+  av.time = 0;
+  assert.strictEqual(player.currentTimeMs(), 80000);
+}
+
+// --- remux clock: stream-relative ticks get the offset added -----------------
+{
+  const av = fakeAvplay();
+  const { player } = mkPlayer(av);
+  player.open("R", 80000, "remux");
+  av.prepareOk();
+  av.listener.oncurrentplaytime(500); // ffmpeg restamped from 0
+  av.time = 500;
+  assert.strictEqual(player.currentTimeMs(), 80500);
+  // frozen absolute after teardown
+  player.stop();
+  assert.strictEqual(player.currentTimeMs(), 80500);
+}
+
+// --- remux clock: absolute timestamps detected on the first tick -------------
+{
+  const av = fakeAvplay();
+  const { player } = mkPlayer(av);
+  player.open("R", 80000, "remux");
+  av.prepareOk();
+  av.listener.oncurrentplaytime(80200); // copyts — already absolute
+  av.time = 80200;
+  assert.strictEqual(player.currentTimeMs(), 80200, "offset dropped");
+}
+
+// --- remux duration is 0 → callers fall back to RunTimeTicks -----------------
+{
+  const av = fakeAvplay();
+  const { player } = mkPlayer(av);
+  player.open("R", 0, "remux");
+  av.prepareOk();
+  assert.strictEqual(player.durationMs(), 0);
+}
+
+// --- remux refuses pipeline seeks (the session restarts the stream) ----------
+{
+  const av = fakeAvplay();
+  const { player } = mkPlayer(av);
+  player.open("R", 0, "remux");
+  av.prepareOk();
+  let r = null;
+  player.seekTo(30000, (ok) => (r = ok));
+  assert.strictEqual(r, false);
+  assert.strictEqual(named(av.calls, "seekTo").length, 0);
+}
+
 // --- card model carries the resume position (design doc §4) ----------------
 {
   const api = Lite.createApi({

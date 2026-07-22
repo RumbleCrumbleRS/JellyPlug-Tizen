@@ -41,6 +41,7 @@ function harness(opts) {
     playSessionId: "ps1",
     positionMs: () => posMs,
     isPaused: () => paused,
+    playMethod: opts.playMethod,
     setInterval: (fn, ms) => {
       intervals.set(seq, { fn, ms });
       return seq++;
@@ -136,6 +137,15 @@ function harness(opts) {
     posts[posts.length - 1].body.PositionTicks,
     42000 * 10000,
   );
+}
+
+// --- JELA-137: remux sessions report PlayMethod DirectStream -----------------
+{
+  const { reporter, posts } = harness({ playMethod: "DirectStream" });
+  reporter.start();
+  assert.strictEqual(posts[0].body.PlayMethod, "DirectStream");
+  reporter.progress("timeupdate");
+  assert.strictEqual(posts[1].body.PlayMethod, "DirectStream");
 }
 
 // --- a throwing postJson never escapes ---------------------------------------
