@@ -1080,23 +1080,73 @@
    * not hang Lite with a "Loading…" overlay.
    * ---------------------------------------------------------------- */
 
-  // Conservative M63 (2019, Tizen 5.0) device profile — design §3.
-  // Widened only with on-device evidence (slice 3): this library's hevc
-  // is all HDR10/HDR10+ and server 10.11 denies those direct-play under
-  // a conservative profile, which lands on the designed SPA fallback.
+  // JELA-138: does this panel do HDR? Samsung avinfo has answered this
+  // since Tizen 2.4, but the probe must never take Lite down with it —
+  // absent/throwing webapis means "assume SDR panel" and HDR sources
+  // keep the designed SPA fallback (which tone-maps server-side).
+  // Probed once per boot; tests override via Lite.hdrPanel._v.
+  Lite.hdrPanel = function () {
+    if (Lite.hdrPanel._v !== undefined) {
+      return Lite.hdrPanel._v;
+    }
+    var v = false;
+    try {
+      v = !!(
+        global.webapis &&
+        global.webapis.avinfo &&
+        global.webapis.avinfo.isHdrTvSupport()
+      );
+    } catch (_h) {
+      v = false;
+    }
+    Lite.hdrPanel._v = v;
+    return v;
+  };
+
+  // M63 (2019, Tizen 5.0) device profile — design §3, widened by
+  // JELA-138 from the conservative slice-2 shape after a full-library
+  // PlaybackInfo sweep against the real 10.11 server showed the actual
+  // deniers were missing audio/legacy video codecs and sub selection —
+  // NOT the hevc HDR video, which 10.11 passes once a range
+  // declaration exists. Panel capability picks the hevc
+  // VideoRangeType list: HDR panels take HDR10/HDR10+/HLG plus DoVi
+  // profiles that carry an HDR10/SDR fallback layer (pure
+  // DOVI/DOVIWithEL stays excluded — no base layer to fall back to);
+  // SDR panels take SDR only, so HDR sources decline to the SPA whose
+  // transcode tone-maps. mpeg2video/mpeg4/avi and the audio widening
+  // (opus/vorbis/pcm/flac) are Samsung published decoder support for
+  // 2019+ panels; dts/truehd stay out (Samsung dropped DTS licensing
+  // for 2019+ models) and vp9/av1 stay out (no declared container /
+  // no 2019 hardware decode). Real-panel decode + HDR-actually-lit
+  // verification rides the JELA-141 rollout QA — the emulated harness
+  // cannot prove either.
+  Lite.HDR_RANGE_TYPES =
+    "SDR|HDR10|HLG|HDR10Plus|DOVIWithHDR10|DOVIWithHDR10Plus|DOVIWithSDR";
+  Lite.SDR_RANGE_TYPES = "SDR|DOVIWithSDR";
+  Lite.DIRECT_AUDIO = "aac,mp3,ac3,eac3,opus,vorbis,pcm_s24le,pcm_s16le,flac";
+
   Lite.deviceProfile = function () {
     return {
-      MaxStreamingBitrate: 40000000,
+      MaxStreamingBitrate: 120000000,
       DirectPlayProfiles: [
         {
           Container: "mp4,mov,mkv",
           Type: "Video",
-          VideoCodec: "h264,hevc",
-          AudioCodec: "aac,mp3,ac3,eac3",
+          VideoCodec: "h264,hevc,mpeg2video,mpeg4",
+          AudioCodec: Lite.DIRECT_AUDIO,
+        },
+        {
+          Container: "avi",
+          Type: "Video",
+          VideoCodec: "mpeg4,h264,mpeg2video",
+          AudioCodec: Lite.DIRECT_AUDIO,
         },
       ],
       // Slice 3: accept DirectStream (container remux, no codec re-encode)
-      // for hevc/h264 items the server won't direct-play (e.g. HDR10 mkv).
+      // for hevc/h264 items the server won't direct-play from a foreign
+      // container. Audio stays the narrow list: remux is -c copy, so a
+      // wide-audio source in a foreign container must re-encode audio =
+      // not remux-only = decline, which is the designed outcome.
       TranscodingProfiles: [
         {
           Container: "mkv",
@@ -1129,9 +1179,26 @@
               Value: "main|main 10",
               IsRequired: false,
             },
+            {
+              Condition: "EqualsAny",
+              Property: "VideoRangeType",
+              Value: Lite.hdrPanel()
+                ? Lite.HDR_RANGE_TYPES
+                : Lite.SDR_RANGE_TYPES,
+              IsRequired: false,
+            },
           ],
         },
       ],
+      // JELA-151 DECISION (2026-07-22, data-backed): stays EMPTY for
+      // C5. Lite has no subtitle renderer, so any answer that selects
+      // a sub stream must decline the native path and ride the SPA,
+      // which renders subs correctly — playing picture WITHOUT a
+      // user-selected sub is worse than the fallback. Costs ~2.1% of
+      // items for the real fleet (7/7 real users are OnlyForced;
+      // 89/4206 items carry forced subs). The lift is JELA-152
+      // (External delivery + avplay setExternalSubtitlePath). Do NOT
+      // declare formats here before Lite can hand subs to avplay.
       SubtitleProfiles: [],
     };
   };

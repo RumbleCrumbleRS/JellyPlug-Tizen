@@ -56,13 +56,80 @@ function harness(opts) {
   assert.strictEqual(posts[0].body.AutoOpenLiveStream, false);
   const prof = posts[0].body.DeviceProfile;
   assert.ok(prof, "M63 profile attached");
-  assert.strictEqual(prof.MaxStreamingBitrate, 40000000);
-  assert.strictEqual(prof.DirectPlayProfiles.length, 1);
+  assert.strictEqual(prof.MaxStreamingBitrate, 120000000);
+  assert.strictEqual(prof.DirectPlayProfiles.length, 2, "JELA-138: mkv-family + avi");
   assert.strictEqual(prof.DirectPlayProfiles[0].Container, "mp4,mov,mkv");
-  assert.strictEqual(prof.DirectPlayProfiles[0].VideoCodec, "h264,hevc");
+  assert.strictEqual(
+    prof.DirectPlayProfiles[0].VideoCodec,
+    "h264,hevc,mpeg2video,mpeg4",
+  );
+  assert.strictEqual(
+    prof.DirectPlayProfiles[0].AudioCodec,
+    "aac,mp3,ac3,eac3,opus,vorbis,pcm_s24le,pcm_s16le,flac",
+  );
+  assert.strictEqual(prof.DirectPlayProfiles[1].Container, "avi");
   assert.strictEqual(prof.TranscodingProfiles.length, 1, "remux profile present (slice 3)");
   assert.strictEqual(prof.TranscodingProfiles[0].Container, "mkv");
   assert.strictEqual(prof.TranscodingProfiles[0].VideoCodec, "h264,hevc");
+  assert.strictEqual(
+    prof.TranscodingProfiles[0].AudioCodec,
+    "aac,mp3,ac3,eac3",
+    "JELA-138: remux audio stays narrow — -c copy must not imply audio re-encode",
+  );
+  assert.deepStrictEqual(
+    j(prof.SubtitleProfiles),
+    [],
+    "JELA-151 decision: SubtitleProfiles stays EMPTY until JELA-152 gives Lite real sub delivery — sub-selecting answers must decline to the SPA",
+  );
+}
+
+// --- JELA-138: hevc VideoRangeType gated on panel HDR capability -----------
+{
+  // no webapis in the sandbox -> SDR panel assumed -> SDR-only list,
+  // HDR sources land VideoRangeTypeNotSupported = mixed reasons = SPA
+  assert.strictEqual(Lite.hdrPanel(), false, "no webapis = assume SDR panel");
+  const conds = Lite.deviceProfile().CodecProfiles[1].Conditions;
+  assert.strictEqual(conds[0].Property, "VideoProfile");
+  assert.strictEqual(conds[1].Property, "VideoRangeType");
+  assert.strictEqual(conds[1].Value, "SDR|DOVIWithSDR");
+
+  // HDR panel -> HDR10/HDR10+/HLG plus fallback-carrying DoVi; pure
+  // DOVI/DOVIWithEL (no base layer) must stay excluded
+  Lite.hdrPanel._v = true;
+  const hdr = Lite.deviceProfile().CodecProfiles[1].Conditions[1].Value;
+  assert.strictEqual(
+    hdr,
+    "SDR|HDR10|HLG|HDR10Plus|DOVIWithHDR10|DOVIWithHDR10Plus|DOVIWithSDR",
+  );
+  assert.ok(!/\bDOVI\b/.test(hdr.replace(/DOVIWith\w+/g, "")), "pure DOVI excluded");
+  Lite.hdrPanel._v = false;
+}
+
+// --- JELA-138: hdrPanel probes webapis.avinfo once, tolerates throws -------
+{
+  const { loadLite: load2 } = require("./lite-testkit.cjs");
+  let calls = 0;
+  const LiteHdr = load2({
+    webapis: { avinfo: { isHdrTvSupport: () => (calls++, true) } },
+  });
+  assert.strictEqual(LiteHdr.hdrPanel(), true, "avinfo true = HDR panel");
+  assert.strictEqual(LiteHdr.hdrPanel(), true);
+  assert.strictEqual(calls, 1, "probed once, then cached");
+  assert.strictEqual(
+    LiteHdr.deviceProfile().CodecProfiles[1].Conditions[1].Value,
+    LiteHdr.HDR_RANGE_TYPES,
+  );
+
+  const LiteThrow = load2({
+    webapis: {
+      avinfo: {
+        isHdrTvSupport: () => {
+          throw new Error("boom");
+        },
+      },
+    },
+  });
+  assert.strictEqual(LiteThrow.hdrPanel(), false, "throwing avinfo = SDR");
 }
 
 // --- first SupportsDirectPlay source wins, URL from ms.Container -----------
