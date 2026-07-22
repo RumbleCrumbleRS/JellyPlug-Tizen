@@ -1136,6 +1136,36 @@
     };
   };
 
+  // JELA-137 emulated-QA finding: a real 10.11 server never sets
+  // SupportsDirectStream on these video answers — "direct stream" there
+  // means "original container proxied via the server" and stays gated on
+  // DirectPlayProfiles, so a container-mismatch source reports
+  // SupportsDirectStream:false even when every codec is copy-eligible.
+  // The actual remux offer is the TranscodingUrl whose TranscodeReasons
+  // name the container as the ONLY problem: ffmpeg then runs -c copy
+  // into the TranscodingProfile container. Any codec/subtitle/bitrate
+  // reason means real re-encode work, which Lite must never start from
+  // a TV press. No TranscodeReasons at all = cannot prove copy-only =
+  // decline (the pre-fix behaviour).
+  function remuxOnlyReasons(turl) {
+    var m = /[?&]TranscodeReasons=([^&]+)/i.exec(turl);
+    if (!m) {
+      return false;
+    }
+    var raw = m[1];
+    try {
+      raw = global.decodeURIComponent(raw);
+    } catch (_r) {}
+    var parts = raw.split(",");
+    var i;
+    for (i = 0; i < parts.length; i++) {
+      if (parts[i] !== "ContainerNotSupported") {
+        return false;
+      }
+    }
+    return parts.length > 0;
+  }
+
   // postJson(url, headers, body, cb?) is injected; the default XHR
   // implementation lives in boot() so this stays node-testable.
   Lite.createPlaybackInfo = function (opts) {
@@ -1194,6 +1224,24 @@
                   sources[i] &&
                   sources[i].SupportsDirectStream === true &&
                   sources[i].TranscodingUrl
+                ) {
+                  ms = sources[i];
+                  kind = "remux";
+                  break;
+                }
+              }
+            }
+            // JELA-137: the shape a REAL 10.11 server answers with for a
+            // container-mismatch remux (see remuxOnlyReasons above) —
+            // SupportsDirectStream stays false there, so without this
+            // scan the remux path is dead code against production
+            // servers and every eligible press falls back to the SPA.
+            if (!ms) {
+              for (i = 0; i < sources.length; i++) {
+                if (
+                  sources[i] &&
+                  sources[i].TranscodingUrl &&
+                  remuxOnlyReasons(sources[i].TranscodingUrl)
                 ) {
                   ms = sources[i];
                   kind = "remux";

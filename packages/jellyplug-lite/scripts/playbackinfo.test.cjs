@@ -152,6 +152,113 @@ function harness(opts) {
   assert.strictEqual(res.deviceId, "dev 1", "parsed + percent-decoded");
 }
 
+// --- JELA-137 emu-QA finding: the REAL 10.11 server never sets
+// SupportsDirectStream on these video answers ("direct stream" there means
+// "original container via server", still gated on DirectPlayProfiles). An
+// actual remux rides TranscodingUrl with TranscodeReasons=ContainerNotSupported
+// and nothing else. Pin the real answer shape → kind="remux".
+{
+  const { pb, posts, timers } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (err, r) => (res = r));
+  posts[0].cb(null, {
+    PlaySessionId: "ps10",
+    MediaSources: [
+      {
+        Id: "ms10",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        SupportsTranscoding: true,
+        TranscodingUrl:
+          "/videos/m1/stream.mkv?&DeviceId=jela137-emuqa&PlaySessionId=ps10&VideoCodec=h264,hevc&AudioCodec=aac&TranscodeReasons=ContainerNotSupported",
+      },
+    ],
+  });
+  assert.strictEqual(res.kind, "remux", "container-only reasons = remux");
+  assert.strictEqual(
+    res.url,
+    "http://srv/videos/m1/stream.mkv?&DeviceId=jela137-emuqa&PlaySessionId=ps10&VideoCodec=h264,hevc&AudioCodec=aac&TranscodeReasons=ContainerNotSupported",
+  );
+  assert.strictEqual(res.deviceId, "jela137-emuqa");
+  assert.strictEqual(timers.size, 0, "timeout cleared");
+}
+
+// --- any non-container TranscodeReason means real ffmpeg re-encode work —
+// decline (SPA fallback), never start that from a TV press ------------------
+{
+  for (const reasons of [
+    "ContainerNotSupported,AudioCodecNotSupported",
+    "ContainerNotSupported%2CVideoCodecNotSupported", // URL-encoded comma
+    "SubtitleCodecNotSupported",
+    "DirectPlayError",
+  ]) {
+    const { pb, posts } = harness();
+    let err;
+    pb.resolve({ id: "m1" }, (e) => (err = e));
+    posts[0].cb(null, {
+      MediaSources: [
+        {
+          Id: "x",
+          Container: "mkv",
+          SupportsDirectPlay: false,
+          SupportsDirectStream: false,
+          TranscodingUrl: "/videos/m1/stream.mkv?TranscodeReasons=" + reasons,
+        },
+      ],
+    });
+    assert.strictEqual(err.message, "no-direct-play", "reasons=" + reasons);
+  }
+}
+
+// --- TranscodingUrl without TranscodeReasons cannot prove copy-only — decline
+// (this is also the pre-JELA-137 pin: transcode-only answers stay declines)
+{
+  const { pb, posts } = harness();
+  let err;
+  pb.resolve({ id: "m1" }, (e) => (err = e));
+  posts[0].cb(null, {
+    MediaSources: [
+      {
+        Id: "x",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        TranscodingUrl: "/videos/m1/stream.mkv?VideoCodec=h264",
+      },
+    ],
+  });
+  assert.strictEqual(err.message, "no-direct-play");
+}
+
+// --- an explicit SupportsDirectStream source still wins over the
+// reasons-derived remux (order pin: legacy gate first) ----------------------
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (err, r) => (res = r));
+  posts[0].cb(null, {
+    MediaSources: [
+      {
+        Id: "msA",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        TranscodingUrl: "/videos/m1/stream.mkv?TranscodeReasons=ContainerNotSupported",
+      },
+      {
+        Id: "msB",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: true,
+        TranscodingUrl: "/videos/m1/other.mkv",
+      },
+    ],
+  });
+  assert.strictEqual(res.mediaSourceId, "msB", "explicit DS flag wins");
+  assert.strictEqual(res.kind, "remux");
+}
+
 // --- DirectPlay beats DirectStream when both present -------------------------
 {
   const { pb, posts } = harness();
