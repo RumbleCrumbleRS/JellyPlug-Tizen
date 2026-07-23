@@ -1103,6 +1103,30 @@
     return v;
   };
 
+  // JELA-152: native subtitle delivery is opt-in via its own flag,
+  // SEPARATE from jellyfin.lite.native — the JELA-151 C5 decision
+  // keeps subbed items on the SPA for the rollout, and this issue's
+  // ship gate (a user-selected sub VISIBLY renders in native playback
+  // on a real panel) has to pass before the flag flips. Probed once
+  // per boot, absent/throwing storage ⇒ off; tests override via
+  // Lite.subsEnabled._v.
+  Lite.SUBS_FLAG_KEY = "jellyfin.lite.subs";
+  Lite.subsEnabled = function () {
+    if (Lite.subsEnabled._v !== undefined) {
+      return Lite.subsEnabled._v;
+    }
+    var v = false;
+    try {
+      v =
+        !!global.localStorage &&
+        global.localStorage.getItem(Lite.SUBS_FLAG_KEY) === "1";
+    } catch (_s) {
+      v = false;
+    }
+    Lite.subsEnabled._v = v;
+    return v;
+  };
+
   // M63 (2019, Tizen 5.0) device profile — design §3, widened by
   // JELA-138 from the conservative slice-2 shape after a full-library
   // PlaybackInfo sweep against the real 10.11 server showed the actual
@@ -1190,16 +1214,24 @@
           ],
         },
       ],
-      // JELA-151 DECISION (2026-07-22, data-backed): stays EMPTY for
-      // C5. Lite has no subtitle renderer, so any answer that selects
-      // a sub stream must decline the native path and ride the SPA,
-      // which renders subs correctly — playing picture WITHOUT a
-      // user-selected sub is worse than the fallback. Costs ~2.1% of
-      // items for the real fleet (7/7 real users are OnlyForced;
-      // 89/4206 items carry forced subs). The lift is JELA-152
-      // (External delivery + avplay setExternalSubtitlePath). Do NOT
-      // declare formats here before Lite can hand subs to avplay.
-      SubtitleProfiles: [],
+      // JELA-152: external text-sub delivery, behind its OWN flag —
+      // the JELA-151 C5 decision keeps subs OUT of the rollout train
+      // (flag off ⇒ [] ⇒ any sub-selecting answer declines to the SPA,
+      // which renders subs correctly). Declaration order matters: the
+      // server delivers the FIRST matching profile's format, and every
+      // text codec (ass/ssa/mov_text/vtt/…) converts server-side, so
+      // the srt family alone covers all text streams while image subs
+      // (pgssub/dvdsub — burn-in only) match nothing and keep the
+      // designed SPA decline. Lite fetches + renders the cues itself
+      // (parseSrt/createSubTrack): avplay setExternalSubtitlePath
+      // needs a LOCAL file on many models (= download privilege the
+      // WGT doesn't carry) and is model-flaky on URLs (design §6).
+      SubtitleProfiles: Lite.subsEnabled()
+        ? [
+            { Format: "srt", Method: "External" },
+            { Format: "subrip", Method: "External" },
+          ]
+        : [],
     };
   };
 
@@ -1320,6 +1352,41 @@
               cb(new Error("no-direct-play"), null);
               return;
             }
+            // JELA-152: the answer may still select a subtitle stream.
+            // Externally-delivered text subs ride along (Lite fetches
+            // and renders the cues itself; the clock is absolute media
+            // time on both kinds, so remux works too). Anything else —
+            // image subs, missing DeliveryUrl — declines to the SPA:
+            // playing picture WITHOUT the user's chosen sub is worse
+            // than the fallback (the exact JELA-151 rule).
+            var subUrl = null;
+            var subIdx =
+              typeof ms.DefaultSubtitleStreamIndex === "number"
+                ? ms.DefaultSubtitleStreamIndex
+                : -1;
+            if (subIdx >= 0) {
+              var streams = ms.MediaStreams || [];
+              var sub = null;
+              for (i = 0; i < streams.length; i++) {
+                if (
+                  streams[i] &&
+                  streams[i].Type === "Subtitle" &&
+                  streams[i].Index === subIdx
+                ) {
+                  sub = streams[i];
+                  break;
+                }
+              }
+              if (
+                !sub ||
+                sub.DeliveryMethod !== "External" ||
+                !sub.DeliveryUrl
+              ) {
+                cb(new Error("sub-not-external"), null);
+                return;
+              }
+              subUrl = base + sub.DeliveryUrl;
+            }
             // JELA-137: the DeviceId the server baked into the
             // TranscodingUrl names the ffmpeg job — DELETE
             // /Videos/ActiveEncodings needs it to reap the remux on
@@ -1355,6 +1422,7 @@
               container: ms.Container || null,
               kind: kind,
               deviceId: deviceId,
+              subUrl: subUrl,
             });
           },
         );
@@ -1466,6 +1534,92 @@
   };
 
   /* ------------------------------------------------------------------
+   * Subtitles (JELA-152) — external text subs, parsed and clocked in
+   * Lite. The server converts every selected text codec to srt
+   * (SubtitleProfiles above), Lite XHRs the file over the same
+   * authenticated channel as everything else, and the session polls
+   * the cue track against the player's ABSOLUTE clock — which already
+   * folds in the remux StartTimeTicks offset, so cues stay in sync on
+   * both kinds and across remux seek-restarts. No avplay subtitle API:
+   * setExternalSubtitlePath wants a local file on many models and the
+   * WGT carries no download/filesystem privilege (design §6).
+   * ---------------------------------------------------------------- */
+
+  // srt text -> [{start, end, text}] sorted by start, times in ms.
+  // Tolerates BOM, CRLF, missing counter lines; strips <i>-style tags
+  // and {\an8}-style ASS residue the server conversion leaves behind.
+  // Malformed blocks are skipped, never thrown on.
+  Lite.parseSrt = function (text) {
+    if (!text) {
+      return [];
+    }
+    var blocks = String(text)
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n[\s\r]*\n+/);
+    var re =
+      /(\d+):(\d\d):(\d\d)[,.](\d{1,3})\s*-->\s*(\d+):(\d\d):(\d\d)[,.](\d{1,3})/;
+    var cues = [];
+    var i;
+    for (i = 0; i < blocks.length; i++) {
+      var lines = blocks[i].split(/\r?\n/);
+      var m = null;
+      var ti = -1;
+      var k;
+      // the time line is the block's first or second line (a counter
+      // line may precede it)
+      for (k = 0; k < lines.length && k < 2; k++) {
+        m = re.exec(lines[k]);
+        if (m) {
+          ti = k;
+          break;
+        }
+      }
+      if (!m) {
+        continue;
+      }
+      var start = (+m[1] * 3600 + +m[2] * 60 + +m[3]) * 1000 + +m[4];
+      var end = (+m[5] * 3600 + +m[6] * 60 + +m[7]) * 1000 + +m[8];
+      var txt = lines
+        .slice(ti + 1)
+        .join("\n")
+        .replace(/<[^>]*>/g, "")
+        .replace(/\{\\[^}]*\}/g, "")
+        .replace(/^\s+|\s+$/g, "");
+      if (end > start && txt) {
+        cues.push({ start: start, end: end, text: txt });
+      }
+    }
+    cues.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return cues;
+  };
+
+  // Cursor over sorted cues: O(1) amortized while the clock moves
+  // forward, rescans from the head on any backwards jump (seek).
+  Lite.createSubTrack = function (cues) {
+    var idx = 0;
+    var lastMs = -1;
+    return {
+      count: cues.length,
+      // Current cue text at absolute media time ms, or null.
+      textAt: function (ms) {
+        if (ms < lastMs) {
+          idx = 0;
+        }
+        lastMs = ms;
+        while (idx < cues.length && cues[idx].end <= ms) {
+          idx++;
+        }
+        if (idx < cues.length && cues[idx].start <= ms) {
+          return cues[idx].text;
+        }
+        return null;
+      },
+    };
+  };
+
+  /* ------------------------------------------------------------------
    * Playback OSD — drawn on a dedicated transparent canvas ABOVE the
    * AVPlay video plane (the "canvas hole", spike gate G2). Everything
    * here starts from clearRect, never an opaque fill: any opaque pixel
@@ -1503,6 +1657,28 @@
     var shownAt = -1; // -1 = hidden
     var clean = false; // canvas known fully transparent
 
+    // JELA-152: cue text — bottom-centred ABOVE the OSD scrim so the
+    // line never jumps when the OSD toggles. Stroke-under-fill keeps
+    // it readable over any video without an opaque box (G2: opaque
+    // pixels cover the video plane).
+    function drawSub(text) {
+      var lines = text.split("\n");
+      var lh = 52;
+      var y0 = vh - OSD.scrimH - 42 - (lines.length - 1) * lh;
+      ctx.font = "600 40px sans-serif";
+      ctx.textAlign = "center";
+      ctx.strokeStyle = "rgba(0,0,0,0.9)";
+      ctx.lineWidth = 6;
+      ctx.fillStyle = COLORS.title;
+      var i;
+      for (i = 0; i < lines.length; i++) {
+        ctx.strokeText(lines[i], vw / 2, y0 + i * lh);
+        ctx.fillText(lines[i], vw / 2, y0 + i * lh);
+      }
+      ctx.textAlign = "left";
+      ctx.lineWidth = 1;
+    }
+
     var osd = {
       show: function () {
         shownAt = now();
@@ -1523,9 +1699,18 @@
         return true;
       },
 
-      // s: {posMs, durMs, paused, buffering}
+      // s: {posMs, durMs, paused, buffering, subText}
       draw: function (s) {
         if (!osd.visible() && !s.paused && !s.buffering) {
+          // OSD hidden: the canvas carries ONLY the cue text (or
+          // nothing) — the clean latch still avoids clear-per-tick
+          // while both the OSD and the cue line are gone.
+          if (s.subText) {
+            clean = false;
+            ctx.clearRect(0, 0, vw, vh);
+            drawSub(s.subText);
+            return true;
+          }
           if (!clean) {
             ctx.clearRect(0, 0, vw, vh);
             clean = true;
@@ -1534,6 +1719,10 @@
         }
         clean = false;
         ctx.clearRect(0, 0, vw, vh);
+
+        if (s.subText) {
+          drawSub(s.subText);
+        }
 
         // bottom scrim so the text reads over any video
         ctx.fillStyle = "rgba(16,16,16,0.72)";
@@ -1625,6 +1814,8 @@
   // the Q60R — five queued seeks would wedge the pipeline for seconds).
   Lite.SEEK_DEBOUNCE_MS = 350;
   var OSD_TICK_MS = 500;
+  // JELA-152: cue-clock poll — see subTick in createPlaybackSession.
+  Lite.SUB_TICK_MS = 250;
   // Never seek into the last 2s: landing exactly on the tail races
   // onstreamcompleted against the seek callback.
   var SEEK_TAIL_GUARD_MS = 2000;
@@ -1647,6 +1838,15 @@
     var seekTimer = null;
     var drawTimer = null;
     var kind = "direct";
+    // JELA-152: cue track over the pre-fetched external sub (see
+    // startNative — the fetch happens BEFORE the pipeline opens so a
+    // failed sub declines to the SPA instead of playing without it).
+    var subTrack =
+      opts.subCues && opts.subCues.length
+        ? Lite.createSubTrack(opts.subCues)
+        : null;
+    var subText = null;
+    var subTimer = null;
 
     // JELA-137: a remux seek is a stream RESTART (fresh one-shot player
     // on a new StartTimeTicks URL), so player creation must be
@@ -1700,7 +1900,21 @@
         durMs: durMs(),
         paused: player.state() === "paused",
         buffering: player.buffering(),
+        subText: subText,
       });
+    }
+
+    // JELA-152: cue clock — a dedicated 250ms tick keeps cue-edge
+    // latency under the point where sub lag reads as "off" (the 500ms
+    // OSD tick alone is too coarse). currentTimeMs() is absolute media
+    // time even on a remux (remuxOffMs), so cues stay in sync on both
+    // kinds and across remux seek-restarts. Redraws only on cue edges.
+    function subTick() {
+      var t = subTrack.textAt(player.currentTimeMs());
+      if (t !== subText) {
+        subText = t;
+        redraw();
+      }
     }
 
     function cleanup() {
@@ -1711,6 +1925,10 @@
       if (drawTimer) {
         clearI(drawTimer);
         drawTimer = null;
+      }
+      if (subTimer) {
+        clearI(subTimer);
+        subTimer = null;
       }
     }
 
@@ -1810,6 +2028,9 @@
         if (ok && !finished) {
           osd.show();
           drawTimer = setI(redraw, OSD_TICK_MS);
+          if (subTrack) {
+            subTimer = setI(subTick, Lite.SUB_TICK_MS);
+          }
         }
         return ok;
       },
@@ -1951,6 +2172,31 @@
       };
     }
     xhr.send(JSON.stringify(body));
+  }
+
+  // GET returning raw text — JELA-152 external subtitle fetch rides
+  // the same authenticated XHR channel as everything else (no api_key
+  // in the URL, no avplay-side download).
+  function xhrFetchText(url, headers, cb) {
+    var xhr = new global.XMLHttpRequest();
+    xhr.open("GET", url, true);
+    var k;
+    for (k in headers) {
+      if (headers.hasOwnProperty(k)) {
+        xhr.setRequestHeader(k, headers[k]);
+      }
+    }
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) {
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        cb(new Error("HTTP " + xhr.status + " " + url), null);
+        return;
+      }
+      cb(null, xhr.responseText || "");
+    };
+    xhr.send();
   }
 
   // Fire-and-forget request with no body and no reply handling —
@@ -2216,138 +2462,164 @@
           bail("info:" + (err && err.message));
           return;
         }
-        // Canvas hole (spike gate G2): AVPlay renders on a plane BEHIND
-        // the web layer. The home canvas paints an opaque bg, so hide
-        // it and put a dedicated transparent OSD canvas above the
-        // video; body must not paint either while the hole is open.
-        var osdCanvas = doc.createElement("canvas");
-        osdCanvas.width = LAYOUT.vw;
-        osdCanvas.height = LAYOUT.vh;
-        osdCanvas.style.cssText =
-          "position:fixed;left:0;top:0;width:100%;height:100%;" +
-          "background:transparent";
-        var prevBodyBg = doc.body.style.background;
-        var restored = false;
-        function restoreHome(patchMs) {
-          if (restored) {
-            return;
-          }
-          restored = true;
-          playback.pending = false;
-          try {
-            if (osdCanvas.parentNode) {
-              osdCanvas.parentNode.removeChild(osdCanvas);
+        // JELA-152: a selected sub is fetched and parsed BEFORE the
+        // pipeline opens — a sub that cannot be delivered must decline
+        // to the SPA cleanly (bail), never play picture without it.
+        // The home canvas still shows "Loading…" during the fetch.
+        if (!info.subUrl) {
+          begin(null);
+        } else {
+          d.st = "sub";
+          xhrFetchText(
+            info.subUrl,
+            { "X-Emby-Token": creds.token },
+            function (serr, text) {
+              var cues = serr ? null : Lite.parseSrt(text);
+              if (!cues || !cues.length) {
+                bail("sub:" + (serr ? serr.message : "no-cues"));
+                return;
+              }
+              d.subCues = cues.length;
+              begin(cues);
+            },
+          );
+        }
+
+        function begin(subCues) {
+          // Canvas hole (spike gate G2): AVPlay renders on a plane BEHIND
+          // the web layer. The home canvas paints an opaque bg, so hide
+          // it and put a dedicated transparent OSD canvas above the
+          // video; body must not paint either while the hole is open.
+          var osdCanvas = doc.createElement("canvas");
+          osdCanvas.width = LAYOUT.vw;
+          osdCanvas.height = LAYOUT.vh;
+          osdCanvas.style.cssText =
+            "position:fixed;left:0;top:0;width:100%;height:100%;" +
+            "background:transparent";
+          var prevBodyBg = doc.body.style.background;
+          var restored = false;
+          function restoreHome(patchMs) {
+            if (restored) {
+              return;
             }
-          } catch (_r) {}
-          doc.body.style.background = prevBodyBg;
-          canvas.style.display = "";
+            restored = true;
+            playback.pending = false;
+            try {
+              if (osdCanvas.parentNode) {
+                osdCanvas.parentNode.removeChild(osdCanvas);
+              }
+            } catch (_r) {}
+            doc.body.style.background = prevBodyBg;
+            canvas.style.display = "";
+            renderer.setMessage(null);
+            if (typeof patchMs === "number" && patchMs >= 0) {
+              // Local Resume patch: the card object lives in the scene,
+              // so the next OK resumes from here even before the server
+              // round-trip (SWR revalidate) catches up. Best-effort — a
+              // scene rebuild from fresher server data supersedes it.
+              item.posTicks = Math.round(patchMs * Lite.TICKS_PER_MS);
+            }
+            renderer.invalidate();
+            schedule();
+          }
+
+          doc.body.appendChild(osdCanvas);
+          doc.body.style.background = "transparent";
+          canvas.style.display = "none";
           renderer.setMessage(null);
-          if (typeof patchMs === "number" && patchMs >= 0) {
-            // Local Resume patch: the card object lives in the scene,
-            // so the next OK resumes from here even before the server
-            // round-trip (SWR revalidate) catches up. Best-effort — a
-            // scene rebuild from fresher server data supersedes it.
-            item.posTicks = Math.round(patchMs * Lite.TICKS_PER_MS);
+
+          // JELA-137 server CPU headroom: a remux leaves an ffmpeg job
+          // running server-side. The Stopped beacon usually reaps it, but
+          // that beacon is fire-and-forget — kill the job explicitly on
+          // every exit and before every seek-restart. Best-effort: needs
+          // the DeviceId the server baked into TranscodingUrl.
+          function killEncoding() {
+            if (info.kind !== "remux" || !info.deviceId) {
+              return;
+            }
+            try {
+              xhrSend(
+                "DELETE",
+                creds.base +
+                  "/Videos/ActiveEncodings?deviceId=" +
+                  encodeURIComponent(info.deviceId) +
+                  (info.playSessionId
+                    ? "&playSessionId=" + encodeURIComponent(info.playSessionId)
+                    : ""),
+                { "X-Emby-Token": creds.token },
+              );
+            } catch (_k) {}
           }
-          renderer.invalidate();
-          schedule();
+
+          var osd = Lite.createOsd({
+            ctx: osdCanvas.getContext("2d"),
+            title: item.name || "",
+            now: nowMs,
+          });
+          var reporter = Lite.createReporter({
+            base: creds.base,
+            token: creds.token,
+            postJson: xhrPostJson,
+            itemId: item.id,
+            mediaSourceId: info.mediaSourceId,
+            playSessionId: info.playSessionId,
+            positionMs: function () {
+              return session.player.currentTimeMs();
+            },
+            isPaused: function () {
+              return session.player.state() === "paused";
+            },
+            playMethod: info.kind === "remux" ? "DirectStream" : "DirectPlay",
+            setInterval: setI,
+            clearInterval: clearI,
+          });
+          var session = Lite.createPlaybackSession({
+            avplay: avplay,
+            reporter: reporter,
+            osd: osd,
+            now: nowMs,
+            setTimeout: setT,
+            clearTimeout: clearT,
+            setInterval: setI,
+            clearInterval: clearI,
+            runtimeMs: item.runtimeTicks
+              ? Math.round(item.runtimeTicks / Lite.TICKS_PER_MS)
+              : 0,
+            subCues: subCues,
+            diag: d,
+            // Remux plumbing (JELA-137): every start/seek position rides
+            // the URL as StartTimeTicks — the transcode output has no
+            // byte ranges for the pipeline to seek over.
+            urlAt:
+              info.kind === "remux"
+                ? function (ms) {
+                    return (
+                      info.url +
+                      (info.url.indexOf("?") >= 0 ? "&" : "?") +
+                      "StartTimeTicks=" +
+                      Math.round(ms * Lite.TICKS_PER_MS)
+                    );
+                  }
+                : null,
+            stopEncoding: killEncoding,
+            onExit: function (ms) {
+              playback.session = null;
+              killEncoding();
+              restoreHome(ms);
+            },
+            onFallback: function (why) {
+              playback.session = null;
+              killEncoding();
+              restoreHome(-1);
+              bail(why);
+            },
+          });
+          playback.session = session;
+          var resumeMs = item.posTicks
+            ? Math.round(item.posTicks / Lite.TICKS_PER_MS)
+            : 0;
+          session.start(info.url, resumeMs, info.kind);
         }
-
-        doc.body.appendChild(osdCanvas);
-        doc.body.style.background = "transparent";
-        canvas.style.display = "none";
-        renderer.setMessage(null);
-
-        // JELA-137 server CPU headroom: a remux leaves an ffmpeg job
-        // running server-side. The Stopped beacon usually reaps it, but
-        // that beacon is fire-and-forget — kill the job explicitly on
-        // every exit and before every seek-restart. Best-effort: needs
-        // the DeviceId the server baked into TranscodingUrl.
-        function killEncoding() {
-          if (info.kind !== "remux" || !info.deviceId) {
-            return;
-          }
-          try {
-            xhrSend(
-              "DELETE",
-              creds.base +
-                "/Videos/ActiveEncodings?deviceId=" +
-                encodeURIComponent(info.deviceId) +
-                (info.playSessionId
-                  ? "&playSessionId=" + encodeURIComponent(info.playSessionId)
-                  : ""),
-              { "X-Emby-Token": creds.token },
-            );
-          } catch (_k) {}
-        }
-
-        var osd = Lite.createOsd({
-          ctx: osdCanvas.getContext("2d"),
-          title: item.name || "",
-          now: nowMs,
-        });
-        var reporter = Lite.createReporter({
-          base: creds.base,
-          token: creds.token,
-          postJson: xhrPostJson,
-          itemId: item.id,
-          mediaSourceId: info.mediaSourceId,
-          playSessionId: info.playSessionId,
-          positionMs: function () {
-            return session.player.currentTimeMs();
-          },
-          isPaused: function () {
-            return session.player.state() === "paused";
-          },
-          playMethod: info.kind === "remux" ? "DirectStream" : "DirectPlay",
-          setInterval: setI,
-          clearInterval: clearI,
-        });
-        var session = Lite.createPlaybackSession({
-          avplay: avplay,
-          reporter: reporter,
-          osd: osd,
-          now: nowMs,
-          setTimeout: setT,
-          clearTimeout: clearT,
-          setInterval: setI,
-          clearInterval: clearI,
-          runtimeMs: item.runtimeTicks
-            ? Math.round(item.runtimeTicks / Lite.TICKS_PER_MS)
-            : 0,
-          diag: d,
-          // Remux plumbing (JELA-137): every start/seek position rides
-          // the URL as StartTimeTicks — the transcode output has no
-          // byte ranges for the pipeline to seek over.
-          urlAt:
-            info.kind === "remux"
-              ? function (ms) {
-                  return (
-                    info.url +
-                    (info.url.indexOf("?") >= 0 ? "&" : "?") +
-                    "StartTimeTicks=" +
-                    Math.round(ms * Lite.TICKS_PER_MS)
-                  );
-                }
-              : null,
-          stopEncoding: killEncoding,
-          onExit: function (ms) {
-            playback.session = null;
-            killEncoding();
-            restoreHome(ms);
-          },
-          onFallback: function (why) {
-            playback.session = null;
-            killEncoding();
-            restoreHome(-1);
-            bail(why);
-          },
-        });
-        playback.session = session;
-        var resumeMs = item.posTicks
-          ? Math.round(item.posTicks / Lite.TICKS_PER_MS)
-          : 0;
-        session.start(info.url, resumeMs, info.kind);
       });
     }
 

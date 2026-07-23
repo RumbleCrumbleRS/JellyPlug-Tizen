@@ -122,6 +122,7 @@ function harness(opts) {
     setInterval: timers.api.setInterval,
     clearInterval: timers.api.clearInterval,
     runtimeMs: opts.runtimeMs || 0,
+    subCues: opts.subCues || null,
     urlAt: opts.urlAt || null,
     stopEncoding: opts.stopEncoding || null,
     diag: {},
@@ -515,6 +516,68 @@ function fakeCtx() {
   assert.ok(
     ctx.ops.some((o) => o[0] === "fillText" && String(o[1]).indexOf("Buffering") === 0),
     "buffering indicator rendered",
+  );
+}
+
+
+// --- JELA-152: cue clock — 250ms tick drives subText redraws on cue EDGES ---
+{
+  const h = harness({
+    subCues: [
+      { start: 1000, end: 2000, text: "A" },
+      { start: 3000, end: 4000, text: "B" },
+    ],
+  });
+  h.session.start("u", 0);
+  firstFrame(h);
+  const subTimers = () =>
+    [...h.timers.live.values()].filter((t) => t.interval && t.ms === 250);
+  assert.strictEqual(subTimers().length, 1, "250ms cue tick armed");
+  const subTick = () => h.timers.fire((t) => t.interval && t.ms === 250);
+
+  h.av.time = 500;
+  const before = h.osd.draws.length;
+  subTick();
+  assert.strictEqual(h.osd.draws.length, before, "no cue yet = no redraw");
+
+  h.av.time = 1200;
+  subTick();
+  assert.strictEqual(h.osd.draws[h.osd.draws.length - 1].subText, "A");
+
+  const n = h.osd.draws.length;
+  h.av.time = 1400;
+  subTick();
+  assert.strictEqual(h.osd.draws.length, n, "same cue = no redraw");
+
+  h.av.time = 2500;
+  subTick();
+  assert.strictEqual(
+    h.osd.draws[h.osd.draws.length - 1].subText,
+    null,
+    "gap clears the cue",
+  );
+
+  // the 500ms OSD tick carries the current cue too
+  h.av.time = 3200;
+  subTick();
+  h.timers.fire((t) => t.interval && t.ms === 500);
+  assert.strictEqual(h.osd.draws[h.osd.draws.length - 1].subText, "B");
+
+  // back: finish clears the cue timer with the rest
+  h.session.key(10009);
+  assert.strictEqual(subTimers().length, 0, "cue tick cleared on finish");
+}
+
+// --- JELA-152: no cues = no cue timer ---------------------------------------
+{
+  const h = harness();
+  h.session.start("u", 0);
+  firstFrame(h);
+  assert.strictEqual(
+    [...h.timers.live.values()].filter((t) => t.interval && t.ms === 250)
+      .length,
+    0,
+    "sub tick only runs with a loaded track",
   );
 }
 
