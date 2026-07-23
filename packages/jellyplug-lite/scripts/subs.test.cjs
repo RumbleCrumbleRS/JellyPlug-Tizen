@@ -68,6 +68,54 @@ const j = (o) => JSON.parse(JSON.stringify(o));
   assert.strictEqual(LiteThrow.subsEnabled(), false, "throwing storage = off");
 }
 
+// --- JELA-141 fleet default fallback ----------------------------------------
+{
+  const { loadLite: load3 } = require("./lite-testkit.cjs");
+  const defRec = (f) => JSON.stringify({ v: 1, o: "http://srv", f, ts: 1 });
+  const mkStore = (vals) => ({
+    localStorage: { getItem: (k) => (k in vals ? vals[k] : null) },
+  });
+
+  const LiteDef = load3(
+    mkStore({
+      "jellyfin.shell.flagDefaults": defRec({ "jellyfin.lite.subs": "1" }),
+    }),
+  );
+  assert.strictEqual(
+    LiteDef.subsEnabled(),
+    true,
+    "no explicit value: fleet default ON applies",
+  );
+
+  const LiteDevKill = load3(
+    mkStore({
+      "jellyfin.lite.subs": "0",
+      "jellyfin.shell.flagDefaults": defRec({ "jellyfin.lite.subs": "1" }),
+    }),
+  );
+  assert.strictEqual(
+    LiteDevKill.subsEnabled(),
+    false,
+    "explicit device-local 0 beats the fleet default",
+  );
+
+  const LiteDefOff = load3(
+    mkStore({
+      "jellyfin.shell.flagDefaults": defRec({ "jellyfin.lite.subs": "0" }),
+    }),
+  );
+  assert.strictEqual(LiteDefOff.subsEnabled(), false, "fleet default 0 = off");
+
+  const LiteCorrupt = load3(
+    mkStore({ "jellyfin.shell.flagDefaults": "{not json" }),
+  );
+  assert.strictEqual(
+    LiteCorrupt.subsEnabled(),
+    false,
+    "corrupt defaults record = off",
+  );
+}
+
 // --- parseSrt --------------------------------------------------------------
 {
   const srt =
