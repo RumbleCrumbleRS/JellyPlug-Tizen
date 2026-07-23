@@ -130,6 +130,23 @@ assert.ok(
   "ScriptFingerprintPatterns default drifted",
 );
 
+// JELA-139: plugin-config XMLs hash with the volatile leaf elements stripped
+// — JellyfinEnhanced rewrites its cache-clear timestamps without operator
+// action, and raw bytes churned the epoch (one spurious resume reload per TV
+// per churn). Defaults pin the two keys the 2026-07 live-config audit found.
+assert.ok(
+  cfg.includes('"ClearTranslationCacheTimestamp\\nClearLocalStorageTimestamp"'),
+  "VolatileScriptConfigKeys default drifted",
+);
+assert.ok(
+  /scripts\/config\/[\s\S]{0,400}NormalizedScriptConfigSha/.test(svc),
+  "scripts/config files must hash through NormalizedScriptConfigSha",
+);
+assert.ok(
+  svc.includes("VolatileKeyRegexes(config.VolatileScriptConfigKeys)"),
+  "volatile keys must come from the operator config",
+);
+
 // Kill switch: present in config, checked in the controller BEFORE computing,
 // with the legacy static bytes as the fallback on both the disabled and the
 // failure path.
@@ -312,6 +329,85 @@ assert.notStrictEqual(
   txSha(tx1),
   txSha({ ...tx1, babelOptsKey: "k2" }),
   "babelOptsKey change must move tx digest",
+);
+
+// JELA-139 mirror of VolatileKeyRegexes + NormalizedScriptConfigSha: strip
+// "<Key ...>text</Key>" / "<Key/>" leaf elements (case-insensitive) from the
+// decoded XML text, hash the rest; empty key list = raw byte hash.
+function volatileKeyRegexes(keys) {
+  return (keys || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((k) => {
+      const esc = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(
+        "<" + esc + "(?:\\s[^>]*)?(?:\\/>|>[^<]*<\\/" + esc + "\\s*>)",
+        "gi",
+      );
+    });
+}
+function normalizedScriptConfigSha(xml, regexes) {
+  if (!regexes.length) return sha256(Buffer.from(xml, "utf8"));
+  let text = xml;
+  for (const re of regexes) text = text.replace(re, "");
+  return sha256(Buffer.from(text, "utf8"));
+}
+
+const DEFAULT_VOLATILE = "ClearTranslationCacheTimestamp\nClearLocalStorageTimestamp";
+const vres = volatileKeyRegexes(DEFAULT_VOLATILE);
+const jeXml = (tx, ls, toast) =>
+  '<?xml version="1.0" encoding="utf-8"?>\n' +
+  '<PluginConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n' +
+  "  <ToastDuration>" + toast + "</ToastDuration>\n" +
+  "  <ClearLocalStorageTimestamp>" + ls + "</ClearLocalStorageTimestamp>\n" +
+  "  <ClearTranslationCacheTimestamp>" + tx + "</ClearTranslationCacheTimestamp>\n" +
+  "  <RandomButtonEnabled>true</RandomButtonEnabled>\n" +
+  "</PluginConfiguration>";
+
+// Volatile-only churn (the JELA-139 bug) must NOT move the hash…
+assert.strictEqual(
+  normalizedScriptConfigSha(jeXml("1784736116990", "1773159569032", "1500"), vres),
+  normalizedScriptConfigSha(jeXml("1799999999999", "1780000000000", "1500"), vres),
+  "volatile-timestamp churn must not move the scripts-config hash",
+);
+// …while a real config change still must.
+assert.notStrictEqual(
+  normalizedScriptConfigSha(jeXml("1784736116990", "1773159569032", "1500"), vres),
+  normalizedScriptConfigSha(jeXml("1784736116990", "1773159569032", "1501"), vres),
+  "real config change must move the scripts-config hash",
+);
+// End-to-end: churn-only rewrite leaves the scripts group and the epoch bit-identical.
+const scriptsA = groupSha([
+  { label: "scripts/config/JE.xml", sha: normalizedScriptConfigSha(jeXml("1", "2", "1500"), vres) },
+]);
+const scriptsB = groupSha([
+  { label: "scripts/config/JE.xml", sha: normalizedScriptConfigSha(jeXml("9", "8", "1500"), vres) },
+]);
+assert.strictEqual(
+  epochOf(g[0], g[1], scriptsA, g[2]),
+  epochOf(g[0], g[1], scriptsB, g[2]),
+  "volatile churn must not move the epoch",
+);
+// A key name quoted INSIDE element text is entity-escaped in real XML and can
+// never match the leaf-element regex — a JSI snippet mentioning the tag is safe.
+const quoted =
+  "<CustomJavaScripts><Script>if(x){log('&lt;ClearTranslationCacheTimestamp&gt;42&lt;/ClearTranslationCacheTimestamp&gt;')}</Script></CustomJavaScripts>";
+assert.strictEqual(
+  normalizedScriptConfigSha(quoted, vres),
+  sha256(Buffer.from(quoted, "utf8")),
+  "escaped mention in element text must not be stripped",
+);
+// Self-closing + attribute forms strip too; empty key list = raw hash.
+assert.strictEqual(
+  normalizedScriptConfigSha("<A/><ClearLocalStorageTimestamp /><B>1</B>", vres),
+  normalizedScriptConfigSha("<A/><B>1</B>", vres),
+  "self-closing volatile element must strip",
+);
+assert.strictEqual(
+  normalizedScriptConfigSha("<A>1</A>", []),
+  sha256(Buffer.from("<A>1</A>", "utf8")),
+  "empty volatile list must fall back to the raw byte hash",
 );
 
 // Web-index extraction: local assets in, external/data URLs out, query stripped.
