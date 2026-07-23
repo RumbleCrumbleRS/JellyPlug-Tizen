@@ -79,7 +79,7 @@ function harness(opts) {
   assert.deepStrictEqual(
     j(prof.SubtitleProfiles),
     [],
-    "JELA-151 decision: SubtitleProfiles stays EMPTY until JELA-152 gives Lite real sub delivery — sub-selecting answers must decline to the SPA",
+    "JELA-151 C5 decision: SubtitleProfiles stays EMPTY while jellyfin.lite.subs is off — sub-selecting answers decline to the SPA (JELA-152 lift is flag-gated, see subs.test.cjs)",
   );
 }
 
@@ -418,6 +418,112 @@ function harness(opts) {
   });
   assert.strictEqual(timers.size, 0, "timer cleared");
   assert.deepStrictEqual(calls, [[null, "ms1"]]);
+}
+
+
+// --- JELA-152: selected EXTERNAL text sub rides along ------------------------
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (e, r) => (res = r));
+  posts[0].cb(null, {
+    MediaSources: [
+      {
+        Id: "ms1",
+        Container: "mov",
+        SupportsDirectPlay: true,
+        DefaultSubtitleStreamIndex: 2,
+        MediaStreams: [
+          { Type: "Video", Index: 0 },
+          { Type: "Subtitle", Index: 1, DeliveryMethod: "Encode" },
+          {
+            Type: "Subtitle",
+            Index: 2,
+            DeliveryMethod: "External",
+            DeliveryUrl: "/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
+          },
+        ],
+      },
+    ],
+  });
+  assert.strictEqual(res.kind, "direct");
+  assert.strictEqual(
+    res.subUrl,
+    "http://srv/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
+    "selected external sub carried (base-prefixed, no api_key — fetch is header-authenticated)",
+  );
+}
+
+// --- JELA-152: no sub selected -> subUrl null --------------------------------
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (e, r) => (res = r));
+  posts[0].cb(null, {
+    MediaSources: [{ Id: "ms1", Container: "mov", SupportsDirectPlay: true }],
+  });
+  assert.strictEqual(res.subUrl, null);
+}
+
+// --- JELA-152: a selected sub Lite cannot deliver is a DECLINE ---------------
+// (playing picture WITHOUT the user's chosen sub is worse than the SPA
+// fallback — the exact JELA-151 rule; covers image subs and any answer
+// missing the DeliveryUrl)
+{
+  for (const sub of [
+    { Type: "Subtitle", Index: 2, DeliveryMethod: "Encode" }, // pgssub burn-in
+    { Type: "Subtitle", Index: 2, DeliveryMethod: "External" }, // no url
+    null, // selected index missing from MediaStreams entirely
+  ]) {
+    const { pb, posts } = harness();
+    let err;
+    pb.resolve({ id: "m1" }, (e) => (err = e));
+    posts[0].cb(null, {
+      MediaSources: [
+        {
+          Id: "ms1",
+          Container: "mov",
+          SupportsDirectPlay: true,
+          DefaultSubtitleStreamIndex: 2,
+          MediaStreams: sub ? [{ Type: "Video", Index: 0 }, sub] : [],
+        },
+      ],
+    });
+    assert.strictEqual(err && err.message, "sub-not-external");
+  }
+}
+
+// --- JELA-152: remux + external sub works too (absolute cue clock) -----------
+{
+  const { pb, posts } = harness();
+  let res;
+  pb.resolve({ id: "m1" }, (e, r) => (res = r));
+  posts[0].cb(null, {
+    MediaSources: [
+      {
+        Id: "ms1",
+        Container: "mkv",
+        SupportsDirectPlay: false,
+        SupportsDirectStream: false,
+        TranscodingUrl:
+          "/videos/m1/stream.mkv?DeviceId=d1&TranscodeReasons=ContainerNotSupported",
+        DefaultSubtitleStreamIndex: 3,
+        MediaStreams: [
+          {
+            Type: "Subtitle",
+            Index: 3,
+            DeliveryMethod: "External",
+            DeliveryUrl: "/Videos/m1/ms1/Subtitles/3/0/Stream.srt",
+          },
+        ],
+      },
+    ],
+  });
+  assert.strictEqual(res.kind, "remux");
+  assert.strictEqual(
+    res.subUrl,
+    "http://srv/Videos/m1/ms1/Subtitles/3/0/Stream.srt",
+  );
 }
 
 console.log("playbackinfo.test.cjs OK");

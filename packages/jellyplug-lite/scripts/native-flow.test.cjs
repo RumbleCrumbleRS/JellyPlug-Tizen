@@ -68,9 +68,16 @@ function fakeAvplay() {
 function fakeCtx() {
   const noop = () => {};
   return {
+    // JELA-152: record text draws so the sub tests can see cue renders
+    calls: [],
     clearRect: noop,
     fillRect: noop,
-    fillText: noop,
+    fillText(...a) {
+      this.calls.push(["fillText", ...a]);
+    },
+    strokeText(...a) {
+      this.calls.push(["strokeText", ...a]);
+    },
     beginPath: noop,
     moveTo: noop,
     lineTo: noop,
@@ -101,12 +108,12 @@ function fakeDoc() {
     hidden: false,
     body,
     listeners,
-    createElement: () => ({
-      width: 0,
-      height: 0,
-      style: {},
-      getContext: fakeCtx,
-    }),
+    createElement: () => {
+      // one ctx per element so tests can observe what a canvas drew
+      const el = { width: 0, height: 0, style: {}, ctx: null };
+      el.getContext = () => (el.ctx = el.ctx || fakeCtx());
+      return el;
+    },
     addEventListener(type, fn) {
       (listeners[type] = listeners[type] || []).push(fn);
     },
@@ -162,6 +169,12 @@ function harness(opts) {
       respond(status, obj) {
         x.status = status;
         x.responseText = obj == null ? "" : JSON.stringify(obj);
+        x.readyState = 4;
+        if (x.onreadystatechange) x.onreadystatechange();
+      },
+      respondText(status, text) {
+        x.status = status;
+        x.responseText = text == null ? "" : String(text);
         x.readyState = 4;
         if (x.onreadystatechange) x.onreadystatechange();
       },
@@ -577,6 +590,153 @@ const movie = () => ({
     tizen: { tvinputdevice: { registerKey: (k) => registered.push(k) } },
   });
   assert.deepStrictEqual(registered, [], "no adapter → no media keys");
+}
+
+
+// --- JELA-152: external sub — fetched BEFORE the pipeline opens, cue
+// rendered by the 250ms clock on the OSD canvas ------------------------------
+{
+  const h = harness();
+  h.Lite.subsEnabled._v = true; // flag on: profile declares External srt
+  const item = movie();
+  h.app.onOpen(item);
+  const pb = h.pbXhr()[0];
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(pb.body.DeviceProfile.SubtitleProfiles)),
+    [
+      { Format: "srt", Method: "External" },
+      { Format: "subrip", Method: "External" },
+    ],
+  );
+  pb.respond(200, {
+    PlaySessionId: "ps1",
+    MediaSources: [
+      {
+        Id: "ms1",
+        Container: "mov",
+        SupportsDirectPlay: true,
+        DefaultSubtitleStreamIndex: 2,
+        MediaStreams: [
+          { Type: "Video", Index: 0 },
+          {
+            Type: "Subtitle",
+            Index: 2,
+            DeliveryMethod: "External",
+            DeliveryUrl: "/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
+          },
+        ],
+      },
+    ],
+  });
+
+  const subXhr = h.sentXhr.filter((x) => x.url.indexOf("/Subtitles/") >= 0);
+  assert.strictEqual(subXhr.length, 1, "one sub fetch");
+  assert.strictEqual(
+    subXhr[0].url,
+    "http://srv/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
+  );
+  assert.strictEqual(
+    subXhr[0].headers["X-Emby-Token"],
+    "tok",
+    "header-authenticated — no api_key in the sub URL",
+  );
+  assert.strictEqual(
+    h.av.calls.length,
+    0,
+    "pipeline waits for the sub (a failed sub must decline pre-open)",
+  );
+  assert.strictEqual(h.win.__shellLite.player.st, "sub");
+
+  subXhr[0].respondText(
+    200,
+    "1\n00:01:31,000 --> 00:01:33,000\nHello native subs\n",
+  );
+  assert.strictEqual(h.av.calls[0][0], "open", "pipeline opens after the sub");
+  assert.strictEqual(h.win.__shellLite.player.subCues, 1, "diag cue count");
+  h.av.prepareOk();
+  h.av.seekOk();
+  h.av.time = 90040;
+  h.av.listener.oncurrentplaytime(90040);
+
+  // inside the cue window: fire the 250ms cue tick, cue lands on the
+  // OSD canvas as stroke-under-fill text
+  h.av.time = 91500;
+  for (const t of [...h.timers.values()]) {
+    if (t.interval && t.ms === 250) t.fn();
+  }
+  const osdCanvas = h.doc.body.children[1];
+  const texts = osdCanvas.ctx.calls.filter((c) => c[1] === "Hello native subs");
+  assert.deepStrictEqual(
+    texts.map((c) => c[0]),
+    ["strokeText", "fillText"],
+    "cue rendered on the OSD canvas",
+  );
+
+  // past the cue window: the cue clears
+  osdCanvas.ctx.calls.length = 0;
+  h.av.time = 93500;
+  for (const t of [...h.timers.values()]) {
+    if (t.interval && t.ms === 250) t.fn();
+  }
+  assert.strictEqual(
+    osdCanvas.ctx.calls.filter((c) => c[1] === "Hello native subs").length,
+    0,
+    "cue cleared after its window (OSD chrome may still draw)",
+  );
+
+  // back exits cleanly with the sub timer gone
+  h.doc.key(10009);
+  assert.strictEqual(
+    [...h.timers.values()].filter((t) => t.interval && t.ms === 250).length,
+    0,
+    "cue timer cleared on exit",
+  );
+}
+
+// --- JELA-152: sub fetch failure declines to the SPA (never plays
+// picture without the chosen sub), and the next press retries native --------
+{
+  for (const failMode of ["http", "garbage"]) {
+    const h = harness();
+    h.Lite.subsEnabled._v = true;
+    const item = movie();
+    h.app.onOpen(item);
+    h.pbXhr()[0].respond(200, {
+      PlaySessionId: "ps1",
+      MediaSources: [
+        {
+          Id: "ms1",
+          Container: "mov",
+          SupportsDirectPlay: true,
+          DefaultSubtitleStreamIndex: 2,
+          MediaStreams: [
+            {
+              Type: "Subtitle",
+              Index: 2,
+              DeliveryMethod: "External",
+              DeliveryUrl: "/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
+            },
+          ],
+        },
+      ],
+    });
+    const subXhr = h.sentXhr.filter((x) => x.url.indexOf("/Subtitles/") >= 0);
+    if (failMode === "http") {
+      subXhr[0].respondText(404, "");
+    } else {
+      subXhr[0].respondText(200, "<html>not an srt</html>");
+    }
+    assert.deepStrictEqual(h.deepLinks, ["m1"], failMode + ": SPA deep-link");
+    assert.strictEqual(h.av.calls.length, 0, failMode + ": pipeline untouched");
+    assert.strictEqual(
+      h.doc.body.children.length,
+      1,
+      failMode + ": no leaked OSD canvas (hole never opened)",
+    );
+    // decline latch cleared: the next press tries native again
+    h.app.onOpen(item);
+    assert.strictEqual(h.pbXhr().length, 2, failMode + ": native retried");
+  }
 }
 
 console.log("native-flow.test.cjs OK");
