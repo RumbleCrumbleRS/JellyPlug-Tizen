@@ -158,13 +158,47 @@ assert.ok(
   ctrl.includes("!config.DisableConfigFingerprint"),
   "controller must gate on the kill switch",
 );
+// JELA-141 moved the legacy-bytes fallback INTO BuildManifestJson: with
+// neither a fingerprint nor flagDefaults applicable it must return the
+// exact pre-JELA-58 ManifestJson bytes (byte-identity preserved end to end).
 assert.ok(
-  ctrl.includes("return File(_drop.ManifestJson,"),
-  "legacy ManifestJson fallback path missing from GetManifest",
+  /fingerprint == null && flagDefaults == null[\s\S]{0,80}return ManifestJson;/.test(drop),
+  "legacy ManifestJson short-circuit missing from BuildManifestJson",
 );
 assert.ok(
-  /TryGetFingerprint[\s\S]{0,200}BuildManifestJson/.test(ctrl),
+  /TryGetFingerprint[\s\S]{0,300}BuildManifestJson/.test(ctrl),
   "dynamic path must build from the computed fingerprint",
+);
+
+// JELA-141: flagDefaults is additive like configEpoch/components, sourced
+// from the Lite*DefaultOn config bools, and OMITTED when all are off (null
+// map) so the no-rollout manifest stays byte-identical. Absent field is
+// meaningful on the TV (clears cached defaults) — the all-off path must
+// return null, never an empty/all-0 map.
+assert.ok(
+  cfg.includes("public bool LiteDefaultOn") &&
+    cfg.includes("public bool LiteNativeDefaultOn") &&
+    cfg.includes("public bool LiteSubsDefaultOn"),
+  "JELA-141 Lite*DefaultOn config bools missing",
+);
+assert.ok(
+  /!config\.LiteDefaultOn && !config\.LiteNativeDefaultOn && !config\.LiteSubsDefaultOn[\s\S]{0,60}return null;/.test(drop),
+  "LiteFlagDefaults must return null (field omitted) when every default is off",
+);
+assert.ok(
+  drop.includes('manifest["flagDefaults"] = flagDefaults;'),
+  "flagDefaults additive field missing from BuildManifestJson",
+);
+for (const k of [
+  '["jellyfin.shell.liteEnabled"]',
+  '["jellyfin.lite.native"]',
+  '["jellyfin.lite.subs"]',
+]) {
+  assert.ok(drop.includes(k), "flagDefaults key missing: " + k);
+}
+assert.ok(
+  ctrl.includes("ShellDropService.LiteFlagDefaults(config)"),
+  "controller must source flagDefaults from the shared helper",
 );
 
 // Additive-only manifest: legacy base keys untouched, in order, and the only
