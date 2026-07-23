@@ -105,6 +105,7 @@ for (const prop of [
   "DisableConfigFingerprint",
   "ScriptFingerprintPatterns",
   "ExtraFingerprintPaths",
+  "VolatileScriptConfigKeys",
   "DisableTxRebuild",
   "JsiChannelPath",
   "ExtraSourceUrls",

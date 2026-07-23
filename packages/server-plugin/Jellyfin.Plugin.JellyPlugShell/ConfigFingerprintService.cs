@@ -48,7 +48,11 @@ public sealed record ConfigFingerprint(string Epoch, string Web, string Shell, s
 ///              cover JS-Injector + JellyfinEnhanced), plus operator-listed
 ///              extra paths. Our own plugin config XML is excluded — this
 ///              plugin's toggles never change what a TV downloads (the shell
-///              group already covers the served shell bytes).
+///              group already covers the served shell bytes). Plugin-config
+///              XMLs hash with the configured VOLATILE leaf elements stripped
+///              (JELA-139): JellyfinEnhanced rewrites its cache-clear
+///              timestamps on its own, and hashing them churned the epoch —
+///              one spurious (safe) resume reload fleet-wide per churn.
 ///   branding — the server branding config (custom CSS + splashscreen toggle
 ///              live in branding.xml under the configuration dir).
 ///
@@ -166,7 +170,7 @@ public class ConfigFingerprintService
             {
                 var files = EnumerateCoveredFiles(config);
                 var signature = PrescanSignature(files);
-                var computed = Compute(files, cancellationToken);
+                var computed = Compute(files, VolatileKeyRegexes(config.VolatileScriptConfigKeys), cancellationToken);
 
                 lock (_sync)
                 {
@@ -222,7 +226,7 @@ public class ConfigFingerprintService
                 var signature = PrescanSignature(files);
                 if (_cached == null || signature != _prescanSignature)
                 {
-                    _cached = Compute(files);
+                    _cached = Compute(files, VolatileKeyRegexes(config.VolatileScriptConfigKeys));
                     _prescanSignature = signature;
                 }
 
@@ -433,7 +437,7 @@ public class ConfigFingerprintService
         return Sha256Hex(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
     }
 
-    private ConfigFingerprint Compute(List<CoveredFile> files, CancellationToken cancellationToken = default)
+    private ConfigFingerprint Compute(List<CoveredFile> files, List<Regex> volatileKeyRes, CancellationToken cancellationToken = default)
     {
         var groups = new Dictionary<string, List<(string Label, string Sha)>>(StringComparer.Ordinal)
         {
@@ -456,6 +460,16 @@ public class ConfigFingerprintService
                 if (string.Equals(f.Label, "shell/tx-manifest.json", StringComparison.Ordinal))
                 {
                     sha = NormalizedTxManifestSha(f.Path);
+                }
+                else if (f.Label.StartsWith("scripts/config/", StringComparison.Ordinal))
+                {
+                    var info = new FileInfo(f.Path);
+                    if (!info.Exists || info.Length > MaxHashedFileBytes)
+                    {
+                        continue;
+                    }
+
+                    sha = NormalizedScriptConfigSha(File.ReadAllBytes(f.Path), volatileKeyRes);
                 }
                 else
                 {
@@ -500,6 +514,55 @@ public class ConfigFingerprintService
             .Select(e => e.Label + "\0" + e.Sha + "\n")
             .OrderBy(l => l, StringComparer.Ordinal);
         return Sha256Hex(Encoding.UTF8.GetBytes(string.Concat(lines)));
+    }
+
+    /// <summary>
+    /// JELA-139: element-strip regexes for the configured volatile keys.
+    /// Each matches one LEAF element — `&lt;Key&gt;text&lt;/Key&gt;` or
+    /// `&lt;Key/&gt;`, optionally with attributes — and nothing else. `[^&lt;]*`
+    /// cannot cross into child elements, and a key name mentioned inside
+    /// element TEXT (e.g. a JS-Injector snippet quoting the tag) can never
+    /// match because literal `&lt;` is entity-escaped in XML content.
+    /// </summary>
+    public static List<Regex> VolatileKeyRegexes(string? keys)
+    {
+        var list = new List<Regex>();
+        foreach (var line in SplitLines(keys))
+        {
+            var name = Regex.Escape(line);
+            list.Add(new Regex(
+                "<" + name + "(?:\\s[^>]*)?(?:/>|>[^<]*</" + name + "\\s*>)",
+                RegexOptions.IgnoreCase | RegexOptions.ECMAScript));
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// JELA-139: plugin-config XMLs hash with the configured volatile leaf
+    /// elements stripped — JellyfinEnhanced rewrites its cache-clear
+    /// timestamps (ClearTranslationCacheTimestamp / ClearLocalStorageTimestamp)
+    /// without any operator config change, and raw bytes would churn the
+    /// epoch (= one spurious resume reload per TV per churn). Every other
+    /// byte still feeds the hash, so real config changes keep moving the
+    /// epoch. The mtime bump from a volatile-only rewrite still triggers a
+    /// pre-scan re-hash, but the re-hash lands on the same epoch — no TV
+    /// traffic results.
+    /// </summary>
+    public static string NormalizedScriptConfigSha(byte[] bytes, IReadOnlyList<Regex> volatileKeyRes)
+    {
+        if (volatileKeyRes.Count == 0)
+        {
+            return Sha256Hex(bytes);
+        }
+
+        var text = Encoding.UTF8.GetString(bytes);
+        foreach (var re in volatileKeyRes)
+        {
+            text = re.Replace(text, string.Empty);
+        }
+
+        return Sha256Hex(Encoding.UTF8.GetBytes(text));
     }
 
     /// <summary>

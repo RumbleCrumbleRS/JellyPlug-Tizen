@@ -63,6 +63,19 @@ public class PluginConfiguration : BasePluginConfiguration
     public string ExtraFingerprintPaths { get; set; } = string.Empty;
 
     /// <summary>
+    /// JELA-139: newline-separated XML element names stripped from
+    /// plugin-config XMLs before they feed the `scripts` fingerprint group.
+    /// These are runtime cache-clear signals the plugins' own client scripts
+    /// poll from config — they never change the bytes a TV downloads at boot,
+    /// but they rewrite on their own (JellyfinEnhanced bumps them without any
+    /// operator config change), so hashing them churns configEpoch and every
+    /// churn is one unnecessary resume reload on every TV. Defaults cover the
+    /// fielded JellyfinEnhanced volatile keys (2026-07 audit of the live
+    /// config found exactly these two; JS-Injector has none).
+    /// </summary>
+    public string VolatileScriptConfigKeys { get; set; } = "ClearTranslationCacheTimestamp\nClearLocalStorageTimestamp";
+
+    /// <summary>
     /// JELA-30: cap on retained boot-ring records in the diag store
     /// (diag/rings.ndjson under the server data dir). Oldest rings are pruned
     /// once the store grows past this, bounding disk and a hostile TV's ability

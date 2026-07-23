@@ -64,6 +64,14 @@
                                 Extra absolute files or directories to fold into the scripts hash.
                             </div>
                         </div>
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="VolatileScriptConfigKeys" label="Volatile script-config keys (one XML element name per line)" rows="3" style="resize: vertical;"></textarea>
+                            <div class="fieldDescription">
+                                Leaf elements stripped from plugin-config XMLs before hashing — runtime cache-clear
+                                timestamps that rewrite on their own and would otherwise churn configEpoch (one
+                                spurious resume reload per TV per churn). Real config changes still move the epoch.
+                            </div>
+                        </div>
                     </div>
 
                     <div class="verticalSection">
@@ -128,6 +136,7 @@
                     { id: 'DisableConfigFingerprint', type: 'bool' },
                     { id: 'ScriptFingerprintPatterns', type: 'text' },
                     { id: 'ExtraFingerprintPaths', type: 'text' },
+                    { id: 'VolatileScriptConfigKeys', type: 'text' },
                     { id: 'DisableTxRebuild', type: 'bool' },
                     { id: 'JsiChannelPath', type: 'text' },
                     { id: 'ExtraSourceUrls', type: 'text' },
