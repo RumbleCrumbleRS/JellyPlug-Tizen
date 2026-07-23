@@ -82,4 +82,33 @@ public class PluginConfiguration : BasePluginConfiguration
     /// to inflate the file.
     /// </summary>
     public int DiagMaxRings { get; set; } = 5000;
+
+    /// <summary>
+    /// JELA-141 (C5/WS-5): fleet default for the Lite canvas home. When any
+    /// Lite*DefaultOn flag is true, /shell/manifest.json carries an additive
+    /// `flagDefaults` map ({"jellyfin.shell.liteEnabled":"1", ...}); shells
+    /// with NO explicit device-local value for a key adopt the served default
+    /// one boot later (stale-one-boot, same contract as the Lite byte cache).
+    /// An explicit device-local "1"/"0" always wins, so QA opt-ins and
+    /// per-device kills survive fleet flips. Turning a flag back off here (or
+    /// rolling the plugin back to a version without the field — absent field
+    /// clears the TVs' cached defaults) is the fleet kill switch: TVs revert
+    /// on their next manifest read + boot. All three false = the field is
+    /// omitted and the manifest stays byte-identical to pre-JELA-141.
+    /// </summary>
+    public bool LiteDefaultOn { get; set; }
+
+    /// <summary>
+    /// JELA-141: fleet default for jellyfin.lite.native (AVPlay native
+    /// playback fork). Meaningful only alongside LiteDefaultOn — see its
+    /// remarks for the adoption/kill contract.
+    /// </summary>
+    public bool LiteNativeDefaultOn { get; set; }
+
+    /// <summary>
+    /// JELA-141/JELA-152: fleet default for jellyfin.lite.subs (Lite-side
+    /// External-srt cue engine). Stays false for the C5 rollout — the flip
+    /// rides the JELA-152 real-panel gate. Same contract as LiteDefaultOn.
+    /// </summary>
+    public bool LiteSubsDefaultOn { get; set; }
 }

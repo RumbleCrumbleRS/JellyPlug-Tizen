@@ -44,8 +44,10 @@ public class ShellController : ControllerBase
     /// <summary>
     /// JELA-58: dynamic — carries the additive configEpoch/components fields
     /// unless the operator kill switch (DisableConfigFingerprint) is on or
-    /// the fingerprint is unavailable, in which case the legacy static bytes
-    /// are served verbatim (today's behavior, both compat directions free).
+    /// the fingerprint is unavailable. JELA-141 adds the additive
+    /// `flagDefaults` map whenever any Lite*DefaultOn config flag is set.
+    /// With neither extra applicable the legacy static bytes are served
+    /// verbatim (pre-JELA-58 behavior, both compat directions free).
     /// </summary>
     [AllowAnonymous]
     [HttpGet("manifest.json")]
@@ -54,16 +56,14 @@ public class ShellController : ControllerBase
         Response.Headers.CacheControl = "no-cache";
 
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        ConfigFingerprint? fingerprint = null;
         if (!config.DisableConfigFingerprint)
         {
-            var fingerprint = _fingerprint.TryGetFingerprint(config);
-            if (fingerprint != null)
-            {
-                return File(_drop.BuildManifestJson(fingerprint), "application/json");
-            }
+            fingerprint = _fingerprint.TryGetFingerprint(config);
         }
 
-        return File(_drop.ManifestJson, "application/json");
+        var flagDefaults = ShellDropService.LiteFlagDefaults(config);
+        return File(_drop.BuildManifestJson(fingerprint, flagDefaults), "application/json");
     }
 
     [AllowAnonymous]

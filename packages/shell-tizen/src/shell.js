@@ -6126,7 +6126,27 @@
   // (avplay privilege + webapis.js include) is on the panels.
   var LITE_FLAG_KEY = "jellyfin.shell.liteEnabled";
   var LITE_NATIVE_FLAG_KEY = "jellyfin.lite.native";
+  // JELA-152: consumed by the lite bytes (Lite.subsEnabled), listed here so
+  // the JELA-141 defaults filter below recognizes it on the wire.
+  var LITE_SUBS_FLAG_KEY = "jellyfin.lite.subs";
   var LITE_REC_KEY = "jellyfin.lite.body";
+  // JELA-141 (C5/WS-5): fleet flag defaults. The manifest's additive
+  // `flagDefaults` map ({"jellyfin.shell.liteEnabled":"1", ...}) is cached
+  // one boot behind (stale-one-boot, the Lite byte-cache contract) and
+  // consulted ONLY when the device has no explicit value for a key —
+  // explicit "1"/"0" always wins, so QA opt-ins and per-device kills
+  // survive fleet flips. Adoption rides liteRestock's per-boot manifest
+  // fetch when Lite runs (that is the fleet KILL path: default revoked ->
+  // next boot is SPA again) plus one deferred post-settle fetch when it
+  // does not (the turn-ON path, off the boot path by construction). A
+  // reachable manifest WITHOUT the field clears the cache — rolling the
+  // server plugin back to a version predating flagDefaults is itself a
+  // working kill switch — while an unreachable manifest keeps it, so
+  // offline boots keep their behavior. QA surface: window.__shellLiteDef.
+  var LITE_DEFAULTS_KEY = "jellyfin.shell.flagDefaults";
+  // Distinct from every bg-warm delay (5000/20000/45000) so timer-driven QA
+  // can address it unambiguously; past the 13.4-15.8s SPA settle window.
+  var LITE_DEFAULTS_SYNC_MS = 25000;
   var LITE_RESTOCK_MS = [0, 12000, 30000];
   // M2 handoff pre-warm: fire after Lite settles (off the boot path),
   // expire so a long-lived Lite session never adopts a stale index.html.
@@ -6142,19 +6162,103 @@
   var LITE_BGWARM_IDLE_MS = 5000;
   var LITE_BGWARM_LINGER_MS = 20000;
   var LITE_BGWARM_TIMEOUT_MS = 45000;
-  function liteWanted() {
+  // Boot-scoped defaults map (null until liteDefaultsInit ran, or when the
+  // cached record is absent/invalid/for another server). Refreshed in place
+  // by a same-boot adopt so a fleet kill takes effect on the NEXT OK, not
+  // just the next boot.
+  var liteDefaults = null;
+  function liteDefaultsInit(serverUrl) {
+    liteDefaults = null;
+    var d = (window.__shellLiteDef = { st: "none" });
     try {
-      return localStorage.getItem(LITE_FLAG_KEY) === "1";
+      var rec = JSON.parse(localStorage.getItem(LITE_DEFAULTS_KEY));
+      if (
+        rec &&
+        rec.v === 1 &&
+        rec.o === serverUrl &&
+        rec.f &&
+        typeof rec.f === "object"
+      ) {
+        liteDefaults = rec.f;
+        d.st = "cached";
+        d.f = rec.f;
+      }
+    } catch (_) {}
+  }
+  function liteAdoptDefaults(m, serverUrl) {
+    // Feed any freshly-fetched manifest object here; a failed fetch
+    // (m == null) never touches the cache. Only the three known keys are
+    // accepted, values coerced to "0"/"1" — a compromised or garbled map
+    // can flip Lite flags and nothing else.
+    if (!m) return;
+    var d = window.__shellLiteDef || (window.__shellLiteDef = {});
+    try {
+      var fd = m.flagDefaults;
+      if (!fd || typeof fd !== "object") {
+        localStorage.removeItem(LITE_DEFAULTS_KEY);
+        liteDefaults = null;
+        d.st = "cleared";
+        d.f = null;
+        return;
+      }
+      var keys = [LITE_FLAG_KEY, LITE_NATIVE_FLAG_KEY, LITE_SUBS_FLAG_KEY];
+      var f = {};
+      for (var i = 0; i < keys.length; i++) {
+        if (fd[keys[i]] !== undefined) {
+          f[keys[i]] = String(fd[keys[i]]) === "1" ? "1" : "0";
+        }
+      }
+      localStorage.setItem(
+        LITE_DEFAULTS_KEY,
+        JSON.stringify({ v: 1, o: serverUrl, f: f, ts: +new Date() }),
+      );
+      liteDefaults = f;
+      d.st = "adopted";
+      d.f = f;
+    } catch (_) {}
+  }
+  function liteDefaultsSyncSoon(serverUrl) {
+    // The turn-ON half of the JELA-141 contract: when Lite is NOT running,
+    // no liteRestock manifest fetch happens, so one deferred read per boot
+    // keeps the cached defaults tracking the server. Parked well past SPA
+    // settle so the ~1 KB GET never competes with the boot path.
+    if (window.__shellLiteDefSync) return;
+    window.__shellLiteDefSync = 1;
+    setTimeout(function () {
+      try {
+        fetch(serverUrl + "/shell/manifest.json?__fd=" + Date.now(), {
+          credentials: "omit",
+          cache: "no-store",
+        })
+          .then(function (r) {
+            return r && r.ok ? r.json() : null;
+          })
+          .then(function (m) {
+            liteAdoptDefaults(m, serverUrl);
+          })
+          .catch(function () {});
+      } catch (_) {}
+    }, LITE_DEFAULTS_SYNC_MS);
+  }
+  function liteFlagWanted(key) {
+    // Precedence: explicit device-local "1"/"0" -> that; anything else ->
+    // the fleet default cached from the manifest (absent record = off).
+    // Unreadable storage stays hard-off, matching the pre-JELA-141 shape.
+    var v = null;
+    try {
+      v = localStorage.getItem(key);
     } catch (_) {
       return false;
     }
+    if (v === "1") return true;
+    if (v === "0") return false;
+    return !!liteDefaults && liteDefaults[key] === "1";
+  }
+  function liteWanted() {
+    return liteFlagWanted(LITE_FLAG_KEY);
   }
   function liteNativeWanted() {
-    try {
-      return localStorage.getItem(LITE_NATIVE_FLAG_KEY) === "1";
-    } catch (_) {
-      return false;
-    }
+    return liteFlagWanted(LITE_NATIVE_FLAG_KEY);
   }
   function liteReadRec() {
     try {
@@ -6198,6 +6302,10 @@
           return r && r.ok ? r.json() : null;
         })
         .then(function (m) {
+          // JELA-141: every restock manifest read also refreshes the fleet
+          // flag defaults — with Lite running this is the fetch that lands
+          // a fleet kill (or a native/subs flip) for the next boot.
+          liteAdoptDefaults(m, serverUrl);
           var sha = m && m.liteSha256;
           if (!sha || sha === haveSha) {
             // Up to date, or the server plugin predates Lite — stop quietly.
@@ -6240,7 +6348,13 @@
     setTimeout(run, LITE_RESTOCK_MS[0]);
   }
   function maybeBootLite(serverUrl) {
-    if (!liteWanted() || window.__shellLiteHandled) return false;
+    liteDefaultsInit(serverUrl);
+    if (!liteWanted() || window.__shellLiteHandled) {
+      // SPA boot (flag off, or post-handoff re-entry): keep the cached
+      // defaults tracking the server with one deferred manifest read.
+      liteDefaultsSyncSoon(serverUrl);
+      return false;
+    }
     var d = (window.__shellLite = { st: "off" });
     var rec = liteReadRec();
     if (!rec) {

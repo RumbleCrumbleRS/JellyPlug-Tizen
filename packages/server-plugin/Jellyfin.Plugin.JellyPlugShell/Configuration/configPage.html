@@ -100,6 +100,45 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">Lite rollout (JELA-141)</h2>
+                        <div class="fieldDescription" style="margin-bottom: 0.5em;">
+                            Fleet defaults for the JellyPlug Lite canvas home. TVs with no explicit device-local
+                            value adopt a served default one boot later; an explicit device value always wins.
+                            Unchecking a box (fleet kill switch) reverts those TVs on their next manifest read + boot.
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="LiteDefaultOn" />
+                                <span>Lite home default-ON (jellyfin.shell.liteEnabled)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Fleet boots the ~2s Lite canvas home instead of the SPA home; OK/Back hands off
+                                to the full SPA, which stays intact underneath as the fallback.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="LiteNativeDefaultOn" />
+                                <span>Native playback default-ON (jellyfin.lite.native)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                OK on a card plays via the native AVPlay pipeline where the device profile allows;
+                                declines (including all subtitle-selecting sessions, by design) fall through to the SPA.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="LiteSubsDefaultOn" />
+                                <span>Native subtitles default-ON (jellyfin.lite.subs)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Lite-rendered External-srt cues in native playback. Leave OFF until the JELA-152
+                                real-panel gate passes.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">Boot diagnostics</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -141,6 +180,9 @@
                     { id: 'JsiChannelPath', type: 'text' },
                     { id: 'ExtraSourceUrls', type: 'text' },
                     { id: 'TransformTimeoutSeconds', type: 'number' },
+                    { id: 'LiteDefaultOn', type: 'bool' },
+                    { id: 'LiteNativeDefaultOn', type: 'bool' },
+                    { id: 'LiteSubsDefaultOn', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];

@@ -79,17 +79,55 @@ public class ShellDropService
     /// <summary>
     /// JELA-58: manifest.json with the ADDITIVE config-fingerprint fields
     /// appended after the legacy keys — `configEpoch` plus per-group
-    /// `components`. Old TVs JSON.parse and ignore the extras; nothing in the
-    /// legacy schema changes shape or value.
+    /// `components`. JELA-141 adds the equally-additive `flagDefaults` map
+    /// after them. Old TVs JSON.parse and ignore the extras; nothing in the
+    /// legacy schema changes shape or value, and with neither extra present
+    /// the exact legacy bytes are returned.
     /// </summary>
-    public byte[] BuildManifestJson(ConfigFingerprint fingerprint)
+    public byte[] BuildManifestJson(ConfigFingerprint? fingerprint, Dictionary<string, string>? flagDefaults = null)
     {
-        var manifest = new Dictionary<string, object?>(_baseManifest)
+        if (fingerprint == null && flagDefaults == null)
         {
-            ["configEpoch"] = fingerprint.Epoch,
-            ["components"] = fingerprint.ComponentsDictionary(),
-        };
+            return ManifestJson;
+        }
+
+        var manifest = new Dictionary<string, object?>(_baseManifest);
+        if (fingerprint != null)
+        {
+            manifest["configEpoch"] = fingerprint.Epoch;
+            manifest["components"] = fingerprint.ComponentsDictionary();
+        }
+
+        if (flagDefaults != null)
+        {
+            manifest["flagDefaults"] = flagDefaults;
+        }
+
         return JsonSerializer.SerializeToUtf8Bytes(manifest);
+    }
+
+    /// <summary>
+    /// JELA-141: the additive `flagDefaults` manifest map, or null when every
+    /// Lite default is off — null keeps the served manifest byte-identical to
+    /// pre-JELA-141, and an ABSENT field is itself meaningful on the TV side
+    /// (shells clear their cached defaults record, so rolling the plugin back
+    /// to a version without the field is a working fleet kill switch). All
+    /// three keys are always emitted together with explicit "0"/"1" values so
+    /// a flip of one flag can never be misread as "no opinion" on another.
+    /// </summary>
+    public static Dictionary<string, string>? LiteFlagDefaults(PluginConfiguration config)
+    {
+        if (!config.LiteDefaultOn && !config.LiteNativeDefaultOn && !config.LiteSubsDefaultOn)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, string>
+        {
+            ["jellyfin.shell.liteEnabled"] = config.LiteDefaultOn ? "1" : "0",
+            ["jellyfin.lite.native"] = config.LiteNativeDefaultOn ? "1" : "0",
+            ["jellyfin.lite.subs"] = config.LiteSubsDefaultOn ? "1" : "0",
+        };
     }
 
     /// <summary>The official @babel/standalone UMD source used for server-side transforms.</summary>

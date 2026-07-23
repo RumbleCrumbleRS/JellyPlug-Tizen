@@ -46,6 +46,16 @@
  *     (bgwarm: warming->warm->done, bgwarmMs on load); the iframe is
  *     dropped after a post-load linger, on a load-timeout, or the
  *     instant a handoff starts (never competes with the real SPA boot)
+ *   - JELA-141 fleet flag defaults: with NO explicit device value the
+ *     manifest's cached flagDefaults map decides (default-ON boots Lite,
+ *     native fork included); explicit "1"/"0" always wins; foreign-origin
+ *     records are ignored; a flag-off boot adopts served defaults via one
+ *     deferred ?__fd= manifest read (stale-one-boot turn-ON); a live boot's
+ *     restock read lands a fleet kill (all-0 map -> same-boot native
+ *     refusal + next boot SPA); a reachable manifest WITHOUT the field
+ *     clears the cache (plugin rollback = kill switch) while an
+ *     unreachable one keeps it; values are coerced to "0"/"1" and unknown
+ *     keys dropped.
  * Plus static pins: the flag / record-key / manifest-key literals ship in
  * the committed retail shell.min.js and do NOT ship in the baked
  * boot-shell.min.js (the divergence is deliberate).
@@ -986,7 +996,186 @@ async function main() {
     );
   }
 
-  // 10. static pins on the committed blobs
+  // 10. JELA-141 fleet flag defaults — precedence, adoption, kill switch.
+  const DEF_REC = (o, f) => JSON.stringify({ v: 1, o, f, ts: 1 });
+  const ALL_ON = {
+    "jellyfin.shell.liteEnabled": "1",
+    "jellyfin.lite.native": "1",
+    "jellyfin.lite.subs": "1",
+  };
+
+  // 10a. no explicit flag + cached default ON -> Lite boots (the flip).
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.flagDefaults": DEF_REC("http://srv", ALL_ON),
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    check("default-on: Lite boots with no explicit flag", env.boot() === true);
+    check("default-on: st live", env.ctx.__shellLite.st === "live");
+    check(
+      "default-on: diag reports cached defaults",
+      env.ctx.__shellLiteDef.st === "cached" &&
+        env.ctx.__shellLiteDef.f["jellyfin.shell.liteEnabled"] === "1",
+    );
+    // native default rides the same record: openNative takes the OK.
+    env.ctx.__liteNativeMode = "take";
+    env.ctx.__liteApp.onOpen({ id: "it1", name: "X" });
+    check(
+      "default-on: native fork honored via default",
+      env.ctx.__liteApp.nativeCalls.length === 1 &&
+        env.ctx.__shellLite.native === 1 &&
+        env.ctx.__shellLite.st === "live",
+    );
+  }
+
+  // 10b. explicit device-local "0" beats a cached default ON (device kill).
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.liteEnabled": "0",
+        "jellyfin.shell.flagDefaults": DEF_REC("http://srv", ALL_ON),
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+    });
+    check("explicit 0: SPA path despite default ON", env.boot() === false);
+    check("explicit 0: no Lite diag", env.ctx.__shellLite === undefined);
+  }
+
+  // 10c. cached default for ANOTHER server is ignored.
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.flagDefaults": DEF_REC("http://other", ALL_ON),
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+    });
+    check("foreign origin: SPA path", env.boot() === false);
+    check(
+      "foreign origin: defaults not loaded",
+      env.ctx.__shellLiteDef.st === "none",
+    );
+  }
+
+  // 10d. flag off -> one deferred sync adopts the served defaults
+  //      (stale-one-boot turn-ON path), values coerced, unknown keys dropped.
+  {
+    const env = mkEnv({
+      manifest: {
+        flagDefaults: {
+          "jellyfin.shell.liteEnabled": 1,
+          "jellyfin.lite.native": "junk",
+          "jellyfin.evil.key": "1",
+        },
+      },
+    });
+    check("sync: SPA path this boot", env.boot() === false);
+    const sync = env.timers.find((t) => t.ms === 25000);
+    check("sync: deferred timer armed at 25000", !!sync);
+    env.flushTimers();
+    await drain();
+    check(
+      "sync: fetch used the ?__fd= buster",
+      env.fetchLog.length === 1 && env.fetchLog[0].indexOf("?__fd=") > 0,
+    );
+    const rec = JSON.parse(env.store.get("jellyfin.shell.flagDefaults"));
+    check(
+      "sync: adopted + coerced + filtered",
+      rec.v === 1 &&
+        rec.o === "http://srv" &&
+        rec.f["jellyfin.shell.liteEnabled"] === "1" &&
+        rec.f["jellyfin.lite.native"] === "0" &&
+        !("jellyfin.evil.key" in rec.f),
+    );
+    check(
+      "sync: diag adopted",
+      env.ctx.__shellLiteDef.st === "adopted",
+    );
+    // Second boot in the same store: the adopted default now boots Lite.
+    const env2 = mkEnv({
+      storage: Object.fromEntries(env.store),
+      manifest: { liteSha256: SHA },
+    });
+    env2.store.set("jellyfin.lite.body", mkRec(GOOD_BODY, SHA));
+    check("sync: NEXT boot goes Lite (stale-one-boot)", env2.boot() === true);
+  }
+
+  // 10e. fleet kill: live Lite boot + manifest defaults now all-0 ->
+  //      restock adopts them and the next boot is SPA again.
+  {
+    const store = {
+      "jellyfin.shell.flagDefaults": DEF_REC("http://srv", ALL_ON),
+      "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+    };
+    const env = mkEnv({
+      storage: store,
+      manifest: {
+        liteSha256: SHA,
+        flagDefaults: {
+          "jellyfin.shell.liteEnabled": "0",
+          "jellyfin.lite.native": "0",
+          "jellyfin.lite.subs": "0",
+        },
+      },
+    });
+    check("kill: boots Lite on the stale default", env.boot() === true);
+    env.flushTimers(); // restock manifest read
+    await drain();
+    const rec = JSON.parse(env.store.get("jellyfin.shell.flagDefaults"));
+    check(
+      "kill: restock adopted the all-0 defaults",
+      rec.f["jellyfin.shell.liteEnabled"] === "0",
+    );
+    // Same-boot effect: the native fork must already refuse.
+    env.ctx.__liteNativeMode = "take";
+    env.ctx.__liteApp.onOpen({ id: "it1", name: "X" });
+    check(
+      "kill: native fork off same-boot (openNative not consulted)",
+      env.ctx.__liteApp.nativeCalls.length === 0,
+    );
+    const env2 = mkEnv({ storage: Object.fromEntries(env.store) });
+    check("kill: NEXT boot is SPA", env2.boot() === false);
+  }
+
+  // 10f. manifest reachable WITHOUT the field -> cached record cleared
+  //      (plugin rollback is a working kill switch); unreachable -> kept.
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.flagDefaults": DEF_REC("http://srv", ALL_ON),
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifest: { liteSha256: SHA },
+    });
+    check("absent-field: boots on stale default", env.boot() === true);
+    env.flushTimers();
+    await drain();
+    check(
+      "absent-field: cached defaults cleared",
+      !env.store.has("jellyfin.shell.flagDefaults") &&
+        env.ctx.__shellLiteDef.st === "cleared",
+    );
+  }
+  {
+    const env = mkEnv({
+      storage: {
+        "jellyfin.shell.flagDefaults": DEF_REC("http://srv", ALL_ON),
+        "jellyfin.lite.body": mkRec(GOOD_BODY, SHA),
+      },
+      manifestFails: true,
+    });
+    env.boot();
+    env.flushTimers();
+    await drain();
+    check(
+      "unreachable: cached defaults kept (offline boots keep behavior)",
+      env.store.has("jellyfin.shell.flagDefaults"),
+    );
+  }
+
+  // 11. static pins on the committed blobs
   {
     const retailMin = fs.readFileSync(RETAIL_MIN, "utf8");
     const bootMin = fs.readFileSync(BOOT_MIN, "utf8");
@@ -994,6 +1183,7 @@ async function main() {
       "jellyfin.shell.liteEnabled",
       "jellyfin.lite.native",
       "jellyfin.lite.body",
+      "jellyfin.shell.flagDefaults",
       "liteSha256",
       "/shell/lite.min.js?v=",
     ]) {

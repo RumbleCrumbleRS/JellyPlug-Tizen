@@ -1109,17 +1109,31 @@
   // ship gate (a user-selected sub VISIBLY renders in native playback
   // on a real panel) has to pass before the flag flips. Probed once
   // per boot, absent/throwing storage ⇒ off; tests override via
-  // Lite.subsEnabled._v.
+  // Lite.subsEnabled._v. JELA-141: with no explicit device value
+  // ("1"/"0" always wins) the flag falls back to the fleet default the
+  // shell cached from the manifest's flagDefaults map, so the subs
+  // default-ON sequencing rides the same lever as liteEnabled/native.
   Lite.SUBS_FLAG_KEY = "jellyfin.lite.subs";
+  Lite.DEFAULTS_KEY = "jellyfin.shell.flagDefaults";
   Lite.subsEnabled = function () {
     if (Lite.subsEnabled._v !== undefined) {
       return Lite.subsEnabled._v;
     }
     var v = false;
     try {
-      v =
-        !!global.localStorage &&
-        global.localStorage.getItem(Lite.SUBS_FLAG_KEY) === "1";
+      var raw =
+        global.localStorage && global.localStorage.getItem(Lite.SUBS_FLAG_KEY);
+      if (raw === "1") {
+        v = true;
+      } else if (raw !== "0" && global.localStorage) {
+        var rec = JSON.parse(global.localStorage.getItem(Lite.DEFAULTS_KEY));
+        v = !!(
+          rec &&
+          rec.v === 1 &&
+          rec.f &&
+          rec.f[Lite.SUBS_FLAG_KEY] === "1"
+        );
+      }
     } catch (_s) {
       v = false;
     }
