@@ -85,6 +85,16 @@
                                 Static /shell/ assets keep serving; TVs fall back to on-device Babel (21&ndash;42s on Tizen 5.0).
                             </div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableTxDynScan" />
+                                <span>Disable dynamic-module discovery scan</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Skips enumerating the module scripts that static sources inject at runtime; those
+                                modules then miss the drop and fresh boots lazy-load Babel on the TV.
+                            </div>
+                        </div>
                         <div class="inputContainer">
                             <input is="emby-input" type="text" id="JsiChannelPath" label="Snippet channel path" />
                             <div class="fieldDescription">
@@ -177,6 +187,7 @@
                     { id: 'ExtraFingerprintPaths', type: 'text' },
                     { id: 'VolatileScriptConfigKeys', type: 'text' },
                     { id: 'DisableTxRebuild', type: 'bool' },
+                    { id: 'DisableTxDynScan', type: 'bool' },
                     { id: 'JsiChannelPath', type: 'text' },
                     { id: 'ExtraSourceUrls', type: 'text' },
                     { id: 'TransformTimeoutSeconds', type: 'number' },

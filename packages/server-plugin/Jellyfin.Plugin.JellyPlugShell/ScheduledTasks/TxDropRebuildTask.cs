@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using MediaBrowser.Controller;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -129,8 +130,174 @@ public class TxDropRebuildTask : IScheduledTask
 
         progress.Report(35);
         var timeout = TimeSpan.FromSeconds(Math.Max(30, config.TransformTimeoutSeconds));
-        var entries = await _builder.RebuildAsync(sources, timeout, cancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("tx-drop rebuild finished: {Entries} manifest entries from {Sources} sources", entries, sources.Count);
+        var result = await _builder.RebuildAsync(sources, timeout, cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("tx-drop rebuild finished: {Entries} manifest entries from {Sources} sources", result.EntryCount, sources.Count);
+
+        // JELA-186: the static bodies above inject further module scripts at
+        // runtime; a fresh boot that drop-MISSES one of them lazy-loads Babel
+        // (~3.13 MB) on the TV. Scan the FINAL (device-visible) bodies for
+        // those URLs — mirror of the seed's __txScrapeBodies, plugin-agnostic
+        // by construction — fetch them and lower them into the drop too, so
+        // dynamic injection drop-HITs and Babel never loads.
+        if (!config.DisableTxDynScan)
+        {
+            progress.Report(60);
+            var discovered = await DiscoverDynamicSourcesAsync(http, result.FinalBodies, seen, cancellationToken).ConfigureAwait(false);
+            if (discovered.Count > 0)
+            {
+                progress.Report(75);
+                var dynResult = await _builder.RebuildAsync(discovered, timeout, cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "tx-drop dynamic scan: {Discovered} module bodies discovered; manifest now {Entries} entries",
+                    discovered.Count,
+                    dynResult.EntryCount);
+            }
+        }
+
         progress.Report(100);
+    }
+
+    /// <summary>
+    /// Fetch the dynamic module bodies the given final static bodies would
+    /// inject at runtime. URL discovery is regex-driven (no plugin names,
+    /// JEL-181/203/240): scrape each body, resolve candidates against the
+    /// body's own URL, probe candidate dirs with the group's first name and
+    /// commit to the first dir that answers with JS (rank order equals the
+    /// seed probe's lowest-rank-success). Capped at 200 fetch attempts.
+    /// </summary>
+    private async Task<List<TxSource>> DiscoverDynamicSourcesAsync(
+        HttpClient http,
+        IReadOnlyList<TxSource> finals,
+        HashSet<string> seenUrls,
+        CancellationToken cancellationToken)
+    {
+        const int FetchCap = 200;
+        var outSources = new List<TxSource>();
+        var attempts = 0;
+
+        string? Norm(Uri baseUri, string u)
+        {
+            if (!Uri.TryCreate(baseUri, u, out var abs) || (abs.Scheme != "http" && abs.Scheme != "https"))
+            {
+                return null;
+            }
+
+            if (!string.Equals(abs.GetLeftPart(UriPartial.Authority), baseUri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
+            {
+                return null; // same-origin only, like the seed's norm()
+            }
+
+            if (Regex.IsMatch(abs.AbsolutePath, "\\.bundle\\.js$", RegexOptions.IgnoreCase))
+            {
+                return null;
+            }
+
+            var s = abs.ToString();
+            return seenUrls.Add(s) ? s : null;
+        }
+
+        async Task<string?> TryFetchAsync(string abs)
+        {
+            if (attempts >= FetchCap)
+            {
+                return null;
+            }
+
+            attempts++;
+            try
+            {
+                var text = await http.GetStringAsync(abs, cancellationToken).ConfigureAwait(false);
+
+                // Probing candidate dirs can 200 an HTML SPA-fallback page; a
+                // non-JS body must not win a probe or poison the drop.
+                return Regex.IsMatch(text, "^\\s*<") ? null : text;
+            }
+            catch (HttpRequestException)
+            {
+                return null; // expected: dir probes miss
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null; // per-request timeout
+            }
+        }
+
+        foreach (var f in finals)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attempts >= FetchCap)
+            {
+                break;
+            }
+
+            if (!Uri.TryCreate(f.From, UriKind.Absolute, out var baseUri) || (baseUri.Scheme != "http" && baseUri.Scheme != "https"))
+            {
+                continue;
+            }
+
+            var scraped = TxDropBuilder.ScrapeDynamicRefs(f.Text, f.From);
+            foreach (var p in scraped.Exact)
+            {
+                var abs = Norm(baseUri, p);
+                if (abs == null)
+                {
+                    continue;
+                }
+
+                var text = await TryFetchAsync(abs).ConfigureAwait(false);
+                if (text != null)
+                {
+                    outSources.Add(new TxSource(abs, text));
+                }
+            }
+
+            foreach (var g in scraped.Groups)
+            {
+                string? win = null;
+                foreach (var d in g.Dirs)
+                {
+                    var abs = Norm(baseUri, d + "/" + g.Names[0]);
+                    if (abs == null)
+                    {
+                        continue;
+                    }
+
+                    var text = await TryFetchAsync(abs).ConfigureAwait(false);
+                    if (text != null)
+                    {
+                        outSources.Add(new TxSource(abs, text));
+                        win = d;
+                        break;
+                    }
+                }
+
+                if (win == null)
+                {
+                    continue;
+                }
+
+                for (var i = 1; i < g.Names.Count; i++)
+                {
+                    var abs = Norm(baseUri, win + "/" + g.Names[i]);
+                    if (abs == null)
+                    {
+                        continue;
+                    }
+
+                    var text = await TryFetchAsync(abs).ConfigureAwait(false);
+                    if (text != null)
+                    {
+                        outSources.Add(new TxSource(abs, text));
+                    }
+                }
+            }
+        }
+
+        if (attempts >= FetchCap)
+        {
+            _logger.LogWarning("tx-drop dynamic scan hit the {Cap}-fetch cap; discovery may be incomplete", FetchCap);
+        }
+
+        return outSources;
     }
 }
