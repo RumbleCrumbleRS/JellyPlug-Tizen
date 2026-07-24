@@ -3206,7 +3206,23 @@
     } catch (_) {}
   }
   var BABEL_NEEDED_KEY = "jellyfin.shell.legacy.babelNeeded",
-    BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak";
+    BABEL_UNUSED_STREAK_KEY = "jellyfin.shell.legacy.babelUnusedStreak",
+    // JELA-187: sibling flag — set true when the static walk adopts a pre-
+    // lowered drop body (txDropResolve hit). Such a hit proves a static
+    // <script> on this server cannot run raw on this engine, yet the drop
+    // serves it without ever loading Babel, so BABEL_NEEDED_KEY stays
+    // unset. The JEL-1832 warm-boot string fast path used babelNeeded as
+    // its "every static parses raw" proxy; on a fully drop-covered server
+    // (JEL-621) that proxy is false-negative and warm replayed boots
+    // executed raw <script src> tags — every modern-syntax plugin died as
+    // a parse-time SyntaxError. maybeStringFastPath bails on this flag
+    // exactly like it bails on babelNeeded; the DOMParser walk then re-
+    // inlines lowered bodies from the version-keyed tx cache (zero network
+    // on unchanged tokens). Sticky like babelNeeded: a later cache-served
+    // walk reports cachedHits (not txDropHits) and cannot tell drop-
+    // lowered bodies from raw fast-path ones, so nothing may clear this
+    // short of an LS wipe.
+    DROP_NEEDED_KEY = "jellyfin.shell.legacy.dropNeeded";
   function markBabelNeeded() {
     try {
       localStorage.setItem(BABEL_NEEDED_KEY, "1");
@@ -3694,6 +3710,11 @@
               return null;
             }
             d.h++;
+            // JELA-187: a drop hit means this static body needs lowering —
+            // the warm-boot string fast path must never replay its raw src.
+            try {
+              localStorage.setItem(DROP_NEEDED_KEY, "1");
+            } catch (_) {}
             return body;
           })
           .catch(function () {
@@ -4676,6 +4697,25 @@
     try {
       babelNeeded = localStorage.getItem(BABEL_NEEDED_KEY) === "1";
     } catch (_) {}
+    // JELA-187: this bail existed in the TV shell but had been LOST in this
+    // hand-mirrored copy — babelNeeded was computed and never consulted, so
+    // the bootstrap fast path replayed raw <script src> tags even on
+    // servers whose statics provably need Babel. Restored to match
+    // shell.js exactly.
+    if (babelNeeded) return bail("babelNeeded");
+    // JELA-187: same reasoning for drop-lowered statics. A tx-drop hit on
+    // any prior walk proved at least one static body cannot run raw on
+    // this engine, but the drop serves it Babel-free so babelNeeded never
+    // trips. Replaying the cached index as-is would execute the raw
+    // <script src> (observed on-fleet: the JE loader, NotifySync and
+    // media-bar all die as SyntaxErrors on every warm replayed boot and
+    // the server's injected features silently vanish). Fall back to the
+    // DOMParser walk, which re-inlines from the version-keyed tx cache.
+    var dropNeeded = !1;
+    try {
+      dropNeeded = localStorage.getItem(DROP_NEEDED_KEY) === "1";
+    } catch (_) {}
+    if (dropNeeded) return bail("dropNeeded");
     // JEL-197: the JS-Injector snippet channel injects + transpiles public.js,
     // which only the DOMParser path can do. JEL-618: unless a fresh cached
     // channel body exists — then the fast path splices it inline before
