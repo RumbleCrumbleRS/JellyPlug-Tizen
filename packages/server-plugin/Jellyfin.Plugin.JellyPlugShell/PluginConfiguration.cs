@@ -28,6 +28,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public int TransformTimeoutSeconds { get; set; } = 600;
 
     /// <summary>
+    /// JELA-186: disable the dynamic-module discovery pass of the tx-drop
+    /// rebuild (static sources still rebuild). With the scan off, dynamic
+    /// modules drop-MISS and fresh boots lazy-load Babel on the TV instead.
+    /// </summary>
+    public bool DisableTxDynScan { get; set; }
+
+    /// <summary>
     /// JELA-30 (WS-C): refuse all opt-in boot-ring diag beacons at
     /// POST /shell/diag. Ingest is off on the TV by default (the shell only
     /// posts when localStorage["jellyfin.shell.diagBeacon"]==="1"), so this

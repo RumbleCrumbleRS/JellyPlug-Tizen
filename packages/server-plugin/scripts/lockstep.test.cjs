@@ -73,6 +73,36 @@ async function main() {
   }
   assert.deepStrictEqual(samples.map(csFnv), expected, "fnv1a parity");
 
+  // JELA-186: the dynamic-module scrape regexes must equal the builder's
+  // (which are themselves lockstep-guarded against the seed __txScrapeBodies
+  // literals by tx-drop-build.test.cjs).
+  assert.strictEqual(csConst("ScrapeRelSrc"), builder.SCRAPE_REL_SRC, "ScrapeRelSrc");
+  assert.strictEqual(csConst("ScrapeAbsSrc"), builder.SCRAPE_ABS_SRC, "ScrapeAbsSrc");
+  assert.strictEqual(csConst("ScrapeTplSrc"), builder.SCRAPE_TPL_SRC, "ScrapeTplSrc");
+
+  // Semantic pins on the C# ScrapeDynamicRefs transcription: the seed caps
+  // (80 names, 6 dirs, 64-char dirs) and the dir rank regex must survive.
+  const csBuilder = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "Jellyfin.Plugin.JellyPlugShell",
+      "TxDropBuilder.cs",
+    ),
+    "utf8",
+  );
+  for (const pin of [
+    "names.Count >= 80",
+    "dirs.Count >= 6",
+    "d.Length > 64",
+    '"/(js|scripts|modules)$"',
+  ]) {
+    assert.ok(
+      csBuilder.includes(pin),
+      "C# ScrapeDynamicRefs lost the seed semantic: " + pin,
+    );
+  }
+
   console.log("lockstep.test.cjs OK");
 }
 

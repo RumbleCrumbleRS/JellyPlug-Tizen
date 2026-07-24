@@ -11,13 +11,16 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 public static class TxDropConstants
 {
     /// <summary>
-    /// STRICT post-transpile oracle — must equal MODERN_SYNTAX_RE_SRC in
-    /// packages/shell-tizen/src/shell.js + boot-shell.src.js (ORACLE_SRC in
-    /// build-tx-drop.mjs). A published body matching this would be rejected
-    /// (or worse, mis-run) by the device.
+    /// STRICT post-transpile oracle — must equal ORACLE_SRC in
+    /// build-tx-drop.mjs: the shells' MODERN_SYNTAX_RE_SRC with the JELA-186
+    /// numeric-separator token refined so digit_digit inside plain
+    /// identifiers (iso_3166_1) can't veto publishing a fully lowered body.
+    /// Device-side acceptance is the JELA-11 parse probe (regex fallback
+    /// keeps the shells' stricter token). A published body matching this
+    /// would be rejected (or worse, mis-run) by the device.
     /// </summary>
     public const string OracleSrc =
-        "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|\\d_\\d|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await";
+        "\\?\\.|\\?\\?|\\?\\?=|\\|\\|=|&&=|(^|[^\\w])#[a-zA-Z_$][\\w$]*\\s*[=(]|(^|[^\\w$])\\.?\\d[\\w.]*_[\\da-fA-F]|(^|[^\\w$.])\\d+n\\b|catch\\s*\\{|\\{\\s*\\.\\.\\.|\\.\\.\\.[\\w$]+\\s*\\}|async\\s+function\\s*\\*|async\\s*\\*|for\\s+await";
 
     /// <summary>Broader transpile PRE-check — must equal MODERN_PRECHECK_RE_SRC (JEL-417).</summary>
     public const string PrecheckSrc = OracleSrc + "|,\\s*\\.\\.\\.[\\w$]";
@@ -39,10 +42,39 @@ public static class TxDropConstants
         + " assumptions: { iterableIsArray: true, arrayLikeIsIterable: true },"
         + " sourceType: 'script', compact: true, comments: false }";
 
+    /// <summary>
+    /// JELA-186 dynamic-module discovery — must equal SCRAPE_REL_SRC in
+    /// build-tx-drop.mjs (itself lockstep with the seed __txScrapeBodies REL
+    /// literal in both shells). Collects quoted script-name literals.
+    /// </summary>
+    public const string ScrapeRelSrc =
+        "([\"'])(/?[A-Za-z0-9_@%-]+(?:/[A-Za-z0-9_@%.-]+)*\\.js)(\\?[^\"']*)?\\1";
+
+    /// <summary>
+    /// JELA-186 — must equal SCRAPE_ABS_SRC in build-tx-drop.mjs (seed
+    /// __txScrapeBodies ABS literal). Collects quoted absolute dir literals
+    /// that could host the relative script names.
+    /// </summary>
+    public const string ScrapeAbsSrc =
+        "([\"'])(/[A-Za-z0-9_@%-]+(?:/[A-Za-z0-9_@%-]+){0,4})\\1";
+
+    /// <summary>
+    /// JELA-186 — must equal SCRAPE_TPL_SRC in build-tx-drop.mjs. Builder-only
+    /// supplement: chrome-56-targeted Babel keeps template literals, so
+    /// module URLs built as `/dir/name.js?v=${ver}` hide from the
+    /// quote-anchored REL regex; this scrapes backtick literals whose static
+    /// prefix is a complete .js path.
+    /// </summary>
+    public const string ScrapeTplSrc =
+        "`(/?[A-Za-z0-9_@%-]+(?:/[A-Za-z0-9_@%.-]+)*\\.js)(\\?[^`]*)?`";
+
     // RegexOptions.ECMAScript keeps \d/\w/\s ASCII-only, matching the JS
     // regexes these sources are lockstep with.
     public static readonly Regex OracleRe = new(OracleSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);
     public static readonly Regex PrecheckRe = new(PrecheckSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);
+    public static readonly Regex ScrapeRelRe = new(ScrapeRelSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);
+    public static readonly Regex ScrapeAbsRe = new(ScrapeAbsSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);
+    public static readonly Regex ScrapeTplRe = new(ScrapeTplSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);
 
     /// <summary>
     /// Same fnv1a-over-UTF-16-code-units the shells use (txFnv1a / seed

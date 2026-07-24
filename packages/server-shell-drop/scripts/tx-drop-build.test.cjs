@@ -64,6 +64,20 @@ function extractStringConst(src, name) {
   return JSON.parse('"' + m[1] + '"');
 }
 
+// Extract a seed-string regex literal like `      var REL=/.../g;` from a
+// shell source file (the seed line is itself a double-quoted JS string
+// literal, so JSON.parse recovers the runtime line) and return the regex
+// source between the literal's slashes.
+function extractSeedRegexLiteral(src, name) {
+  const re = new RegExp('"[^\\n]*var ' + name + '=/[^\\n]*/g;[^\\n]*"');
+  const m = re.exec(src);
+  if (!m) throw new Error("seed regex line not found: " + name);
+  const line = JSON.parse(m[0]).trim();
+  const mm = new RegExp("^var " + name + "=/(.*)/g;$").exec(line);
+  if (!mm) throw new Error("could not parse seed regex literal: " + line);
+  return mm[1];
+}
+
 function extractTopFn(src, name) {
   const lines = src.split("\n");
   let s = -1;
@@ -92,20 +106,42 @@ async function main() {
     ["shell.js", tvSrc],
     ["boot-shell.src.js", bootSrc],
   ]) {
+    // JELA-186: the publish oracle is the shell oracle with EXACTLY the
+    // numeric-separator token refined (identifier-safe); everything else
+    // must stay byte-lockstep. The shells keep `\d_\d` — their runtime
+    // acceptance is the JELA-11 parse probe, the regex is only a fallback.
+    const shellOracle = extractStringConst(src, "MODERN_SYNTAX_RE_SRC");
     check(
-      "lockstep oracle vs " + name,
-      builder.ORACLE_SRC === extractStringConst(src, "MODERN_SYNTAX_RE_SRC"),
+      "shell oracle carries the legacy numsep token once vs " + name,
+      shellOracle.split(builder.ORACLE_NUMSEP_LEGACY).length === 2,
+    );
+    check(
+      "lockstep oracle (numsep-refined) vs " + name,
+      builder.ORACLE_SRC ===
+        shellOracle.replace(builder.ORACLE_NUMSEP_LEGACY, builder.ORACLE_NUMSEP),
     );
     check(
       "lockstep babelOptsKey vs " + name,
       builder.BABEL_OPTS_KEY === extractStringConst(src, "BABEL_OPTS_KEY"),
     );
+    // JELA-186: the builder's dynamic-module scrape regexes must equal the
+    // seed __txScrapeBodies REL/ABS literals. V8's RegExp.source escapes
+    // "/" exactly like the seed's regex-literal spelling, so compiled
+    // .source equality is byte-for-byte lockstep.
+    check(
+      "lockstep scrape REL vs " + name,
+      new RegExp(builder.SCRAPE_REL_SRC).source ===
+        extractSeedRegexLiteral(src, "REL"),
+    );
+    check(
+      "lockstep scrape ABS vs " + name,
+      new RegExp(builder.SCRAPE_ABS_SRC).source ===
+        extractSeedRegexLiteral(src, "ABS"),
+    );
     // JEL-417: PRE-check = oracle + the interior-spread tail, exactly.
     check(
       "lockstep pre-check tail vs " + name,
-      builder.PRECHECK_SRC ===
-        extractStringConst(src, "MODERN_SYNTAX_RE_SRC") +
-          "|,\\s*\\.\\.\\.[\\w$]" &&
+      builder.PRECHECK_SRC === builder.ORACLE_SRC + "|,\\s*\\.\\.\\.[\\w$]" &&
         src.includes(
           'MODERN_SYNTAX_RE_SRC + "|,\\\\s*\\\\.\\\\.\\\\.[\\\\w$]"',
         ),
@@ -129,6 +165,38 @@ async function main() {
     }
     check("lockstep txFnv1a vs " + name, hashOk);
   }
+  // JELA-186 numsep-token vectors: every true numeric separator that would
+  // syntax-error a chrome56 engine must still trip the refined oracle;
+  // digit_underscore runs inside identifiers must not (they vetoed real
+  // fleet bodies). preset-env lowers separators at parse time, so transform
+  // OUTPUT can only ever contain the identifier shape — the refinement makes
+  // the gate strictly more accurate, never more permissive on real output.
+  {
+    const oracle = new RegExp(builder.ORACLE_SRC);
+    for (const v of [
+      "var n=1_000;",
+      "x(0x1F_2A)",
+      "a=0b1010_0001;",
+      "b=0o7_7;",
+      "c=.5_1;",
+      "d=1.5_1;",
+      "e=1e1_0;",
+      "f=[1_0]",
+    ]) {
+      check("refined oracle catches separator: " + v, oracle.test(v));
+    }
+    for (const v of [
+      "r.iso_3166_1===iso",
+      "var iso_3166_1=x;",
+      "obj[iso_3166_1]",
+      "a1_2()",
+      "$1_23.foo",
+      'x="grid2_col"',
+    ]) {
+      check("refined oracle ignores identifier: " + v, !oracle.test(v));
+    }
+  }
+
   // The builder's transform options literal must carry the JEL-26
   // assumptions block the seeds use (semantic, not just syntactic, parity).
   check(
@@ -327,6 +395,195 @@ async function main() {
       gen3.entries[hJsi] === "tx/" + hJsi + ".js",
   );
   srv.close();
+
+  // ==========================================================================
+  // PART D — DYNAMIC-MODULE DISCOVERY (JELA-186)
+  // ==========================================================================
+  // Unit: scrapeDynamicRefs mirrors the seed __txScrapeBodies semantics.
+  {
+    const body =
+      "var base = '/acme/js';\n" + // ranked dir (js last-segment)
+      "var other = '/acme/decoy';\n" + // unranked dir
+      "var bad = '/acme/v1.2/x';\n" + // dot → rejected as dir
+      "var mods = ['one.js', 'two.js', 'sub/three.js', 'one.js'];\n" +
+      "var exact = '/acme/extra/four.js?v=9';\n";
+    const r = builder.scrapeDynamicRefs(body, "http://s/plugins/loader.js?v=1");
+    check(
+      "scrape: exact absolute .js path collected query-free",
+      r.exact.length === 1 && r.exact[0] === "/acme/extra/four.js",
+    );
+    check(
+      "scrape: relative names deduped, order kept",
+      r.groups.length === 1 &&
+        r.groups[0].names.join(",") === "one.js,two.js,sub/three.js",
+    );
+    check(
+      "scrape: dirs ranked js-first, dotted dir rejected, own dir appended",
+      r.groups[0].dirs.join(",") ===
+        "/acme/js,/acme/decoy,http://s/plugins",
+    );
+    const noNames = builder.scrapeDynamicRefs(
+      "var d = '/acme/js'; var e = '/root/exact.js';",
+      "http://s/a.js",
+    );
+    check(
+      "scrape: no relative names -> no groups, exacts still collected",
+      noNames.groups.length === 0 && noNames.exact[0] === "/root/exact.js",
+    );
+    // chrome-56 Babel keeps template literals, so `/dir/name.js?v=${ver}`
+    // survives lowering in backticks — the TPL supplement must catch the
+    // static path prefix (interpolation tolerated only after the `?`).
+    const tpl = builder.scrapeDynamicRefs(
+      "s.src = api.getUrl(`/acme/js/tpl-mod.js?v=${ver()}`);\n" +
+        "t.src = `rel-tpl.js`;\nu.src = `/no/${dyn}/x.js`;",
+      "http://s/a.js",
+    );
+    check(
+      "scrape: template-literal static path collected as exact",
+      tpl.exact.length === 1 && tpl.exact[0] === "/acme/js/tpl-mod.js",
+    );
+    check(
+      "scrape: template-literal relative name collected, interpolated path prefix rejected",
+      tpl.groups.length === 1 &&
+        tpl.groups[0].names.join(",") === "rel-tpl.js",
+    );
+  }
+
+  // Unit: discoverDynamicSources probes dirs in rank order, commits to the
+  // first dir answering with JS, rejects HTML fallbacks and foreign origins,
+  // and respects the fetch cap.
+  {
+    const calls = [];
+    const fetchStub = async (u) => {
+      calls.push(u);
+      if (u.startsWith("http://s/spa/modules/")) return "<!doctype html><html>";
+      if (u.startsWith("http://s/acme/js/")) return "var ok = '" + u + "';";
+      throw new Error("404");
+    };
+    // '/spa/modules' and '/acme/js' both rank 0; the stable sort keeps body
+    // order, so the SPA-fallback dir is probed FIRST and must lose on the
+    // HTML sniff, not on rank.
+    const finals = [
+      {
+        from: "http://s/plugins/loader.js",
+        body:
+          "var a = '/spa/modules';\nvar b = '/acme/js';\n" +
+          "var mods = ['one.js', 'two.js'];\n" +
+          "var x = '/x.bundle.js';\n",
+      },
+    ];
+    const seen = new Set();
+    const dyn = await builder.discoverDynamicSources(finals, seen, 200, fetchStub);
+    check(
+      "discovery: probe tries the first-ranked dir first",
+      calls[0] === "http://s/spa/modules/one.js",
+    );
+    check(
+      "discovery: HTML fallback does not win the probe; JS dir does",
+      dyn.length === 2 &&
+        dyn[0].from === "http://s/acme/js/one.js" &&
+        dyn[1].from === "http://s/acme/js/two.js",
+    );
+    check(
+      "discovery: bundle exact rejected (never fetched)",
+      !calls.some((u) => u.indexOf(".bundle.js") >= 0),
+    );
+    const capped = await builder.discoverDynamicSources(
+      finals.map((f) => ({ ...f })),
+      new Set(),
+      1,
+      fetchStub,
+    );
+    check("discovery: fetch cap bounds attempts", capped.length <= 1);
+  }
+
+  // End-to-end: a modern loader script on the web index lists dynamic
+  // modules; the builder lowers the loader, scans the LOWERED body (device
+  // parity — the seed scrapes inlined transpiled bodies), probes the dir
+  // literals and publishes each discovered module under its raw-source
+  // hash. Generic fixture names only (plugin-agnostic policy, JEL-240).
+  {
+    const loaderBody =
+      "var base = '/acme/js';\n" +
+      "var mods = ['one.js', 'two.js', 'sub/three.js'];\n" +
+      "mods.forEach(function (m) {\n" +
+      "  var s = document.createElement('script');\n" +
+      "  s.src = base + '/' + m + '?v=' + (window.__v ?? '1');\n" +
+      "  document.head.appendChild(s);\n" +
+      "});\n";
+    const modOne = "window.__m1 = window.__a ?? 1;\n";
+    const modTwo = "var t = { ...window.__b };\nconsole.log(t);\n";
+    const modThree = "window.__m3 = window.__c?.d;\n";
+    const srv2 = http.createServer((req, res) => {
+      const u = String(req.url || "").split("?")[0];
+      if (u === "/web/index.html") {
+        res.setHeader("Content-Type", "text/html");
+        res.end('<script src="/plugins/loader.js"></script>');
+      } else if (u === "/plugins/loader.js") res.end(loaderBody);
+      else if (u === "/acme/js/one.js") res.end(modOne);
+      else if (u === "/acme/js/two.js") res.end(modTwo);
+      else if (u === "/acme/js/sub/three.js") res.end(modThree);
+      else {
+        res.statusCode = 404;
+        res.end();
+      }
+    });
+    await new Promise((r) => srv2.listen(0, "127.0.0.1", r));
+    const origin2 = "http://127.0.0.1:" + srv2.address().port;
+    const dynDrop = path.join(tmp, "dyn-drop");
+    await new Promise((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [BUILDER, dynDrop, "--web-index", origin2],
+        {},
+        (err, stdout, stderr) =>
+          err
+            ? reject(new Error(err.message + "\n" + stdout + stderr))
+            : resolve(stdout),
+      );
+    });
+    const dynMan = JSON.parse(
+      fs.readFileSync(path.join(dynDrop, "tx-manifest.json"), "utf8"),
+    );
+    check(
+      "e2e discovery: loader itself published",
+      dynMan.entries[builder.txFnv1a(loaderBody)] != null,
+    );
+    for (const [label, body] of [
+      ["one", modOne],
+      ["two", modTwo],
+      ["three", modThree],
+    ]) {
+      const h = builder.txFnv1a(body);
+      check(
+        "e2e discovery: dynamic module " + label + " published under raw-source hash",
+        dynMan.entries[h] === "tx/" + h + ".js" &&
+          fs.existsSync(path.join(dynDrop, "tx", h + ".js")),
+      );
+    }
+    // --no-dyn-scan: discovery off, only the loader publishes.
+    const offDrop = path.join(tmp, "dyn-off-drop");
+    await new Promise((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [BUILDER, offDrop, "--web-index", origin2, "--no-dyn-scan"],
+        {},
+        (err, stdout, stderr) =>
+          err
+            ? reject(new Error(err.message + "\n" + stdout + stderr))
+            : resolve(stdout),
+      );
+    });
+    const offMan = JSON.parse(
+      fs.readFileSync(path.join(offDrop, "tx-manifest.json"), "utf8"),
+    );
+    check(
+      "--no-dyn-scan publishes only the static loader",
+      Object.keys(offMan.entries).length === 1 &&
+        offMan.entries[builder.txFnv1a(loaderBody)] != null,
+    );
+    srv2.close();
+  }
 
   process.exitCode = failures ? 1 : 0;
   console.log(failures ? failures + " FAILURE(S)" : "all checks passed");
