@@ -115,6 +115,27 @@ for (const [name, src] of ARTIFACTS) {
     name + ": drop hits feed the babel-unused streak",
     src.includes(".txDropHits"),
   );
+  // JELA-187: a drop hit proves a static body cannot run raw on this
+  // engine, but it never loads Babel, so the JEL-1832 warm-boot string
+  // fast path's babelNeeded gate went false-negative on drop-covered
+  // servers — warm replayed boots executed raw <script src> tags and
+  // every modern-syntax plugin (JE loader included) died as a parse-time
+  // SyntaxError. Pin the sticky sibling flag: txDropResolve sets it on a
+  // hit and maybeStringFastPath bails on it exactly like babelNeeded.
+  check(
+    name + ": dropNeeded persistent flag key present",
+    src.includes("jellyfin.shell.legacy.dropNeeded"),
+  );
+  check(
+    name + ": string fast path bails on dropNeeded",
+    src.includes('bail("dropNeeded")'),
+  );
+  // The babelNeeded bail had been LOST in the hand-mirrored bootstrap copy
+  // (computed, never consulted) — JELA-187 restored it; pin all four.
+  check(
+    name + ": string fast path bails on babelNeeded",
+    src.includes('bail("babelNeeded")'),
+  );
 }
 // The retail seed routes both dynamic call sites through __txResolve; the
 // bootstrap seed inlines the same logic via its __dp/pre pattern. JELA-183:
@@ -804,6 +825,9 @@ async function runWidgetScenarios(label, src) {
   function widgetHarness(drop, routes) {
     const fetched = [];
     const win = {};
+    // JELA-187: record localStorage writes so scenarios can assert the
+    // dropNeeded flag is set on a hit and ONLY on a hit.
+    const stored = {};
     const sandbox = {
       window: win,
       Promise,
@@ -816,6 +840,9 @@ async function runWidgetScenarios(label, src) {
       localStorage: {
         getItem: (k) =>
           k === "jellyfin.shell.parseProbeDisabled" ? "1" : null,
+        setItem: (k, v) => {
+          stored[k] = String(v);
+        },
       },
       MODERN_SYNTAX_RE: new RegExp(JSON.parse('"' + oracleRaw + '"')),
       fetch(url) {
@@ -830,10 +857,20 @@ async function runWidgetScenarios(label, src) {
       },
     };
     vm.createContext(sandbox);
-    vm.runInContext(probeSrc + "\n" + fnvSrc + "\n" + resolveSrc, sandbox);
+    // JELA-187: txDropResolve references DROP_NEEDED_KEY (set on a hit);
+    // PART A pins the same literal in every shipped artifact.
+    vm.runInContext(
+      'var DROP_NEEDED_KEY = "jellyfin.shell.legacy.dropNeeded";\n' +
+        probeSrc +
+        "\n" +
+        fnvSrc +
+        "\n" +
+        resolveSrc,
+      sandbox,
+    );
     win.__shellTxDropReady = Promise.resolve(drop);
     if (drop) win.__shellTxDrop = drop;
-    return { sandbox, fetched, resolve: sandbox.txDropResolve };
+    return { sandbox, fetched, stored, resolve: sandbox.txDropResolve };
   }
   {
     const drop = {
@@ -852,6 +889,12 @@ async function runWidgetScenarios(label, src) {
     check(
       label + " D: widget hit returns lowered body",
       out === LOWERED_BODY && drop.h === 1,
+    );
+    // JELA-187: the hit must persist the dropNeeded flag so the warm-boot
+    // string fast path stops replaying raw <script src> tags.
+    check(
+      label + " D: widget hit sets the dropNeeded flag",
+      h.stored["jellyfin.shell.legacy.dropNeeded"] === "1",
     );
   }
   {
@@ -872,6 +915,12 @@ async function runWidgetScenarios(label, src) {
       label + " D: widget oracle-reject returns null",
       out === null && drop.r === 1,
     );
+    // JELA-187: a rejected body was NOT adopted — the flag must stay unset
+    // (setting it here would disable the fast path with no drop coverage).
+    check(
+      label + " D: widget oracle-reject leaves dropNeeded unset",
+      h.stored["jellyfin.shell.legacy.dropNeeded"] === undefined,
+    );
   }
   {
     const drop = {
@@ -888,6 +937,10 @@ async function runWidgetScenarios(label, src) {
     check(
       label + " D: widget manifest miss returns null without fetch",
       out === null && drop.m === 1 && h.fetched.length === 0,
+    );
+    check(
+      label + " D: widget manifest miss leaves dropNeeded unset",
+      h.stored["jellyfin.shell.legacy.dropNeeded"] === undefined,
     );
   }
   {

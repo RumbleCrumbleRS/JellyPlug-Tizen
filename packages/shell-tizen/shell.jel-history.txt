@@ -32,6 +32,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v32): tx cache constants shared with the in-document seed
 *JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
 *JEL-1034 v53): persistent flag — set true on any boot that triggered
+*JEL-1832 The warm-boot string fast path used babelNeeded as its "ever
+*JEL-621 static parses raw" proxy; on a fully drop-covered server
 *JEL-1984 sibling counter to BABEL_NEEDED_KEY. Incremented at the end
 *JEL-554 v35): normalize cache key by stripping the per-load cache-bu
 *JEL-178 stripping the ENTIRE query — but that over-corrected : plugi
@@ -223,6 +225,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v32): tx cache constants shared with the in-document seed
 *JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
 *JEL-1034 v53): persistent flag — set true on any boot that triggered
+*JEL-1832 The warm-boot string fast path used babelNeeded as its "ever
+*JEL-621 static parses raw" proxy; on a fully drop-covered server
 *JEL-1984 sibling counter to BABEL_NEEDED_KEY. Incremented at the end
 *JEL-554 v35): normalize cache key by stripping the per-load cache-bu
 *JEL-178 stripping the ENTIRE query — but that over-corrected : plugi

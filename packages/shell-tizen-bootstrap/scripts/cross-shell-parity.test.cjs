@@ -237,9 +237,9 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "maybeStringFastPath",
     class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype) and the JELA-30 diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not).",
-    retail: "930ca917ebe420c3",
-    boot: "cd5bffdf00bb220b",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype) and the JELA-30 diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not). JELA-187: both copies now bail on dropNeeded (and the babelNeeded bail lost in the boot mirror is restored) — comments around those bails differ per shell.",
+    retail: "2cb19a13de84e096",
+    boot: "92f9ee626ab08f34",
   },
   {
     name: "loadRemoteWebClient",
