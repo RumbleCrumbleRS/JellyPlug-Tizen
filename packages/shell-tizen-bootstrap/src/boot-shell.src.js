@@ -440,7 +440,7 @@
           total = 0;
         for (i = 0; i < keys.length; i++)
           total += (items[keys[i]] && items[keys[i]].size) || 0;
-        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0; ) {
+        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0;) {
           var biggestKey = null,
             biggestSize = 0;
           for (i = 0; i < keys.length; i++) {
