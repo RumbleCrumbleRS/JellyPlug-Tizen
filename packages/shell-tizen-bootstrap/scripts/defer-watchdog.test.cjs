@@ -51,6 +51,23 @@ function runScenario(opts) {
   const events = (opts.events || []).slice().sort((a, b) => a.at - b.at);
 
   const win = {};
+  // JELA-142: the watchdog's engine detection reads window.navigator.userAgent
+  // (sub-70 UA = legacy, else an optional-chaining parse probe that succeeds
+  // under Node = modern). Tests pin the legacy path with opts.ua.
+  if (opts.ua) win.navigator = { userAgent: opts.ua };
+  // JELA-142: resource-timing mock for the wedge-signal tests.
+  // opts.fetchedAt = { "bundle-0.js": 1500, ... }; a src absent from the map
+  // never gets an entry, others become visible once the virtual clock passes
+  // their completion time (matching real entries appearing at responseEnd).
+  if (opts.fetchedAt) {
+    win.performance = {
+      getEntriesByName(name) {
+        const at = opts.fetchedAt[name];
+        if (at == null || now < at) return [];
+        return [{ responseEnd: at }];
+      },
+    };
+  }
   const head = { children: [] };
 
   function makeDefer(src) {
@@ -149,6 +166,9 @@ function runScenario(opts) {
   };
 }
 
+const LEGACY_UA =
+  "Mozilla/5.0 (SMART-TV; LINUX; Tizen 5.0) AppleWebKit/537.36 Chrome/63.0.3239.0 TV Safari/537.36";
+
 let failures = 0;
 function check(name, fn) {
   try {
@@ -167,6 +187,7 @@ function check(name, fn) {
 check("healthy-slow boot does not re-inject (readyState complete @0)", () => {
   const r = runScenario({
     deferCount: 28,
+    ua: LEGACY_UA,
     readyState: () => "complete",
     events: [
       { at: 4000, fn: (w) => (w.__webpack_require__ = function () {}) },
@@ -189,6 +210,7 @@ check("healthy-slow boot does not re-inject (readyState complete @0)", () => {
 check("healthy boot at 15s (under cap) does not re-inject", () => {
   const r = runScenario({
     deferCount: 28,
+    ua: LEGACY_UA,
     readyState: () => "complete",
     events: [
       { at: 15000, fn: (w) => (w.__webpack_require__ = function () {}) },
@@ -203,6 +225,7 @@ check("healthy boot at 15s (under cap) does not re-inject", () => {
 check("true hang re-injects once at the cap and removes originals", () => {
   const r = runScenario({
     deferCount: 28,
+    ua: LEGACY_UA,
     readyState: () => "complete",
     events: [],
   });
@@ -259,12 +282,147 @@ check("registerElement-ran boot never re-injects (alreadyRan guard)", () => {
 
 // 6) Regression guard on the SOURCE itself: the bogus readyState trigger must be
 //    gone and the cap raised to 20000.
-check("source no longer fires on readyState-complete and cap is 20000", () => {
+check(
+  "source no longer fires on readyState-complete; cap is engine-aware",
+  () => {
+    assert.ok(
+      !/readyState-complete@/.test(fnSrc),
+      "the readyState-complete re-inject trigger must be removed",
+    );
+    assert.ok(
+      /CAP = legacyEngine \? 20000 : 10000/.test(fnSrc),
+      "CAP must be engine-aware (legacy 20s / modern 10s)",
+    );
+  },
+);
+
+// ---- JELA-142: engine-aware cap + positive wedge signal ---------------------
+function allFetchedAt(count, at) {
+  const m = {};
+  for (let i = 0; i < count; i++) m["bundle-" + i + ".js"] = at;
+  return m;
+}
+
+// 7) Modern engine, true hang, resource timing unavailable (no perf mock):
+//    the wedge signal can never go positive, so the 10 s cap is the rescue.
+check("modern hang without resource timing rescues at the 10s cap", () => {
+  const r = runScenario({
+    deferCount: 28,
+    readyState: () => "complete",
+    events: [],
+  });
+  assert.strictEqual(r.fired, 28, "should re-inject all 28 bundles");
   assert.ok(
-    !/readyState-complete@/.test(fnSrc),
-    "the readyState-complete re-inject trigger must be removed",
+    /^cap@/.test(r.reason || ""),
+    "reason must be cap@…, got " + r.reason,
   );
-  assert.ok(/CAP = 20000/.test(fnSrc), "CAP must be raised to 20000");
+  assert.ok(
+    r.atMs >= 10000 && r.atMs < 12000,
+    "modern cap must fire at ~10s, got " + r.atMs,
+  );
+});
+
+// 8) Modern engine, THE C85 WEDGE: every bundle fetch completed at 1.5 s but
+//    none ever executes. The positive signal must rescue at ~5 s
+//    (STALL_MIN_MS 3000 + STALL_HOLD_MS 2000), re-inject in-order copies
+//    (async=false) and remove the originals.
+check(
+  "modern wedge (all fetched, none ran) rescues at ~5s via stall signal",
+  () => {
+    const r = runScenario({
+      deferCount: 28,
+      readyState: () => "loading",
+      fetchedAt: allFetchedAt(28, 1500),
+      events: [],
+    });
+    assert.strictEqual(r.fired, 28, "should re-inject all 28 bundles");
+    assert.ok(
+      /^stall@/.test(r.reason || ""),
+      "reason must be stall@…, got " + r.reason,
+    );
+    assert.ok(
+      r.atMs >= 4500 && r.atMs <= 6000,
+      "stall rescue must land at ~5s, got " + r.atMs,
+    );
+    assert.strictEqual(r.injected.length, 28);
+    assert.ok(
+      r.injected.every((s) => s.async === false),
+      "re-injected scripts must be async=false (in-order execution)",
+    );
+    assert.ok(
+      r.originals.every((n) => n._removed),
+      "all original defer nodes must be removed before re-inject",
+    );
+  },
+);
+
+// 9) Modern engine, live-but-slow sequence: all fetches complete early but a
+//    bundle DID execute (webpackChunk appears) before the hold elapses — the
+//    stall signal must reset and never fire; ApiClient at 6 s ends the poll.
+check(
+  "modern live-but-slow boot (webpackChunk mid-hold) never re-injects",
+  () => {
+    const r = runScenario({
+      deferCount: 28,
+      readyState: () => "complete",
+      fetchedAt: allFetchedAt(28, 1500),
+      events: [
+        { at: 4000, fn: (w) => (w.webpackChunk = []) },
+        { at: 6000, fn: (w) => (w.ApiClient = {}) },
+      ],
+    });
+    assert.strictEqual(
+      r.fired,
+      undefined,
+      "stall signal fired on a live sequence; reason=" + r.reason,
+    );
+    assert.strictEqual(r.injected.length, 0);
+  },
+);
+
+// 10) Modern engine, one bundle fetch never completes: the wedge signal stays
+//     false (missing resource entry) and the 10 s cap is the rescue — the
+//     signal must never fire early on a genuinely slow network.
+check(
+  "modern hang with one unfetched bundle falls through to the 10s cap",
+  () => {
+    const fetched = allFetchedAt(28, 1500);
+    delete fetched["bundle-27.js"];
+    const r = runScenario({
+      deferCount: 28,
+      readyState: () => "loading",
+      fetchedAt: fetched,
+      events: [],
+    });
+    assert.strictEqual(r.fired, 28);
+    assert.ok(
+      /^cap@/.test(r.reason || ""),
+      "reason must be cap@…, got " + r.reason,
+    );
+    assert.ok(
+      r.atMs >= 10000 && r.atMs < 12000,
+      "must wait for the modern cap, got " + r.atMs,
+    );
+  },
+);
+
+// 11) Legacy engine ignores the stall signal entirely (M63's 20 s cap is the
+//     proven behavior; resource timing there is not trusted) even when every
+//     fetch shows complete.
+check("legacy engine never uses the stall signal (20s cap only)", () => {
+  const r = runScenario({
+    deferCount: 28,
+    ua: LEGACY_UA,
+    readyState: () => "complete",
+    fetchedAt: allFetchedAt(28, 1500),
+    events: [],
+  });
+  assert.strictEqual(r.fired, 28);
+  assert.ok(
+    /^cap@/.test(r.reason || ""),
+    "reason must be cap@…, got " + r.reason,
+  );
+  assert.ok(r.atMs >= 20000, "legacy cap must stay 20s, got " + r.atMs);
 });
 
 if (failures) {
