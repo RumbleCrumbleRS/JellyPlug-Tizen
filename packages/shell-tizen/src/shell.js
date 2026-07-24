@@ -5651,13 +5651,49 @@
   // DOMParser path and the string fast path arm the same recovery timer.
   // See JEL-723 history above for poll vs blind-timer rationale.
   function armDeferWatchdog() {
+    // JELA-142: engine-aware recovery. Legacy (sub-70) Chromium keeps the
+    // proven flat 20 s cap; modern (C85-class) engines get a 10 s cap plus a
+    // positive wedge signal (see tick()). Detection is self-contained (same
+    // semantics as isLegacyChromium: UA major, then an optional-chaining
+    // parse probe) because defer-watchdog.test.cjs extracts this function
+    // standalone.
+    var legacyEngine = (function () {
+      try {
+        var ua = (window.navigator && window.navigator.userAgent) || "";
+        var m = /(?:Chrome|Chromium)\/(\d+)\./.exec(ua);
+        if (m && parseInt(m[1], 10) < 70) return true;
+        // eslint-disable-next-line no-new-func
+        new Function("var a={};return a?.b");
+        return false;
+      } catch (e) {
+        return true;
+      }
+    })();
     var POLL = 150,
       // JEL-101 (ports JEL-99): raised from 5500. On the failing Tizen 5.0
       // (Chromium 63) panel a HEALTHY cold boot installs ApiClient at ~6100 ms
       // (measured on device: dcl=3999, api=6097). The cap must clear that with
       // margin or the rescue clobbers a healthy-but-slow boot. See the tick()
       // note below on why the old readyState trigger was removed.
-      CAP = 20000,
+      // JELA-142: on a modern engine a healthy handoff installs ApiClient at
+      // ~3-5 s after arm (QN90B fast class: api 5.7-7.0 s from t0, handoff at
+      // ~2-3 s), so 10 s still clears healthy boots with ~2x margin while
+      // halving the flat-cap stall penalty when the wedge signal cannot
+      // trigger (e.g. resource-timing unavailable or buffer overflowed).
+      CAP = legacyEngine ? 20000 : 10000,
+      // JELA-142 positive wedge signal (modern engines only). The QN90B C85
+      // stall signature — reproduced 1:1 in the local C85 harness via a
+      // style-blocked defer queue — is: every written <script defer src>
+      // fetch has COMPLETED (resource-timing entry with responseEnd) yet ZERO
+      // bundles ever executed and DCL never fires. On a healthy boot the gap
+      // between the last bundle fetch completing and the first bundle
+      // executing is tens of ms, so requiring the full signature to hold
+      // 2 s (after a 3 s arm delay) cannot clip a healthy boot; a genuinely
+      // slow bundle fetch keeps the signal false (its resource entry is
+      // missing until completion) and falls through to the cap instead.
+      STALL_MIN_MS = 3000,
+      STALL_HOLD_MS = 2000,
+      stallSince = 0,
       started = Date.now();
     // JEL-631 (ports JEL-137 guard, lockstep with boot-shell.src.js):
     // registerElement calls prove the web client bundle already executed, so
@@ -5665,6 +5701,31 @@
     // installed yet on a slow boot.
     function alreadyRan() {
       return (window.__shellRegElCalls || 0) > 0;
+    }
+    // JELA-142: true only when EVERY written defer bundle has a completed
+    // resource-timing entry (fetch done, bytes in hand). Any missing entry —
+    // fetch still in flight, never started, or evicted by buffer overflow —
+    // returns false so the caller falls back to the cap. window.performance
+    // (not the bare global) so the test harness can inject a mock.
+    function allDefersFetched(defers) {
+      try {
+        var perf = window.performance;
+        if (!perf || !perf.getEntriesByName) return false;
+        for (var i = 0; i < defers.length; i++) {
+          var src = defers[i].getAttribute("src");
+          if (!src) return false;
+          var abs = src;
+          try {
+            abs = new URL(src, document.baseURI).href;
+          } catch (e) {}
+          var es = perf.getEntriesByName(abs, "resource");
+          if (!es || !es.length) return false;
+          if (!(es[es.length - 1].responseEnd > 0)) return false;
+        }
+        return defers.length > 0;
+      } catch (e) {
+        return false;
+      }
     }
     function reinject(reason) {
       try {
@@ -5724,6 +5785,13 @@
           } catch (_) {}
           var s2 = document.createElement("script");
           s2.src = src;
+          // JELA-142: dynamically-inserted scripts default to async (load-order
+          // execution). async=false puts the rescues on the in-order list so
+          // the webpack bundles execute in source order, exactly like the defer
+          // queue they replace (C85 harness showed load-order interleaving
+          // without it). In-order dynamic scripts are also immune to the
+          // style-blocking that wedges the parser-inserted defer queue.
+          s2.async = false;
           s2.setAttribute("data-shell-defer-watchdog", "1");
           document.head.appendChild(s2);
         }
@@ -5753,6 +5821,39 @@
         if (elapsed >= CAP) {
           reinject("cap@" + elapsed + "ms");
           return;
+        }
+        // JELA-142: modern-engine positive wedge signal. All defer fetches
+        // complete + zero bundles executed, held for STALL_HOLD_MS, proves the
+        // defer queue was abandoned (the C85 doc.open/write/close stall) —
+        // rescue now instead of waiting out the cap. webpackChunk is checked
+        // here (not just in reinject) so a live-but-slow sequence resets the
+        // hold instead of accumulating it.
+        if (!legacyEngine && elapsed >= STALL_MIN_MS) {
+          var wedged = false;
+          try {
+            var wpc2 = null;
+            try {
+              wpc2 = window.webpackChunk || window.webpackJsonp;
+            } catch (_) {}
+            if (!wpc2) {
+              var defers2 = document.querySelectorAll("script[defer][src]");
+              wedged = !!(
+                defers2 &&
+                defers2.length &&
+                allDefersFetched(defers2)
+              );
+            }
+          } catch (_) {}
+          if (wedged) {
+            if (!stallSince) stallSince = Date.now();
+            window.__shellDeferStallHeldMs = Date.now() - stallSince;
+            if (Date.now() - stallSince >= STALL_HOLD_MS) {
+              reinject("stall@" + elapsed + "ms");
+              return;
+            }
+          } else {
+            stallSince = 0;
+          }
         }
         setTimeout(tick, POLL);
       } catch (e) {
