@@ -25,10 +25,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
 *JEL-178 query-bearing: transpileLegacyScripts then routes it through
 *JEL-216 an active channel on a legacy engine used to GUARANTEE a
-*JEL-216 Babel in the slow path, neutralize fail-safe unchanged
 *JEL-620 the channel body routes through the content-addressed
 *JEL-178 JEL-618 JEL-1984 tx-cache /, so honor the unused-streak
-*JEL-621 unless the pre-lowered drop manifest already resolved OK —
+*JEL-216 per-script miss still lazy-loads Babel in the slow path
+*JEL-621 JELA-183: the `__shellTxDrop.ok` skip is gone. It fired the
 *JEL-554 v32): tx cache constants shared with the in-document seed
 *JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
 *JEL-1034 v53): persistent flag — set true on any boot that triggered
@@ -104,6 +104,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-417 this seed regex is a PRE-check (gates needsTx -> maybeTransp
 *JEL-621 pre-lowered drop consumption in the dynamic pipelines. The
 *JEL-178 byte-lockstep with the widget-side txFnv1a (same fnv1a the
+*JEL-1034 the static lazy path. Without this, a boot whose STATIC
 *JEL-557 cache transpiled plugin bodies in localStorage so warm cold
 *JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
 *JEL-1150 TX_VER is derived from babel inputs at widget parse time
@@ -215,10 +216,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-216 the channel aggregates arbitrary user JS-Injector snippets,
 *JEL-178 query-bearing: transpileLegacyScripts then routes it through
 *JEL-216 an active channel on a legacy engine used to GUARANTEE a
-*JEL-216 Babel in the slow path, neutralize fail-safe unchanged
 *JEL-620 the channel body routes through the content-addressed
 *JEL-178 JEL-618 JEL-1984 tx-cache /, so honor the unused-streak
-*JEL-621 unless the pre-lowered drop manifest already resolved OK —
+*JEL-216 per-script miss still lazy-loads Babel in the slow path
+*JEL-621 JELA-183: the `__shellTxDrop.ok` skip is gone. It fired the
 *JEL-554 v32): tx cache constants shared with the in-document seed
 *JEL-1150 TX_VER + TX_PFX hoisted to top-of-IIFE so they're derived
 *JEL-1034 v53): persistent flag — set true on any boot that triggered
