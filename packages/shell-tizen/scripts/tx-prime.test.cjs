@@ -492,6 +492,42 @@ async function scenarioRecordThenPrime(name, seedText) {
   );
 }
 
+async function scenarioPrimeVersionPinned(name, seedText) {
+  // JELA-183 (B6): a recorded dynamic URL whose query is VERSION-PINNED
+  // (class 2 per __txQC — dotted a.b.c token, the JE-v12 ?v=12.0.0.0-...
+  // shape) is cache-stable until the token changes, so the primer must
+  // prime it under its full __txKey (token kept). An epoch-buster URL
+  // (class 1) in the same recorded set must still be skipped.
+  const pinnedUrl = SERVER + "/MyPlugin/js/extra/splash.js?v=12.0.0.0-test";
+  const busterUrl = SERVER + "/MyPlugin/js/sub/alpha.js?v=" + Date.now();
+  const h = makeHarness(seedText, {
+    noScrapeTarget: true,
+    localStorage: {
+      "jellyfin.shell.dynPluginUrls": JSON.stringify([pinnedUrl, busterUrl]),
+    },
+  });
+  h.win.ApiClient = { getCurrentUserId: () => null };
+  await h.pump(8);
+  check(
+    name + " B6: version-pinned recorded URL fetched by primer",
+    h.fetched.indexOf(pinnedUrl) >= 0,
+    JSON.stringify(h.fetched),
+  );
+  check(
+    name + " B6: primed body cached under full version-pinned key",
+    h.store[TXPFX + pinnedUrl] === "window.__splash=1;",
+    JSON.stringify(Object.keys(h.store)),
+  );
+  check(
+    name + " B6: epoch-buster recorded URL still skipped",
+    h.fetched.indexOf(busterUrl) < 0 &&
+      !Object.keys(h.store).some(
+        (k) => k.indexOf(TXPFX) === 0 && k.indexOf("/sub/alpha.js") >= 0,
+      ),
+    JSON.stringify({ fetched: h.fetched, keys: Object.keys(h.store) }),
+  );
+}
+
 async function scenarioWarmNoop(name, seedText) {
   const pre = {};
   pre[TXPFX + SERVER + "/MyPlugin/js/sub/alpha.js"] = "cached";
@@ -519,6 +555,7 @@ async function main() {
     await scenarioAuthed(name, seed);
     await scenarioKillSwitch(name, seed);
     await scenarioRecordThenPrime(name, seed);
+    await scenarioPrimeVersionPinned(name, seed);
     await scenarioWarmNoop(name, seed);
   }
   console.log(

@@ -195,9 +195,9 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "buildSeedScript",
     class: "hsb-feature",
-    why: "boot's seeded snippet gates plugin transpile on __ensureBabel() (HSB lazy-babel) and adds CSS:/FP: HUD rows; retail lacks the lazy-babel machinery (shell.min.js size cap)",
-    retail: "3516c63821eef368",
-    boot: "e67ed293c4c2dddd",
+    why: "boot's seeded snippet adds CSS:/FP: HUD rows and inlines the drop-miss __ensureBabel gate per call site (__dp/pre pattern); retail routes both dynamic call sites through the shared __txResolve helper (same drop-miss lazy-babel semantics since JELA-183, different shape)",
+    retail: "32577d2727938f6c",
+    boot: "77242012a56baaf7",
   },
   {
     name: "buildDiagSeedScript",

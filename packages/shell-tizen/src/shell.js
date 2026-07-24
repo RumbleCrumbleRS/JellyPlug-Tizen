@@ -1375,12 +1375,52 @@
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
       '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
       "    }",
+      // JELA-183: handoff-safe lazy Babel for the dynamic pipelines + primer.
+      // The widget-side window.__ensureBabel (bootstrap index.html) loads
+      // 'babel.min.js' RELATIVE to the CURRENT document — correct pre-write
+      // (WGT sibling), but called from this seed (post-document.write) it
+      // resolves against the server's /web/ base, 404s, and settles with
+      // window.Babel still undefined. Try the widget hook first (it wins
+      // whenever Babel was kicked pre-write and is a no-op re-check after),
+      // then fall back to the ABSOLUTE server drop copy via fetch +
+      // new Function (works on both origins on M63, same engine the parse
+      // probe already exercises; indirect eval = global scope, same as a
+      // script tag). A failed attempt resets the cached promise
+      // so a later script retries; callers see maybeTranspile's null
+      // contract unchanged.
+      "    var __ebDyn=null;",
+      "    function __ensureBabelDyn(){",
+      '      if(typeof window.Babel!=="undefined")return Promise.resolve(true);',
+      "      if(__ebDyn)return __ebDyn;",
+      '      var w=null;try{w=typeof window.__ensureBabel==="function"?window.__ensureBabel():null;}catch(_){}',
+      '      if(!w||typeof w.then!=="function")w=Promise.resolve(null);',
+      "      __ebDyn=w.then(function(){",
+      '        if(typeof window.Babel!=="undefined")return true;',
+      '        return window.fetch(S+"/shell/babel.min.js",{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(t){',
+      "          try{(0,eval)(t);}catch(_){}",
+      '          var ok=typeof window.Babel!=="undefined";',
+      "          if(!ok)__ebDyn=null;",
+      '          try{console.warn(ok?"shell: babel loaded from server drop (dynamic)":"shell: server-drop babel failed to init");}catch(_){}',
+      "          return ok;",
+      '        }).catch(function(){__ebDyn=null;try{console.warn("shell: server-drop babel fetch failed");}catch(_){}return false;});',
+      "      });",
+      "      return __ebDyn;",
+      "    }",
       // Async drop-in for the synchronous maybeTranspile at both dynamic
       // call sites (rewrite + srcPipeline): resolves to the same
       // lowered-body-or-null contract, trying the server drop first.
+      // JELA-183: on a drop miss, await __ensureBabelDyn() before
+      // maybeTranspile, mirroring the bootstrap seed's __dp/pre pattern and
+      // the static JEL-1034 lazy path. Without this, a boot whose STATIC
+      // scripts all drop-hit never loads Babel, and every dynamically-
+      // injected module that misses the drop (e.g. a plugin's versioned
+      // submodules) nulls out as "setter transpile failed".
       "    function __txResolve(code){",
       "      if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return Promise.resolve(code);}",
-      "      return __txDropGet(code).then(function(b){if(b!=null)return b;return maybeTranspile(code);});",
+      "      return __txDropGet(code).then(function(b){",
+      "        if(b!=null)return b;",
+      "        return __ensureBabelDyn().then(function(){return maybeTranspile(code);});",
+      "      });",
       "    }",
       // JEL-557: cache transpiled plugin bodies in localStorage so warm cold
       // boots skip the fetch+Babel cycle on every dynamic <script src> the
@@ -1672,7 +1712,14 @@
       '      var origin="";try{origin=new URL(document.baseURI).origin;}catch(_){}',
       "      var seen={},fq=[],bodies=[],pend=0,busy=false,stopped=false;",
       '      function authed(){try{return !!(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId());}catch(_){return false;}}',
-      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;if(String(abs).indexOf('?')>=0)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      // JELA-183: version-pinned query URLs (class 2 per __txQC — e.g. a
+      // plugin's ?v=<a.b.c> submodules) are cache-stable until the version
+      // token changes, so the primer may pre-cache them under their __txKey
+      // (token kept). Class 0/1 (marker / epoch-buster) stay rejected —
+      // those bodies are config-mutable and must be fetched fresh at boot.
+      // __txQGate (not __txQC) so the fetch-cache kill switch also stops
+      // priming entries the runtime would then refuse to read.
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;if(String(abs).indexOf('?')>=0&&__txQGate(abs)!==2)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
       "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
       '      function stopAuth(){stopped=true;P.st="auth";}',
       "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
@@ -1687,7 +1734,7 @@
       // hit the primer caches the server-lowered body and Babel stays cold.
       "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
       "          __dp.then(function(pre){",
-      '            var __p=pre==null&&needsTx(it.c)&&typeof window.__ensureBabel==="function"?window.__ensureBabel():Promise.resolve(true);',
+      "            var __p=pre==null&&needsTx(it.c)?__ensureBabelDyn():Promise.resolve(true);",
       "            __p.then(function(){",
       "              try{",
       "                var out=pre!=null?pre:maybeTranspile(it.c);",
@@ -4123,17 +4170,21 @@
       // transpile; kick the babel load now (idempotent cached promise) so it
       // isn't started lazily inside the pre-write critical path where a cold
       // parse can lose the give-up race and let raw `?.`/`??` reach the engine.
-      // Two independent reasons now let us skip that eager kick on the happy
-      // path (either one suffices — a genuine per-script miss still lazy-loads
-      // Babel in the slow path, JEL-216 neutralize fail-safe unchanged):
-      //   JEL-620: the channel body routes through the content-addressed
-      //   tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
-      //   soft-skip — streak >= 2 means the last two full passes (channel
-      //   included) were cache-covered; a miss resets the streak so the next
-      //   boot kicks eagerly again.
-      //   JEL-621: unless the pre-lowered drop manifest already resolved OK —
-      //   a drop-covered channel body never touches Babel, so the eager kick
-      //   would burn the 3.13 MB fetch + ~500-800 ms V8 parse for nothing.
+      // JEL-620: the channel body routes through the content-addressed
+      // tx-cache (JEL-178/JEL-618), so honor the JEL-1984 unused-streak
+      // soft-skip — streak >= 2 means the last two full passes (channel
+      // included) were cache/drop-covered and Babel went unused; a miss
+      // resets the streak so the next boot kicks eagerly again. A genuine
+      // per-script miss still lazy-loads Babel in the slow path (JEL-216
+      // neutralize fail-safe unchanged).
+      // JELA-183: the JEL-621 `__shellTxDrop.ok` skip is gone. It fired the
+      // moment the manifest resolved, even when DYNAMICALLY injected module
+      // bodies (never enumerated by the drop builder) still needed Babel —
+      // with every static body drop-hitting, Babel stayed cold and all ~56
+      // JE submodules died as "setter transpile failed". The streak already
+      // self-tunes the eager load away on fully-covered servers (drop hits
+      // count as coverage), so the drop gate bought nothing the streak
+      // doesn't.
       var jsiStreakSkip = false;
       try {
         jsiStreakSkip =
@@ -4143,8 +4194,7 @@
       if (
         isLegacyChromium() &&
         !jsiStreakSkip &&
-        typeof window.__ensureBabel === "function" &&
-        !(window.__shellTxDrop && window.__shellTxDrop.ok)
+        typeof window.__ensureBabel === "function"
       )
         try {
           window.__ensureBabel();
