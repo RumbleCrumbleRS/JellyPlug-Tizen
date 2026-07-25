@@ -52,7 +52,7 @@ jobs:
       PROJ_DIR: packages/server-plugin/Jellyfin.Plugin.JellyPlugShell
       CSPROJ: packages/server-plugin/Jellyfin.Plugin.JellyPlugShell/Jellyfin.Plugin.JellyPlugShell.csproj
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full ref (not detached) so we can commit the manifest bump to main.
           ref: main
