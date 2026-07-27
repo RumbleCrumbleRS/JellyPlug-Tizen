@@ -105,7 +105,23 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # default-ON flip, mirrored in boot-shell) — the flip itself shrinks the
 # code slightly, so the raise restores full SOFT_HEADROOM per the policy
 # above rather than absorbing the WS-2 growth silently.
-HARD_CAP = 196608
+# JELA-222 raised it 196608 -> 229376 (192 -> 224 KiB): after the JELA-183
+# babel-cold / JELA-186 / JELA-187 warm-replay train the committed blob had
+# crept to 191292 B (5316 B headroom — under SOFT_HEADROOM, so the build was
+# already warning and the next sizable shell change would trip the HARD_CAP
+# assert). Unlike the precedent raises this is a standalone prerequisite
+# (Perf 2.0 constraint #1): it is not itself a code-growing ticket but a
+# shared runway for THREE downstream shell-touching workstreams — WS-C
+# (JELA-224 perceived-load/UX), WS-D (JELA-225 navigation), and WS-B3. A
+# single 16 KiB step (13.5 KB usable above SOFT_HEADROOM) would be eaten by
+# the first to land and re-block the other two, defeating the point of a
+# shared prerequisite, so two steps (32 KiB) are taken here to leave ~30 KB
+# of usable growth (headroom 38084 B >> SOFT_HEADROOM). The guard stays a
+# meaningful payload-diet tripwire (224 KiB is only ~17% above the retail
+# base); each downstream WS still owns its own raise if it individually
+# outgrows this. Flag-neutral: no shell code changes, shell.min.js/
+# boot-shell.min.js bytes are unchanged by this ticket.
+HARD_CAP = 229376
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
