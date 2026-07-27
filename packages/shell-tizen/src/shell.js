@@ -3926,7 +3926,14 @@
       'var ring=JSON.parse(localStorage.getItem("jellyfin.shell.bootPhases")||"[]");' +
       "if(!ring||!ring.length)return null;" +
       "var d=W.__shellTxDrop||{};" +
-      "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
+      // JELA-223 (WS-B2): warm-boot payload-elision counters, all numeric so
+      // the DiagIngestService whitelist passes them verbatim. ch/cm = the
+      // JEL-619/178 tx-cache hit/miss ratio (a plugin <script src> served from
+      // localStorage vs re-downloaded+transpiled); jc = the JEL-618 JSI
+      // snippet channel (~1.2 MB) — 1 inlined from cache (zero fetch), 0
+      // re-fetched, -1 channel absent/disabled. These make "measure fetch cost
+      // separately" answerable per fielded boot without an sdb session.
+      "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,ch:W.__shellTxCacheHits||0,cm:W.__shellTxCacheMisses||0,jc:W.__shellJsiChannelCache==='hit'?1:(W.__shellJsiChannelCache==='miss'?0:-1),drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
