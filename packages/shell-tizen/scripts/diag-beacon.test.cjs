@@ -193,6 +193,10 @@ const WIN = () => ({
   },
   __shellTxSkipCount: 56,
   __shellTxDoCount: 1,
+  // JELA-223 (WS-B2): warm-boot payload-elision counters.
+  __shellTxCacheHits: 120,
+  __shellTxCacheMisses: 4,
+  __shellJsiChannelCache: "hit",
   __shellTxDrop: { ok: { base: "x" }, h: 0, m: 1, r: 0, f: 0 },
 });
 
@@ -229,6 +233,9 @@ const WIN = () => ({
   assert.deepStrictEqual(p.tx, {
     skip: 56,
     done: 1,
+    ch: 120,
+    cm: 4,
+    jc: 1,
     drop: { ok: 1, h: 0, m: 1, r: 0, f: 0 },
   });
   assert.strictEqual(p.ver, "1.0.75");
@@ -304,6 +311,32 @@ const WIN = () => ({
   env.run();
   env.tick(3000);
   assert.strictEqual(env.xhrs.length, 0, "no serverUrl must not POST");
+}
+
+// 7. JELA-223 (WS-B2): jc reflects the JSI channel cache state. A "miss"
+// (warm boot re-fetched the ~1.2 MB channel) -> jc:0; an absent global
+// (channel disabled / never injected) -> jc:-1. ch/cm default to 0.
+{
+  const win = WIN();
+  win.__shellJsiChannelCache = "miss";
+  delete win.__shellTxCacheHits;
+  delete win.__shellTxCacheMisses;
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  const tx = JSON.parse(env.xhrs[0].body).tx;
+  assert.strictEqual(tx.jc, 0, "channel miss must report jc:0");
+  assert.strictEqual(tx.ch, 0, "absent tx-cache-hit counter must default 0");
+  assert.strictEqual(tx.cm, 0, "absent tx-cache-miss counter must default 0");
+}
+{
+  const win = WIN();
+  delete win.__shellJsiChannelCache;
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  const tx = JSON.parse(env.xhrs[0].body).tx;
+  assert.strictEqual(tx.jc, -1, "absent channel global must report jc:-1");
 }
 
 console.log("diag-beacon.test.cjs OK");

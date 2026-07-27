@@ -11,6 +11,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
 *JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
 *JEL-139 Redaction / egress , WS-F folded into JELA-30): the payload
+*JEL-619 /178 tx-cache hit/miss ratio (a plugin <script src> served f
+*JEL-618 localStorage vs re-downloaded+transpiled); jc = the JSI
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
 *JEL-178 caching honouring public.js's ?v= config-version query.
@@ -204,6 +206,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
 *JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
 *JEL-139 Redaction / egress , WS-F folded into JELA-30): the payload
+*JEL-619 /178 tx-cache hit/miss ratio (a plugin <script src> served f
+*JEL-618 localStorage vs re-downloaded+transpiled); jc = the JSI
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
 *JEL-178 caching honouring public.js's ?v= config-version query.

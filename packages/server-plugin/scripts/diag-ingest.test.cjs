@@ -168,7 +168,7 @@ function cleanRing(rec) {
 function cleanTx(tx) {
   if (!tx || typeof tx !== "object") return null;
   const out = {};
-  for (const k of ["skip", "done"]) {
+  for (const k of ["skip", "done", "ch", "cm", "jc"]) {
     const n = num(tx[k]);
     if (n !== undefined) out[k] = n;
   }
@@ -237,6 +237,9 @@ const hostile = {
   tx: {
     skip: 56,
     done: 1,
+    ch: 120,
+    cm: 4,
+    jc: 1,
     drop: { ok: 1, h: 0, m: 1, r: 0, f: 0, secret: TOKEN },
     leak: SERVER_URL,
   },
@@ -297,7 +300,14 @@ assert.strictEqual(
 // tx keeps only numeric counters.
 assert.deepStrictEqual(
   line.tx,
-  { skip: 56, done: 1, drop: { ok: 1, h: 0, m: 1, r: 0, f: 0 } },
+  {
+    skip: 56,
+    done: 1,
+    ch: 120,
+    cm: 4,
+    jc: 1,
+    drop: { ok: 1, h: 0, m: 1, r: 0, f: 0 },
+  },
   "tx not reduced to numeric counters",
 );
 

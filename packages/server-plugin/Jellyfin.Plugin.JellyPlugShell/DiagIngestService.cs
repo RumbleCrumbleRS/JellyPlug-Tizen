@@ -342,7 +342,11 @@ public class DiagIngestService
         }
 
         var tx = new Dictionary<string, object?>();
-        foreach (var name in new[] { "skip", "done" })
+        // JELA-223 (WS-B2): ch/cm = tx-cache hit/miss (plugin script served from
+        // localStorage vs re-fetched), jc = JSI snippet-channel cache state
+        // (1 inlined, 0 re-fetched, -1 absent) — warm-boot payload-elision
+        // telemetry. All numeric; TryNum keeps the sanitizer numeric-only.
+        foreach (var name in new[] { "skip", "done", "ch", "cm", "jc" })
         {
             if (txEl.TryGetProperty(name, out var el) && TryNum(el, out var n))
             {
