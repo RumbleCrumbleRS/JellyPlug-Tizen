@@ -354,6 +354,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-554 v34): timeout was 2000 ms. QA confirmed normal
 *JEL-723 the fixed 5500 ms blind wait was the wrong
 *JEL-723 defer queue and double-runs the webpack runtime —
+*JEL-647 skeleton , id #__shell_instant_home) and the boot-progress d
+*JEL-126 cleared via window.__shellBootProgressClear) — both full-scr
+*JEL-647 Instant-Home : flag dismissed so the watch/paint ticks stop
+*JEL-126 Boot-progress dots : its own idempotent clear hook removes t
 *JEL-739 connect.css moved off the critical path. Warm saved-server
 *JEL-934 v51): #boot-root is `display:none` by default in
 *JEL-617 boot-phase mark — the shell's own connect form is now

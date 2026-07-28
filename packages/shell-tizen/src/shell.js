@@ -7171,6 +7171,49 @@
 
   // ---- Connect screen flow ----------------------------------------------
 
+  // JELA-224 (WS-C, C2): boot-failure overlay clear. The shell paints two
+  // boot-time covers before /web/ hydrates — the Instant-Home cached-home /
+  // skeleton (JEL-647, id #__shell_instant_home) and the boot-progress dots
+  // (JEL-126, cleared via window.__shellBootProgressClear) — both full-screen
+  // at z-index max. When the boot instead falls back to the shell's own
+  // connect form (first launch, or a saved server that is slow / dead /
+  // JWT-expired / channel-404), those covers are STALE: they mask the
+  // connect-form error for up to the 23 s Instant-Home settlecap, so the boot
+  // reads as a blank hold rather than a clear "could not reach server" state.
+  // Tear them down the moment the connect form is revealed. Flag-dark
+  // (JELA-141): opt-in via jellyfin.shell.bootFailOverlayClear='1'; default OFF
+  // leaves the pre-existing self-dismiss timing untouched. Every step is
+  // try/caught + existence-guarded so it can never break boot.
+  function clearBootOverlays() {
+    try {
+      if (localStorage.getItem("jellyfin.shell.bootFailOverlayClear") !== "1")
+        return;
+    } catch (_) {
+      return;
+    }
+    // Instant-Home (JEL-647): flag dismissed so the watch/paint ticks stop
+    // re-creating the overlay (both gate on G.dismissed), then remove the node.
+    try {
+      var ih = window.__shellIH;
+      if (ih) ih.dismissed = 1;
+      var ihEl = document.getElementById("__shell_instant_home");
+      if (ihEl && ihEl.parentNode) ihEl.parentNode.removeChild(ihEl);
+    } catch (_) {}
+    // Direct-Home (JELA-29, opt-in; structurally absent in the baked boot
+    // shell — a no-op there, kept for the cross-shell mirror guard).
+    try {
+      var dh = window.__shellDH;
+      if (dh) dh.dismissed = 1;
+      var dhEl = document.getElementById("__shell_direct_home");
+      if (dhEl && dhEl.parentNode) dhEl.parentNode.removeChild(dhEl);
+    } catch (_) {}
+    // Boot-progress dots (JEL-126): its own idempotent clear hook removes the
+    // overlay div + its <style> and records __shellBootProgressClearedMs.
+    try {
+      if (window.__shellBootProgressClear) window.__shellBootProgressClear();
+    } catch (_) {}
+  }
+
   function showError(msg) {
     var err = document.getElementById("boot-error");
     if (!err) return;
@@ -7189,6 +7232,11 @@
     // failure recovery after clearServerUrl()).
     var rootEl = document.getElementById("boot-root");
     if (rootEl) rootEl.style.display = "block";
+    // JELA-224 (WS-C, C2): the shell's own connect form is about to paint —
+    // tear down any stale boot cover first (flag-dark; see clearBootOverlays)
+    // so a slow / dead / expired-JWT saved-server boot surfaces the error
+    // immediately instead of holding a stale cached-home for up to 23 s.
+    clearBootOverlays();
     // JEL-617: boot-phase mark — the shell's own connect form is now
     // on-screen (first launch / saved-server recovery; warm boots skip it).
     try {
