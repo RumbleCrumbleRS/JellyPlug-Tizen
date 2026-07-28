@@ -163,6 +163,7 @@ const EXPECTED_MIRRORED = [
   "restoreCredsVault",
   "fin",
   "settle",
+  "clearBootOverlays",
   "showError",
   "injectConnectStylesheet",
   "attachConnectForm",
