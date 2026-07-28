@@ -440,6 +440,92 @@ for (const [label, src] of ALL_SHELLS) {
 }
 
 // ============================================================================
+// PART BW — JELA-226 (WS-B3): warm-boot /web prefetch-skip (flag-dark)
+// ============================================================================
+// The head-IIFE prefetch (shell-tizen/src/index.html) and the bootstrap's
+// primeWebBoot (shell-tizen-bootstrap/src/index.html) kick /web/index.html +
+// /web/config.json before the shell parses. On an epoch-match warm boot the
+// shell adopts its LS body cache and suppresses the fetch drain, so those two
+// fetches are issued-but-never-consumed. WS-B3 gates them behind the opt-in
+// flag jellyfin.shell.webPrefetchSkip (default off = current behaviour) + an
+// inline cache-presence check, and stays provably fail-safe via the shell's
+// mkIdxF/mkCfgF fresh-fetch fallback (Part B2 above).
+//
+// The skip decision lives in the two index.html head scripts (no DOM runner),
+// so this part source-asserts the shipped gate on BOTH prefetch sites.
+console.log("");
+console.log("=== PART BW: WS-B3 warm-boot prefetch-skip (flag-dark) ===");
+
+const TV_INDEX = path.join(
+  REPO,
+  "packages",
+  "shell-tizen",
+  "src",
+  "index.html",
+);
+const BOOT_INDEX = path.join(
+  REPO,
+  "packages",
+  "shell-tizen-bootstrap",
+  "src",
+  "index.html",
+);
+const WPS_FLAG = "jellyfin.shell.webPrefetchSkip";
+const WPS_COUNTER = "__shellWebPrefetchSkipped";
+
+const PREFETCH_SITES = [
+  ["shell-tizen/index.html", fs.readFileSync(TV_INDEX, "utf8")],
+  ["shell-tizen-bootstrap/index.html", fs.readFileSync(BOOT_INDEX, "utf8")],
+];
+
+for (const [label, src] of PREFETCH_SITES) {
+  // BW1. Skip is behind the opt-in flag, checked for EXACTLY "1" (default off:
+  //      an unset / "0" / anything-else flag keeps the current prefetch).
+  check(
+    "prefetch-skip is behind flag " + JSON.stringify(WPS_FLAG) + ' (=== "1") in ' + label,
+    new RegExp("getItem\\(\\s*['\"]" + WPS_FLAG.replace(/\./g, "\\.") + "['\"]\\s*\\)\\s*===\\s*['\"]1['\"]").test(src),
+  );
+  // BW2. Skip also requires the indexCache gate ON (!== "0") — never skip when
+  //      the SWR body cache the shell would adopt is disabled.
+  check(
+    "prefetch-skip requires indexCache gate on (!== '0') in " + label,
+    /getItem\(\s*['"]jellyfin\.shell\.indexCache['"]\s*\)\s*!==\s*['"]0['"]/.test(src),
+  );
+  // BW3. Presence check covers BOTH bodies for the current origin: it reads the
+  //      webIndexHtml + webConfig records and matches p.origin against the
+  //      current server URL (u in the retail IIFE, server in primeWebBoot).
+  check(
+    "presence check reads webIndexHtml + webConfig records in " + label,
+    src.includes("jellyfin.shell.webIndexHtml") &&
+      src.includes("jellyfin.shell.webConfig"),
+  );
+  check(
+    "presence check origin-gates the cached record (p.origin === serverUrl) in " + label,
+    /p\.origin\s*===\s*(?:u|server)\b/.test(src),
+  );
+  // BW4. FAIL-SAFE: the prefetch fetches are still issued on the non-skip path,
+  //      so a missing/invalid cache falls straight back to today's behaviour.
+  check(
+    "non-skip path still issues the index + config fetches in " + label,
+    /pf\.index\s*=/.test(src) && /pf\.config\s*=/.test(src),
+  );
+  // BW5. The skip is observable for on-device QA via a window counter.
+  check(
+    "skip sets QA counter window." + WPS_COUNTER + " in " + label,
+    new RegExp("window\\." + WPS_COUNTER + "\\s*=\\s*1").test(src),
+  );
+}
+
+// BW6. Flag-dark parity: the flag string appears verbatim at both prefetch
+//      sites so retail-WGT and hosted-bootstrap boots behave identically.
+check(
+  "webPrefetchSkip flag string present at BOTH prefetch sites (retail + bootstrap)",
+  PREFETCH_SITES.every(function (s) {
+    return s[1].includes('"' + WPS_FLAG + '"') || s[1].includes("'" + WPS_FLAG + "'");
+  }),
+);
+
+// ============================================================================
 // PART C — OBSERVATIONS (informational; never fails the build)
 // ============================================================================
 console.log("");

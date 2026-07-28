@@ -347,11 +347,46 @@
                         // Last submit wins: boot-shell ignores a stale prefetch
                         // via its baseUrl equality check, but re-priming here
                         // keeps the common retry path warm too.
-                        window.__shellPrefetch = {
-                            baseUrl: webBase,
-                            index: fetch(webBase + 'index.html', init),
-                            config: fetch(webBase + 'config.json', init)
-                        };
+                        var pf = { baseUrl: webBase };
+                        // JELA-226 (WS-B3): skip the /web/index.html +
+                        // /web/config.json prefetch pair on warm boots where the
+                        // loading shell will adopt its LS body cache and (on an
+                        // epoch-match boot) suppress the fetch drain, leaving
+                        // these two fetches issued-but-never-consumed. Gated
+                        // behind the opt-in flag jellyfin.shell.webPrefetchSkip
+                        // (default off = current behaviour, flag-dark per
+                        // JELA-141) AND a fail-safe presence check: indexCache
+                        // gate on + a valid webIndexHtml + webConfig record for
+                        // THIS origin. Provably safe — both the hosted shell and
+                        // the baked boot-shell fall back to a fresh fetch when
+                        // pf.index/pf.config are absent (boot-shell.src.js
+                        // mkIdxF/mkCfgF ~5158), and each rejects a stale-version
+                        // / foreign-origin record on read. No version check here
+                        // (bootstrap index.html has no shell version literal);
+                        // staleness is caught downstream. QA reads
+                        // window.__shellWebPrefetchSkipped.
+                        var wps = false;
+                        try {
+                            if (localStorage.getItem('jellyfin.shell.webPrefetchSkip') === '1'
+                                && localStorage.getItem('jellyfin.shell.indexCache') !== '0') {
+                                var wpsOk = function (k) {
+                                    try {
+                                        var p = JSON.parse(localStorage.getItem(k));
+                                        return !!(p && p.origin === server
+                                            && typeof p.body === 'string' && p.body.length);
+                                    } catch (_) { return false; }
+                                };
+                                if (wpsOk('jellyfin.shell.webIndexHtml')
+                                    && wpsOk('jellyfin.shell.webConfig')) wps = true;
+                            }
+                        } catch (_) {}
+                        if (wps) {
+                            window.__shellWebPrefetchSkipped = 1;
+                        } else {
+                            pf.index = fetch(webBase + 'index.html', init);
+                            pf.config = fetch(webBase + 'config.json', init);
+                        }
+                        window.__shellPrefetch = pf;
                     }
                 } catch(_){}
                 try {
