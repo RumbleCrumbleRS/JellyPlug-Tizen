@@ -237,15 +237,15 @@ const INTENTIONAL_DIVERGENCES = [
   {
     name: "maybeStringFastPath",
     class: "hsb-feature",
-    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype) and the JELA-30 diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not). JELA-187: both copies now bail on dropNeeded (and the babelNeeded bail lost in the boot mirror is restored) — comments around those bails differ per shell.",
-    retail: "2cb19a13de84e096",
+    why: "boot fast path additionally adopts vendors-bundle + stylesheet-body caches and bails on their misses; retail checks main bundle only. Retail additionally appends the JELA-29 directHome overlay tag (retail-only measurement prototype) and the JELA-30 diag-beacon tag (hosted shell is the fielded self-reporting target; the baked fallback is not) and the JELA-228 jsiDeferredTag (WS-B1 post-first-card deferred JSI channel loader — hosted-shell-only, like the other retail-only opt-ins; the baked fallback still honours jsiChannelPath so it serves the critical body). JELA-187: both copies now bail on dropNeeded (and the babelNeeded bail lost in the boot mirror is restored) — comments around those bails differ per shell.",
+    retail: "99efd53fd376690c",
     boot: "92f9ee626ab08f34",
   },
   {
     name: "loadRemoteWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document, and gates the whole SPA load on maybeBootLite (JELA-67, opt-in Lite canvas home — hosted shell is the fielded target; the baked fallback deliberately omits it like the other retail-only opt-ins).",
-    retail: "9bfed3288cbc9c4c",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype), injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) and injectJsiDeferredChannel (JELA-228 WS-B1, opt-in post-first-card deferred JSI channel loader) in the written document, and gates the whole SPA load on maybeBootLite (JELA-67, opt-in Lite canvas home — hosted shell is the fielded target; the baked fallback deliberately omits it like the other retail-only opt-ins).",
+    retail: "9b83b295b9eafaa2",
     boot: "dc1d75fef51c2df8",
   },
   {

@@ -13,6 +13,12 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-139 Redaction / egress , WS-F folded into JELA-30): the payload
 *JEL-619 /178 tx-cache hit/miss ratio (a plugin <script src> served f
 *JEL-618 localStorage vs re-downloaded+transpiled); jc = the JSI
+*JEL-204 boot-CRITICAL body (redirect the jsiChannelPath override at
+*JEL-197 default unset => nothing fetched, fleet-safe), and the chann
+*JEL-197 inlined exactly like the channel (a raw <script src> to the
+*JEL-197 Master channel killswitch also disables the deferred loader.
+*JEL-216 the ?_jsi=1 marker on the critical channel).
+*JEL-617 Fire once the first home card has painted phase marks or the
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
 *JEL-178 caching honouring public.js's ?v= config-version query.
@@ -208,6 +214,12 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-139 Redaction / egress , WS-F folded into JELA-30): the payload
 *JEL-619 /178 tx-cache hit/miss ratio (a plugin <script src> served f
 *JEL-618 localStorage vs re-downloaded+transpiled); jc = the JSI
+*JEL-204 boot-CRITICAL body (redirect the jsiChannelPath override at
+*JEL-197 default unset => nothing fetched, fleet-safe), and the chann
+*JEL-197 inlined exactly like the channel (a raw <script src> to the
+*JEL-197 Master channel killswitch also disables the deferred loader.
+*JEL-216 the ?_jsi=1 marker on the critical channel).
+*JEL-617 Fire once the first home card has painted phase marks or the
 *JEL-197 JEL-196 shell-side JS-Injector snippet channel (parent .
 *JEL-196 shared runtime.bundle.js. retires that plugin: the snippets
 *JEL-178 caching honouring public.js's ?v= config-version query.

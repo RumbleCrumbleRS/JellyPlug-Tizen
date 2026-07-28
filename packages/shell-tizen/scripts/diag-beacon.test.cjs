@@ -83,8 +83,11 @@ assert(
   "DOMParser-path injection site missing",
 );
 assert(
-  /\w+Tag \+\s*diagBeaconTag;/.test(text),
-  "string fast-path splice missing (diagBeaconTag must end the injected chain)",
+  // diagBeaconTag is spliced into the fast-path injected chain (preceded by a
+  // `<...>Tag +`). JELA-228 appended jsiDeferredTag after it, so it is no
+  // longer required to be the terminal entry — only that the splice is present.
+  /\w+Tag \+\s*diagBeaconTag\b/.test(text),
+  "string fast-path splice missing (diagBeaconTag must be in the injected chain)",
 );
 
 // Test chain includes this file.

@@ -3974,6 +3974,82 @@
     doc.head.appendChild(dbTag);
   }
 
+  // JELA-228 (WS-B1): post-first-card deferred JSI channel loader.
+  //
+  // On M63 (the fleet floor) boot cost is PARSE-dominated (JELA-41/50/52), and
+  // ~32% of the JS-Injector channel is page-specific snippets that never render
+  // the home page — search, item-detail, player/idle (the DEFERRED_SNIPPETS set
+  // in jsi-channel-split.mjs). WS-B1 splits the channel at build time into a
+  // boot-CRITICAL body (redirect the JEL-204 jsiChannelPath override at it) and
+  // a DEFERRED body served at its own route; this loader fetches the deferred
+  // body ONLY AFTER the first home card has painted, so those bytes leave the
+  // boot parse path entirely.
+  //
+  // Flag-dark by construction: the loader is a NO-OP unless
+  // localStorage['jellyfin.shell.jsiDeferredPath'] names the deferred route
+  // (default unset => nothing fetched, fleet-safe), and the JEL-197 channel
+  // killswitch (jsiChannelDisabled) also suppresses it. It runs in the WRITTEN
+  // document (post document.write), not the widget pass, so it never touches the
+  // boot transpile firewall, the single-channel body cache, or the warm fast-
+  // path splice — those all stay bound to the one CRITICAL channel. The deferred
+  // route is cross-origin (widget vs server), so the body is fetched as TEXT and
+  // inlined exactly like the JEL-197 channel (a raw <script src> to the server
+  // origin is CSP/CORS blocked on Tizen); it is inlined via createElement +
+  // textContent so a "</script" literal in a snippet body cannot terminate the
+  // tag (no string splice). The deferred snippets self-defer internally
+  // (window.onload / MutationObserver) so post-first-card document order is safe.
+  //
+  // FLIP GATE (not this build): the deferred body is inlined RAW — the flip must
+  // confirm the deferred body is M63-native (needsTranspile false, per the
+  // deploy parse-probe; JELA-223 measured the live channel native fleet-wide)
+  // AND that no deferred slug is on the critical path to the first home card
+  // (the detail CTAs sit adjacent to the home-resume family in channel order).
+  // A parse error in the deferred body is self-isolated to its own <script> tag
+  // (home already rendered), never thrown into this loader.
+  function jsiDeferredBody() {
+    return (
+      "(function(){try{" +
+      "var W=window;" +
+      // Gate: an explicitly configured deferred route, else no-op (flag-dark).
+      'var P="";try{P=String(localStorage.getItem("jellyfin.shell.jsiDeferredPath")||"")}catch(_){return}' +
+      "if(!P)return;" +
+      // Master JEL-197 channel killswitch also disables the deferred loader.
+      'try{if(localStorage.getItem("jellyfin.shell.jsiChannelDisabled")==="1")return}catch(_){}' +
+      "if(W.__shellJsiDeferredArmed)return;W.__shellJsiDeferredArmed=1;" +
+      "var st=W.__shellJsiDeferred={armed:1,fired:0,injected:0,bytes:0,http:0,err:0,tries:0};" +
+      'function base(){try{return String(localStorage.getItem("jellyfin.shell.serverUrl")||"").replace(/\\/+$/,"")}catch(_){return""}}' +
+      "function pull(){if(st.fired)return;st.fired=1;var b=base();if(!b){st.err++;return}" +
+      // Stable marker query so a config-derived body is served fresh (mirrors
+      // the JEL-216 ?_jsi=1 marker on the critical channel).
+      'var u=b+P+(P.indexOf("?")<0?"?_jsd=1":"&_jsd=1");' +
+      'try{W.fetch(u,{credentials:"omit",cache:"no-store"}).then(function(r){st.http=r.status||0;if(!r.ok)throw 0;return r.text()}).then(function(code){' +
+      "if(!code)return;" +
+      'var s=document.createElement("script");s.textContent=code;s.setAttribute("data-shell-jsi-deferred","1");' +
+      "(document.body||document.documentElement).appendChild(s);st.injected=1;st.bytes=code.length" +
+      "}).catch(function(){st.err++})}catch(_){st.err++}}" +
+      // Fire once the first home card has painted (JEL-617 phase marks or the
+      // .card DOM), with a hard cap so a card that never renders still delivers.
+      "var t0=+new Date();" +
+      "var iv=setInterval(function(){try{st.tries++;" +
+      "if(st.fired){clearInterval(iv);return}" +
+      "var ph=W.__shellPhases||{};var card=ph.card||ph.home;" +
+      'if(!card){try{card=!!document.querySelector(".card")}catch(_){}}' +
+      "if(card||+new Date()-t0>60000){pull();clearInterval(iv)}" +
+      "}catch(_){st.err++}},1000);" +
+      "}catch(_){}})();"
+    );
+  }
+
+  // JELA-228: written-document injector (DOMParser path; the string fast path
+  // splices the same body). Unconditional + cheap — the flag gate lives inside
+  // the body so a fielded TV with no deferred route configured pays nothing.
+  function injectJsiDeferredChannel(doc) {
+    var jdTag = doc.createElement("script");
+    jdTag.setAttribute("data-shell-jsi-deferred-loader", "1");
+    jdTag.textContent = jsiDeferredBody();
+    doc.head.appendChild(jdTag);
+  }
+
   // JEL-197: shell-side JS-Injector snippet channel (parent JEL-196).
   // The Tizen shell bakes its own connect-form body and, once connected,
   // document.writes the server's /web/index.html. The JellyPlug snippets
@@ -6056,6 +6132,13 @@
       '<script data-shell-diag-beacon="1">' +
       diagBeaconPostBody() +
       "</script>";
+    // JELA-228 (WS-B1): deferred JSI channel loader must survive the warm fast
+    // path too (no-op unless jsiDeferredPath is set). Body carries no "</script"
+    // literal so the string splice is safe.
+    var jsiDeferredTag =
+      '<script data-shell-jsi-deferred-loader="1">' +
+      jsiDeferredBody() +
+      "</script>";
     var injected =
       '<script data-shell-diag="1">' +
       diagBody +
@@ -6073,7 +6156,8 @@
       progressTag +
       instantHomeTag +
       directHomeTag +
-      diagBeaconTag;
+      diagBeaconTag +
+      jsiDeferredTag;
     var insertAt = headIdx + 6;
     var patched = html.slice(0, insertAt) + injected + html.slice(insertAt);
     // Init bundle counters so HUD reads consistent values whether or
@@ -7087,6 +7171,9 @@
         // JELA-30: opt-in boot-ring diag beacon posts the JEL-617 ring +
         // tx counters to POST /shell/diag (no-op unless diagBeacon==='1').
         injectDiagBeaconPost(doc);
+        // JELA-228 (WS-B1): post-first-card deferred JSI channel loader
+        // (no-op unless jsiDeferredPath names the deferred route).
+        injectJsiDeferredChannel(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through
         // the tizen-compat firewall (idempotent vs a server-injected copy).
