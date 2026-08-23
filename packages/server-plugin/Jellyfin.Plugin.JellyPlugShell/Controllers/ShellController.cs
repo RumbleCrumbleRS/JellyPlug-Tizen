@@ -32,29 +32,6 @@ public class ShellController : ControllerBase
     // body through the sanitizer.
     private const int MaxDiagBodyBytes = 64 * 1024;
 
-    private const string JsContentType = "application/javascript";
-
-    // JELA-689: shell.min.js and lite.min.js are only ever requested at
-    // CONTENT-ADDRESSED urls — every call site appends ?v=<manifest sha> (the
-    // bootstrap's cached-sha and manifest paths) or, on the manifest-failure
-    // fallback, ?t=<now>. The bytes behind a given url therefore can never
-    // change, so the correct TTL is the maximum, exactly like tx/{hash}.js
-    // below. The old "TVs cache-bust with ?v=<sha>, so a short TTL is enough"
-    // ran the inference backwards: max-age=60 + no ETag meant every real boot
-    // (any boot >60 s after the last) re-downloaded ~190 KB it already had,
-    // with nothing to answer 304 with. manifest.json stays no-cache — that
-    // indirection is what lets a TV discover a new sha at all.
-    private const string ImmutableCacheControl = "public, max-age=31536000, immutable";
-
-    // babel.min.js is the exception, and it is NOT safe to mark immutable: the
-    // shell and boot-shell both fetch it at the BARE url
-    // (`fetch(S+"/shell/babel.min.js")` — shell.js / boot-shell.src.js), so an
-    // immutable year would pin a TV to whatever babel it first saw and a
-    // plugin update could never reach it. A day of freshness plus the ETag
-    // still converts today's every-boot 2 MB re-download into a cache hit, or
-    // a ~200-byte 304 once stale.
-    private const string RevalidateCacheControl = "public, max-age=86400, must-revalidate";
-
     private readonly ShellDropService _drop;
     private readonly DiagIngestService _diag;
     private readonly ConfigFingerprintService _fingerprint;
@@ -94,7 +71,7 @@ public class ShellController : ControllerBase
     [AllowAnonymous]
     [HttpGet("shell.min.js")]
     public IActionResult GetShell()
-        => JsAsset(_drop.ShellBytes, _drop.ShellGzipBytes, _drop.ShellSha256, ImmutableCacheControl);
+        => ContentAddressed(_drop.ShellBytes, _drop.ShellGzipBytes, _drop.ShellSha256);
 
     /// <summary>
     /// JELA-67: JellyPlug Lite canvas home. Anonymous like the other TV-facing
@@ -105,41 +82,75 @@ public class ShellController : ControllerBase
     [AllowAnonymous]
     [HttpGet("lite.min.js")]
     public IActionResult GetLite()
-        => JsAsset(_drop.LiteBytes, _drop.LiteGzipBytes, _drop.LiteSha256, ImmutableCacheControl);
+        => ContentAddressed(_drop.LiteBytes, _drop.LiteGzipBytes, _drop.LiteSha256);
 
+    /// <summary>
+    /// The vendored slim Babel. Note this one is fetched at a BARE url by both
+    /// shells (`S+"/shell/babel.min.js"` in shell.js and boot-shell.src.js), so
+    /// in practice it takes the revalidate branch of
+    /// <see cref="ContentAddressed"/> — see the note there on why that matters.
+    /// </summary>
     [AllowAnonymous]
     [HttpGet("babel.min.js")]
     public IActionResult GetBabel()
-        => JsAsset(_drop.BabelBytes, _drop.BabelGzipBytes, _drop.BabelSha256, RevalidateCacheControl);
+        => ContentAddressed(_drop.BabelBytes, _drop.BabelGzipBytes, _drop.BabelSha256);
 
     /// <summary>
-    /// JELA-688 / JELA-689: the one way any /shell/ JS asset goes out.
+    /// JELA-689: serve a /shell/ JS body under the cache policy its URL has
+    /// actually earned, plus an ETag either way.
     ///
-    /// Jellyfin does not run response compression across plugin routes — a
-    /// plugin that wants it does it itself (JavaScriptInjector on the same
-    /// server is the precedent) — so these three bodies shipped raw: 190 KB
-    /// shell + 34 KB lite on every warm boot, 2.0 MB babel on a cold one.
-    /// gzip takes that to −72%/−66%/−77%.
+    /// A request that carries the CURRENT sha as ?v= is content-addressed:
+    /// those bytes can never change, because a new shell means a new sha means
+    /// a new URL (the TV reads the sha from the always-no-cache manifest.json,
+    /// which is the whole point of the split). That earns the same year-long
+    /// `immutable` tx/{hash}.js already gets. The old blanket
+    /// `max-age=60, must-revalidate` meant every real boot — anything more than
+    /// a minute after the last — had to round-trip before it could reuse bytes
+    /// it already had.
     ///
-    /// Serving compressed is strictly opt-in on the CLIENT's terms. A request
-    /// with no Accept-Encoding, or one that rules gzip out, gets the identical
-    /// raw bytes it gets today: an M63 TV must never be handed a body it
-    /// cannot inflate, and this route is on the path where a stranded TV has
-    /// no second chance. The bytes the TV ultimately executes are unchanged
-    /// either way, so the manifest sha256 and every ?v=&lt;sha&gt; url stay
-    /// correct — the sha is of the RAW asset and is never derived from what
-    /// went over the wire.
+    /// Everything else keeps the short TTL, and that branch is load-bearing,
+    /// not a leftover:
+    ///   * babel.min.js is fetched at a BARE url by both shells. Fielded WGTs
+    ///     hardcode their fetches and can never be updated, so pinning a bare
+    ///     url `immutable` for a year would strand the whole fleet on a stale
+    ///     transpiler with no way to bust it.
+    ///   * the bootstrap's manifest-failure path deliberately busts with
+    ///     ?t=&lt;now&gt; — that URL is unique per boot and must not be pinned.
+    ///   * a STALE ?v= (a TV still holding an older manifest) is not addressing
+    ///     the bytes we are about to hand back, so calling them immutable under
+    ///     that URL would be a lie that outlives the mistake by a year.
+    ///
+    /// The ETag is unconditional, so even the short-TTL branch now answers a
+    /// revalidation with a ~200-byte 304 instead of re-sending 190 KB the TV
+    /// already has — which is most of the win for babel.min.js specifically.
+    ///
+    /// JELA-688: the body also goes out gzipped when the client asks for it.
+    /// Jellyfin runs no response compression across plugin routes — a plugin
+    /// that wants it does it itself (JavaScriptInjector on the same server is
+    /// the precedent) — so these three shipped raw: 190 KB shell + 34 KB lite
+    /// on every warm boot, 2.0 MB babel on a cold one. gzip takes that to
+    /// −72%/−66%/−77%.
+    ///
+    /// Serving compressed is strictly on the CLIENT's terms. A request with no
+    /// Accept-Encoding, or one that rules gzip out, gets the identical raw
+    /// bytes it got before: an M63 TV must never be handed a body it cannot
+    /// inflate, and this route is where a stranded TV has no second chance.
+    /// The bytes the TV ultimately executes are unchanged either way, so the
+    /// manifest sha256 and the ?v= match above stay correct — the sha is of the
+    /// RAW asset and is never derived from what went over the wire.
     ///
     /// The two representations carry DIFFERENT ETags (`"&lt;sha&gt;"` vs
     /// `"&lt;sha&gt;-gzip"`) because an entity tag identifies a representation,
-    /// not a resource; Vary: Accept-Encoding is set on both — including on the
+    /// not a resource; Vary: Accept-Encoding is set on both — including the
     /// uncompressed one — so an intermediary can never hand a cached gzip body
-    /// to a client that asked for identity. FileContentResult answers a
-    /// matching If-None-Match with a 304 for free.
+    /// to a client that asked for identity.
     /// </summary>
-    private IActionResult JsAsset(byte[] raw, byte[]? gzip, string sha256, string cacheControl)
+    private IActionResult ContentAddressed(byte[] bytes, byte[]? gzip, string sha256)
     {
-        Response.Headers.CacheControl = cacheControl;
+        var addressed = string.Equals(Request.Query["v"].ToString(), sha256, StringComparison.Ordinal);
+        Response.Headers.CacheControl = addressed
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=60, must-revalidate";
         Response.Headers.Vary = HeaderNames.AcceptEncoding;
 
         if (gzip != null && AcceptsGzip(Request.Headers.AcceptEncoding))
@@ -148,18 +159,17 @@ public class ShellController : ControllerBase
             return Tagged(gzip, sha256 + "-gzip");
         }
 
-        return Tagged(raw, sha256);
+        return Tagged(bytes, sha256);
     }
 
-    // The ETag-bearing File() overload is the 5-arg one; the 3-arg call binds
-    // to `bool enableRangeProcessing` instead and silently drops the tag.
-    // fileDownloadName stays null (no Content-Disposition — these are scripts,
-    // not downloads) and lastModified stays null: the sha IS the validator,
-    // and an embedded resource has no meaningful mtime.
+    // Strong ETag — the sha256 IS a hash of the exact bytes below. Passing it
+    // to File() is what makes MVC honour If-None-Match and answer 304; setting
+    // the header by hand would not. It has to be the 5-arg overload: the 3-arg
+    // call binds to `bool enableRangeProcessing` and silently drops the tag.
     private FileContentResult Tagged(byte[] body, string tag)
         => File(
             body,
-            JsContentType,
+            "application/javascript",
             fileDownloadName: null,
             lastModified: null,
             entityTag: new EntityTagHeaderValue("\"" + tag + "\""));
