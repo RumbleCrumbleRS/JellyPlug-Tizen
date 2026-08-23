@@ -808,6 +808,64 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JELA-695: cross-origin Worker shim (mirror of shell.js).
+      //
+      // The widget origin owns the document and the server's markup is
+      // document.written in, so /web/ asset URLs are cross-origin to it.
+      // `new Worker(crossOriginUrl)` is a hard SecurityError, and
+      // jellyfin-web builds its blurhash worker at imageLoader MODULE SCOPE,
+      // before `var g={...,getPrimaryImageAspectRatio:v}`. The throw aborts
+      // that module body while webpack has already cached the half-built
+      // namespace, so imageLoader.default stays undefined forever and
+      // cardBuilder's `h.default.getPrimaryImageAspectRatio(items)` makes
+      // EVERY native getCardsHtml() throw — which is what silently empties
+      // the Home Screen Sections rows on the TV home.
+      //
+      // Native-first wrapper: on throw, hand back a queueing proxy and
+      // re-create the worker from a same-origin blob of the fetched script
+      // (every /web/ asset is Access-Control-Allow-Origin:*), replaying queued
+      // postMessage and re-binding listeners; if that fails too the proxy
+      // stays inert, which still lets the module body finish.
+      // Kill switch: localStorage["jellyfin.shell.workerShimDisabled"]="1".
+      // Diag: window.__shellWorkerShim={st,n,fb,up,why,err}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.workerShimDisabled")==="1"){window.__shellWorkerShim={st:"off"};return;}',
+      '    var OW=window.Worker;if(typeof OW!=="function")return;',
+      '    var D={st:"on",n:0,fb:0,up:0,why:"",err:""};window.__shellWorkerShim=D;',
+      "    function msg(e){return String((e&&e.message)||e).slice(0,80);}",
+      "    function proxy(url){",
+      "      var q=[],ls=[],real=null,dead=0;",
+      "      var p={onmessage:null,onerror:null,",
+      "        postMessage:function(m){if(real){try{real.postMessage(m);}catch(_){}}else if(!dead&&q.length<200)q.push(m);},",
+      "        addEventListener:function(t,f){ls.push([t,f]);if(real){try{real.addEventListener(t,f);}catch(_){}}},",
+      "        removeEventListener:function(t,f){if(real){try{real.removeEventListener(t,f);}catch(_){}}for(var i=0;i<ls.length;i++){if(ls[i][0]===t&&ls[i][1]===f){ls.splice(i,1);break;}}},",
+      "        terminate:function(){dead=1;q.length=0;if(real){try{real.terminate();}catch(_){}}}};",
+      "      function adopt(w){",
+      "        if(dead){try{w.terminate();}catch(_){}return;}",
+      "        real=w;D.up++;",
+      "        for(var i=0;i<ls.length;i++){try{w.addEventListener(ls[i][0],ls[i][1]);}catch(_){}}",
+      '        try{w.onmessage=function(e){if(typeof p.onmessage==="function")p.onmessage(e);};}catch(_){}',
+      '        try{w.onerror=function(e){if(typeof p.onerror==="function")p.onerror(e);};}catch(_){}',
+      "        for(var j=0;j<q.length;j++){try{w.postMessage(q[j]);}catch(_){}}",
+      "        q.length=0;",
+      "      }",
+      "      try{",
+      "        var x=new XMLHttpRequest();",
+      '        x.open("GET",url,true);',
+      '        x.onload=function(){if(x.status<200||x.status>=300){D.err="http"+x.status;return;}try{var b=new Blob([x.responseText],{type:"application/javascript"});adopt(new OW(((window.URL||window.webkitURL)).createObjectURL(b)));}catch(e){D.err=msg(e);}};',
+      '        x.onerror=function(){D.err="neterr";};',
+      "        x.send();",
+      "      }catch(e2){D.err=msg(e2);}",
+      "      return p;",
+      "    }",
+      "    function W(u,o){",
+      "      D.n++;",
+      "      try{return new OW(u,o);}catch(e){D.fb++;D.why=msg(e);}",
+      "      return proxy(String(u));",
+      "    }",
+      "    W.prototype=OW.prototype;",
+      "    try{window.Worker=W;}catch(_){}",
+      "  })();}catch(_){}",
       // JEL-623: boot paint-gate. The cosmetic sweeps this seed installs
       // (auto-focus 600ms poll, remember-me 300ms poll, YT-iframe cap
       // sweep + whole-tree MutationObserver, webpack CM/PM walker) used
@@ -1007,7 +1065,7 @@
       "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
       "      S.tArm=Date.now();",
       "      var a=cur();if(!a)return;",
-      '      try{delete a.enableAutomaticBitrateDetection;}catch(_){}',
+      "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
       "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
       "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
       "    }",
