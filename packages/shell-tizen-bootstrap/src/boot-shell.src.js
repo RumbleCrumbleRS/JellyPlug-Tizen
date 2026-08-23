@@ -974,6 +974,48 @@
       // iframe src setter/setAttribute intercepts and the one-shot
       // cap() stay armed from t0 (essential guard).
       `  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}`,
+      // JELA-684 (JELA-679/P3): hold the playback bitrate probe until after
+      // first paint. jellyfin-apiclient schedules a fire-and-forget bandwidth
+      // probe 6 s after any setAuthenticationInfo()/onNetworkChange()/auth
+      // call, gated only on the instance property
+      // enableAutomaticBitrateDetection. On a saved-server cold boot that lands
+      // at t~7.7 s, inside the pre-firstCard window, and escalates
+      // 500 KB -> 1 MB -> 3 MB (served as 512 KiB + 1 MiB + 4 MiB = 5.5 MiB).
+      // Nothing on home consumes it, so hold it until the paint gate opens then
+      // re-arm the vendor's own timer. The hold is an accessor because the
+      // connection manager re-assigns the property from its options on every
+      // (re)auth and then calls the scheduler.
+      // Flag-dark: localStorage["jellyfin.shell.deferBitrateTest"]="1".
+      // Diag: window.__shellBT.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
+      "    var D=4000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    var S=window.__shellBT={on:1,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0};",
+      "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
+      "    function hold(){",
+      "      var a=cur();",
+      "      if(!a||a.__shellBTHeld)return;",
+      "      a.__shellBTHeld=1;S.inst++;",
+      "      try{if(a.detectTimeout){clearTimeout(a.detectTimeout);a.detectTimeout=null;S.cleared++;}}catch(_){}",
+      '      try{Object.defineProperty(a,"enableAutomaticBitrateDetection",{configurable:true,enumerable:true,get:function(){return false;},set:function(){S.sets++;}});}',
+      "      catch(_){try{a.enableAutomaticBitrateDetection=false;}catch(__){}}",
+      "      if(!S.tHold)S.tHold=Date.now();",
+      "    }",
+      "    var iv=null;",
+      "    function release(){",
+      "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
+      "      S.tArm=Date.now();",
+      "      var a=cur();if(!a)return;",
+      '      try{delete a.enableAutomaticBitrateDetection;}catch(_){}',
+      "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
+      "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
+      "    }",
+      "    function arm(){hold();try{iv=setInterval(hold,500);}catch(_){}}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
+      "    else{arm();setTimeout(release,20000);}",
+      "  })();}catch(_){}",
       "  try{(function(){",
       "    var on=false;",
       '    try{on=(localStorage.getItem("jellyfin.shell.afSelfTest")==="1")||/shellSelfTest=focus/.test(String(location.hash||""))||/shellSelfTest=focus/.test(String(location.search||""));}catch(_){}',
