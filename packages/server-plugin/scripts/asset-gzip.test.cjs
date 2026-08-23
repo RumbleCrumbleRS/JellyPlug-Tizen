@@ -137,8 +137,23 @@ for (const [sha, bytes] of [
 // ---- 4. the two representations stay distinguishable to caches -------------
 
 assert.ok(
-  /Response\.Headers\.Vary = HeaderNames\.AcceptEncoding;/.test(ctrl),
+  /Response\.Headers\.Vary = HeaderNames\.AcceptEncoding \+ ", " \+ HeaderNames\.Origin;/.test(
+    ctrl,
+  ),
   "Vary: Accept-Encoding must be set unconditionally — including on the uncompressed response — or an intermediary can hand a cached gzip body to an identity client",
+);
+
+// JELA-687: Origin must be in Vary too. M63 does not partition its HTTP cache
+// by request mode, so a no-cors <script src> entry gets reused for a later CORS
+// fetch() of the same url and that entry carries no CORS approval — the fetch
+// fails despite this route always sending `*`. Both shells do exactly that
+// sequence on shell.min.js (script tag cold, fetch warm). Varying on Origin
+// splits the two request modes into separate cache slots. Without it the
+// immutable branch pins the failure for a year instead of the ~60 s the old
+// blanket TTL used to clear it in (measured against production on the rig).
+assert.ok(
+  /HeaderNames\.Origin/.test(ctrl),
+  "Vary must include Origin — otherwise M63 hands a no-cors <script> cache entry to a CORS fetch() of the same ?v= url and the fetch fails permanently under immutable",
 );
 assert.ok(
   /Tagged\(gzip, sha256 \+ "-gzip"\)/.test(ctrl),

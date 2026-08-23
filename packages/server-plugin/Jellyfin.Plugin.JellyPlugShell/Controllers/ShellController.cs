@@ -144,6 +144,27 @@ public class ShellController : ControllerBase
     /// not a resource; Vary: Accept-Encoding is set on both — including the
     /// uncompressed one — so an intermediary can never hand a cached gzip body
     /// to a client that asked for identity.
+    ///
+    /// JELA-687: `Origin` is in Vary for a different and sharper reason. M63
+    /// (Chrome 63) does not partition its HTTP cache by request mode, so a
+    /// cache entry populated by a no-cors `&lt;script src&gt;` load can be
+    /// handed to a later CORS `fetch()` of the SAME url — and that entry
+    /// carries no CORS approval, so the fetch fails with "No
+    /// 'Access-Control-Allow-Origin' header is present" even though this route
+    /// always sends `*`. Both shells do exactly that sequence on the hosted
+    /// shell.min.js: script-tag on the cold path, fetch() on the warm one.
+    ///
+    /// That collision predates JELA-689 and used to self-heal — under the old
+    /// blanket `max-age=60` the poisoned entry went stale and the next fetch
+    /// revalidated. Measured on the rig against production: with
+    /// `max-age=60` the fetch fails at t+2 s and SUCCEEDS at t+75 s; with
+    /// `immutable` it fails at both. So `immutable` did not create the bug, it
+    /// removed the only thing that was clearing it — and pinned it for a year.
+    ///
+    /// A script tag sends no `Origin`; a fetch sends one. Varying on it gives
+    /// the two request modes separate cache slots, so the CORS fetch misses the
+    /// no-cors entry and goes to the network, where it gets its `*`. This keeps
+    /// JELA-689's immutable win instead of trading it away for the old TTL.
     /// </summary>
     private IActionResult ContentAddressed(byte[] bytes, byte[]? gzip, string sha256)
     {
@@ -151,7 +172,7 @@ public class ShellController : ControllerBase
         Response.Headers.CacheControl = addressed
             ? "public, max-age=31536000, immutable"
             : "public, max-age=60, must-revalidate";
-        Response.Headers.Vary = HeaderNames.AcceptEncoding;
+        Response.Headers.Vary = HeaderNames.AcceptEncoding + ", " + HeaderNames.Origin;
 
         if (gzip != null && AcceptsGzip(Request.Headers.AcceptEncoding))
         {
