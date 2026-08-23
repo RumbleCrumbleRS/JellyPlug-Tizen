@@ -148,10 +148,32 @@ serving for `/web/`; reuse the same vhost:
 ```
 location /shell/ {
     alias /var/jellyfin/shell/;
-    add_header Cache-Control "public, max-age=60, must-revalidate";
     types {
         application/json manifest.json;
         application/javascript js;
+    }
+
+    # Default: revalidate. nginx emits an ETag for static files, so this
+    # costs a 304, not a re-download. babel.min.js lands here on purpose —
+    # both shells fetch it at a BARE url (no ?v=), and fielded WGTs can
+    # never be updated, so pinning it would strand the fleet on a stale
+    # transpiler for a year.
+    add_header Cache-Control "public, max-age=60, must-revalidate";
+
+    # The manifests are the indirection that lets a TV discover a new sha.
+    # Caching these pins TVs to a stale shell — never do it.
+    location ~ ^/shell/(tx-)?manifest\.json$ {
+        alias /var/jellyfin/shell/$1manifest.json;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Content-addressed: the TV only ever requests these as
+    # `shell.min.js?v=<sha256>` / `lite.min.js?v=<sha256>` from the manifest
+    # (or `?t=<now>` on the deliberate failure-path bust). New bytes mean a
+    # new sha mean a new url, so the correct TTL is the maximum.
+    location ~ ^/shell/(shell|lite)\.min\.js$ {
+        alias /var/jellyfin/shell/$1.min.js;
+        add_header Cache-Control "public, max-age=31536000, immutable";
     }
 }
 ```

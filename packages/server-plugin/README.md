@@ -11,15 +11,25 @@ Root-level routes (same URLs every fielded bootstrap WGT already polls —
 precedent for root-level plugin routes on 10.11: JellyfinEnhanced,
 PluginPages):
 
-| Route                     | Body                                                             |
-| ------------------------- | ---------------------------------------------------------------- |
-| `/shell/manifest.json`    | version + sha256 of the embedded shell (emit_manifest.py schema) |
-| `/shell/shell.min.js`     | the repo-built shell, embedded at plugin build                   |
-| `/shell/babel.min.js`     | the vendored slim chrome56 Babel, for legacy TVs                 |
-| `/shell/tx-manifest.json` | pre-lowered transpile drop index (JEL-621)                       |
-| `/shell/tx/<hash>.js`     | pre-lowered ES5 bodies, fnv1a(source)-keyed                      |
+| Route                     | Body                                                             | Cache-Control                      |
+| ------------------------- | ---------------------------------------------------------------- | ---------------------------------- |
+| `/shell/manifest.json`    | version + sha256 of the embedded shell (emit_manifest.py schema) | `no-cache`                         |
+| `/shell/shell.min.js`     | the repo-built shell, embedded at plugin build                   | immutable at `?v=<sha>`, else 60 s |
+| `/shell/lite.min.js`      | the JellyPlug Lite canvas home (JELA-67, opt-in per TV)          | immutable at `?v=<sha>`, else 60 s |
+| `/shell/babel.min.js`     | the vendored slim chrome56 Babel, for legacy TVs                 | 60 s (fetched at a bare url)       |
+| `/shell/tx-manifest.json` | pre-lowered transpile drop index (JEL-621)                       | `no-cache`                         |
+| `/shell/tx/<hash>.js`     | pre-lowered ES5 bodies, fnv1a(source)-keyed                      | immutable                          |
 
 All anonymous, like `/web/` statics — the TV fetches them before any login.
+
+JELA-689 on the cache column: the JS bodies carry a strong `ETag` (their
+sha256) either way, so even the 60 s rows revalidate with a 304 instead of
+re-sending the body. `immutable` applies only when the request actually
+carries the CURRENT sha as `?v=` — a bare url (babel, and the bootstrap's
+`?t=<now>` failure-path bust) or a stale `?v=` is not addressing those bytes,
+and fielded WGTs can never be updated, so a wrong `immutable` would be a
+year-long fleet-wide mistake. The manifests are deliberately never cached:
+they are the indirection a TV uses to discover a new sha.
 
 ## In-process tx-drop rebuild
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.JellyPlugShell.Controllers;
 
@@ -68,13 +69,7 @@ public class ShellController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("shell.min.js")]
-    public IActionResult GetShell()
-    {
-        // TVs cache-bust with ?v=<sha256>, so a short server TTL is enough
-        // (matches the README nginx snippet).
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.ShellBytes, "application/javascript");
-    }
+    public IActionResult GetShell() => ContentAddressed(_drop.ShellBytes, _drop.ShellSha256);
 
     /// <summary>
     /// JELA-67: JellyPlug Lite canvas home. Anonymous like the other TV-facing
@@ -84,18 +79,62 @@ public class ShellController : ControllerBase
     /// </summary>
     [AllowAnonymous]
     [HttpGet("lite.min.js")]
-    public IActionResult GetLite()
-    {
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.LiteBytes, "application/javascript");
-    }
+    public IActionResult GetLite() => ContentAddressed(_drop.LiteBytes, _drop.LiteSha256);
 
+    /// <summary>
+    /// The vendored slim Babel. Note this one is fetched at a BARE url by both
+    /// shells (`S+"/shell/babel.min.js"` in shell.js and boot-shell.src.js), so
+    /// in practice it takes the revalidate branch of
+    /// <see cref="ContentAddressed"/> — see the note there on why that matters.
+    /// </summary>
     [AllowAnonymous]
     [HttpGet("babel.min.js")]
-    public IActionResult GetBabel()
+    public IActionResult GetBabel() => ContentAddressed(_drop.BabelBytes, _drop.BabelSha256);
+
+    /// <summary>
+    /// JELA-689: serve a /shell/ JS body under the cache policy its URL has
+    /// actually earned, plus an ETag either way.
+    ///
+    /// A request that carries the CURRENT sha as ?v= is content-addressed:
+    /// those bytes can never change, because a new shell means a new sha means
+    /// a new URL (the TV reads the sha from the always-no-cache manifest.json,
+    /// which is the whole point of the split). That earns the same year-long
+    /// `immutable` tx/{hash}.js already gets. The old blanket
+    /// `max-age=60, must-revalidate` meant every real boot — anything more than
+    /// a minute after the last — had to round-trip before it could reuse bytes
+    /// it already had.
+    ///
+    /// Everything else keeps the short TTL, and that branch is load-bearing,
+    /// not a leftover:
+    ///   * babel.min.js is fetched at a BARE url by both shells. Fielded WGTs
+    ///     hardcode their fetches and can never be updated, so pinning a bare
+    ///     url `immutable` for a year would strand the whole fleet on a stale
+    ///     transpiler with no way to bust it.
+    ///   * the bootstrap's manifest-failure path deliberately busts with
+    ///     ?t=&lt;now&gt; — that URL is unique per boot and must not be pinned.
+    ///   * a STALE ?v= (a TV still holding an older manifest) is not addressing
+    ///     the bytes we are about to hand back, so calling them immutable under
+    ///     that URL would be a lie that outlives the mistake by a year.
+    ///
+    /// The ETag is unconditional, so even the short-TTL branch now answers a
+    /// revalidation with a ~200-byte 304 instead of re-sending 190 KB the TV
+    /// already has — which is most of the win for babel.min.js specifically.
+    /// </summary>
+    private IActionResult ContentAddressed(byte[] bytes, string sha256)
     {
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.BabelBytes, "application/javascript");
+        var addressed = string.Equals(Request.Query["v"].ToString(), sha256, StringComparison.Ordinal);
+        Response.Headers.CacheControl = addressed
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=60, must-revalidate";
+
+        // Strong ETag — the sha256 IS a hash of the exact bytes below.
+        // Passing it to File() is what makes MVC honour If-None-Match and
+        // answer 304; setting the header by hand would not.
+        return File(
+            bytes,
+            "application/javascript",
+            lastModified: null,
+            entityTag: new EntityTagHeaderValue("\"" + sha256 + "\""));
     }
 
     [AllowAnonymous]
