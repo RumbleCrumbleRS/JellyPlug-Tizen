@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
+using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.JellyPlugShell.Controllers;
 
@@ -29,6 +31,29 @@ public class ShellController : ControllerBase
     // that could not plausibly be one so a hostile POST can't stream a large
     // body through the sanitizer.
     private const int MaxDiagBodyBytes = 64 * 1024;
+
+    private const string JsContentType = "application/javascript";
+
+    // JELA-689: shell.min.js and lite.min.js are only ever requested at
+    // CONTENT-ADDRESSED urls — every call site appends ?v=<manifest sha> (the
+    // bootstrap's cached-sha and manifest paths) or, on the manifest-failure
+    // fallback, ?t=<now>. The bytes behind a given url therefore can never
+    // change, so the correct TTL is the maximum, exactly like tx/{hash}.js
+    // below. The old "TVs cache-bust with ?v=<sha>, so a short TTL is enough"
+    // ran the inference backwards: max-age=60 + no ETag meant every real boot
+    // (any boot >60 s after the last) re-downloaded ~190 KB it already had,
+    // with nothing to answer 304 with. manifest.json stays no-cache — that
+    // indirection is what lets a TV discover a new sha at all.
+    private const string ImmutableCacheControl = "public, max-age=31536000, immutable";
+
+    // babel.min.js is the exception, and it is NOT safe to mark immutable: the
+    // shell and boot-shell both fetch it at the BARE url
+    // (`fetch(S+"/shell/babel.min.js")` — shell.js / boot-shell.src.js), so an
+    // immutable year would pin a TV to whatever babel it first saw and a
+    // plugin update could never reach it. A day of freshness plus the ETag
+    // still converts today's every-boot 2 MB re-download into a cache hit, or
+    // a ~200-byte 304 once stale.
+    private const string RevalidateCacheControl = "public, max-age=86400, must-revalidate";
 
     private readonly ShellDropService _drop;
     private readonly DiagIngestService _diag;
@@ -69,12 +94,7 @@ public class ShellController : ControllerBase
     [AllowAnonymous]
     [HttpGet("shell.min.js")]
     public IActionResult GetShell()
-    {
-        // TVs cache-bust with ?v=<sha256>, so a short server TTL is enough
-        // (matches the README nginx snippet).
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.ShellBytes, "application/javascript");
-    }
+        => JsAsset(_drop.ShellBytes, _drop.ShellGzipBytes, _drop.ShellSha256, ImmutableCacheControl);
 
     /// <summary>
     /// JELA-67: JellyPlug Lite canvas home. Anonymous like the other TV-facing
@@ -85,17 +105,97 @@ public class ShellController : ControllerBase
     [AllowAnonymous]
     [HttpGet("lite.min.js")]
     public IActionResult GetLite()
-    {
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.LiteBytes, "application/javascript");
-    }
+        => JsAsset(_drop.LiteBytes, _drop.LiteGzipBytes, _drop.LiteSha256, ImmutableCacheControl);
 
     [AllowAnonymous]
     [HttpGet("babel.min.js")]
     public IActionResult GetBabel()
+        => JsAsset(_drop.BabelBytes, _drop.BabelGzipBytes, _drop.BabelSha256, RevalidateCacheControl);
+
+    /// <summary>
+    /// JELA-688 / JELA-689: the one way any /shell/ JS asset goes out.
+    ///
+    /// Jellyfin does not run response compression across plugin routes — a
+    /// plugin that wants it does it itself (JavaScriptInjector on the same
+    /// server is the precedent) — so these three bodies shipped raw: 190 KB
+    /// shell + 34 KB lite on every warm boot, 2.0 MB babel on a cold one.
+    /// gzip takes that to −72%/−66%/−77%.
+    ///
+    /// Serving compressed is strictly opt-in on the CLIENT's terms. A request
+    /// with no Accept-Encoding, or one that rules gzip out, gets the identical
+    /// raw bytes it gets today: an M63 TV must never be handed a body it
+    /// cannot inflate, and this route is on the path where a stranded TV has
+    /// no second chance. The bytes the TV ultimately executes are unchanged
+    /// either way, so the manifest sha256 and every ?v=&lt;sha&gt; url stay
+    /// correct — the sha is of the RAW asset and is never derived from what
+    /// went over the wire.
+    ///
+    /// The two representations carry DIFFERENT ETags (`"&lt;sha&gt;"` vs
+    /// `"&lt;sha&gt;-gzip"`) because an entity tag identifies a representation,
+    /// not a resource; Vary: Accept-Encoding is set on both — including on the
+    /// uncompressed one — so an intermediary can never hand a cached gzip body
+    /// to a client that asked for identity. FileContentResult answers a
+    /// matching If-None-Match with a 304 for free.
+    /// </summary>
+    private IActionResult JsAsset(byte[] raw, byte[]? gzip, string sha256, string cacheControl)
     {
-        Response.Headers.CacheControl = "public, max-age=60, must-revalidate";
-        return File(_drop.BabelBytes, "application/javascript");
+        Response.Headers.CacheControl = cacheControl;
+        Response.Headers.Vary = HeaderNames.AcceptEncoding;
+
+        if (gzip != null && AcceptsGzip(Request.Headers.AcceptEncoding))
+        {
+            Response.Headers.ContentEncoding = "gzip";
+            return Tagged(gzip, sha256 + "-gzip");
+        }
+
+        return Tagged(raw, sha256);
+    }
+
+    // The ETag-bearing File() overload is the 5-arg one; the 3-arg call binds
+    // to `bool enableRangeProcessing` instead and silently drops the tag.
+    // fileDownloadName stays null (no Content-Disposition — these are scripts,
+    // not downloads) and lastModified stays null: the sha IS the validator,
+    // and an embedded resource has no meaningful mtime.
+    private FileContentResult Tagged(byte[] body, string tag)
+        => File(
+            body,
+            JsContentType,
+            fileDownloadName: null,
+            lastModified: null,
+            entityTag: new EntityTagHeaderValue("\"" + tag + "\""));
+
+    /// <summary>
+    /// True only when the client actually asked for gzip. Fail-closed in every
+    /// ambiguous case (absent header, unparseable list, gzip;q=0), because the
+    /// cost of guessing wrong is a TV that cannot read the shell at all.
+    /// `gzip;q=0` is an explicit refusal and beats a `*` wildcard, per RFC 9110
+    /// §12.5.3.
+    /// </summary>
+    private static bool AcceptsGzip(StringValues acceptEncoding)
+    {
+        if (StringValues.IsNullOrEmpty(acceptEncoding)
+            || !StringWithQualityHeaderValue.TryParseList(acceptEncoding, out var encodings)
+            || encodings == null)
+        {
+            return false;
+        }
+
+        bool? gzip = null;
+        var wildcard = false;
+        foreach (var encoding in encodings)
+        {
+            var acceptable = encoding.Quality.GetValueOrDefault(1) > 0;
+            if (string.Equals(encoding.Value.Value, "gzip", StringComparison.OrdinalIgnoreCase))
+            {
+                gzip = acceptable;
+            }
+            else if (encoding.Value.Equals("*"))
+            {
+                wildcard = acceptable;
+            }
+        }
+
+        return gzip ?? wildcard;
     }
 
     [AllowAnonymous]

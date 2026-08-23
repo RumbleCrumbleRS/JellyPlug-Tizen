@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -29,6 +30,21 @@ public class ShellDropService
         ShellSha256 = Sha256Hex(ShellBytes);
         BabelSha256 = Sha256Hex(BabelBytes);
         LiteSha256 = Sha256Hex(LiteBytes);
+
+        // JELA-688: gzip once, serve many. Jellyfin runs no response
+        // compression over plugin routes (JavaScriptInjector compresses
+        // itself; we never did), so /shell/* went out raw: 190 KB shell +
+        // 34 KB lite every warm boot, 2.0 MB babel on a cold/stranded one.
+        // Lazy, not ctor-eager, because this service is a DI singleton
+        // constructed on the FIRST /shell/ request: compressing 2 MB of babel
+        // there would sit in front of the shell fetch on the boot critical
+        // path, and babel is only ever requested by the rare TV that falls
+        // through to the on-device transform. Each body is compressed at most
+        // once, on the first request that can actually use it.
+        _shellGzip = LazyGzip(ShellBytes);
+        _babelGzip = LazyGzip(BabelBytes);
+        _liteGzip = LazyGzip(LiteBytes);
+
         var shellVersion = ExtractShellVersion(Encoding.UTF8.GetString(ShellBytes));
 
         // liteSha256 is ADDITIVE like the JELA-58 fingerprint fields: old
@@ -56,6 +72,10 @@ public class ShellDropService
 
     private readonly Dictionary<string, object?> _baseManifest;
 
+    private readonly Lazy<byte[]?> _shellGzip;
+    private readonly Lazy<byte[]?> _babelGzip;
+    private readonly Lazy<byte[]?> _liteGzip;
+
     public byte[] ShellBytes { get; }
 
     public byte[] BabelBytes { get; }
@@ -68,6 +88,19 @@ public class ShellDropService
     public string BabelSha256 { get; }
 
     public string LiteSha256 { get; }
+
+    /// <summary>
+    /// JELA-688: gzip of <see cref="ShellBytes"/>, or null when compression
+    /// did not pay (see <see cref="Gzip"/>). Null means "serve the raw bytes",
+    /// never "fail the request".
+    /// </summary>
+    public byte[]? ShellGzipBytes => _shellGzip.Value;
+
+    /// <summary>JELA-688: gzip of <see cref="BabelBytes"/> — the 2 MB cold-boot body, by far the biggest win.</summary>
+    public byte[]? BabelGzipBytes => _babelGzip.Value;
+
+    /// <summary>JELA-688: gzip of <see cref="LiteBytes"/>.</summary>
+    public byte[]? LiteGzipBytes => _liteGzip.Value;
 
     /// <summary>
     /// Legacy manifest.json body (emit_manifest.py schema) — the exact bytes
@@ -150,6 +183,37 @@ public class ShellDropService
 
     private static string Sha256Hex(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static Lazy<byte[]?> LazyGzip(byte[] raw)
+        => new(() => Gzip(raw), LazyThreadSafetyMode.ExecutionAndPublication);
+
+    /// <summary>
+    /// JELA-688: gzip a served asset, or return null when the compressed body
+    /// would not be strictly smaller than the raw one. Null is a normal
+    /// outcome the caller handles by serving the raw bytes — a TV must never
+    /// be handed MORE bytes than it would have got uncompressed, and a
+    /// compressor fault must never turn a served asset into a failed boot.
+    /// <see cref="CompressionLevel.SmallestSize"/> is `gzip -9`, the level the
+    /// JELA-688 measurements were taken at; it runs once per asset per server
+    /// lifetime, so the CPU is irrelevant and only the wire size matters.
+    /// </summary>
+    private static byte[]? Gzip(byte[] raw)
+    {
+        try
+        {
+            using var ms = new MemoryStream(raw.Length / 2);
+            using (var gz = new GZipStream(ms, CompressionLevel.SmallestSize, leaveOpen: true))
+            {
+                gz.Write(raw, 0, raw.Length);
+            }
+
+            return ms.Length < raw.Length ? ms.ToArray() : null;
+        }
+        catch (Exception)
+        {
+            return null; // fall back to the raw body; /shell/ must stay serveable
+        }
+    }
 
     /// <summary>
     /// Mirrors emit_manifest.py extract_shell_version(): scan the head bytes
