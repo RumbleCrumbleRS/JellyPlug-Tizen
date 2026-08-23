@@ -159,23 +159,27 @@ location /shell/ {
     gzip_types application/javascript application/json;
     gzip_min_length 1024;
 
-    # JELA-689: shell.min.js and lite.min.js are only ever requested at
-    # content-addressed urls (?v=<manifest sha>, or ?t=<now> on the
-    # manifest-failure fallback), so the correct TTL is the maximum.
-    location ~ ^/shell/(shell|lite)\.min\.js$ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
-    }
+    # Default: revalidate. nginx emits an ETag for static files, so this
+    # costs a 304, not a re-download. babel.min.js lands here on purpose —
+    # both shells fetch it at a BARE url (no ?v=), and fielded WGTs can
+    # never be updated, so pinning it would strand the fleet on a stale
+    # transpiler for a year.
+    add_header Cache-Control "public, max-age=60, must-revalidate";
 
-    # babel.min.js is fetched at a BARE url by both shells, so it must stay
-    # revalidatable — immutable would pin a TV to a stale Babel forever.
-    location = /shell/babel.min.js {
-        add_header Cache-Control "public, max-age=86400, must-revalidate";
-    }
-
-    # The manifests are the indirection that lets a TV discover a new sha;
-    # caching them pins the fleet to a stale shell.
+    # The manifests are the indirection that lets a TV discover a new sha.
+    # Caching these pins TVs to a stale shell — never do it.
     location ~ ^/shell/(tx-)?manifest\.json$ {
+        alias /var/jellyfin/shell/$1manifest.json;
         add_header Cache-Control "no-cache";
+    }
+
+    # Content-addressed: the TV only ever requests these as
+    # `shell.min.js?v=<sha256>` / `lite.min.js?v=<sha256>` from the manifest
+    # (or `?t=<now>` on the deliberate failure-path bust). New bytes mean a
+    # new sha mean a new url, so the correct TTL is the maximum.
+    location ~ ^/shell/(shell|lite)\.min\.js$ {
+        alias /var/jellyfin/shell/$1.min.js;
+        add_header Cache-Control "public, max-age=31536000, immutable";
     }
 }
 ```
