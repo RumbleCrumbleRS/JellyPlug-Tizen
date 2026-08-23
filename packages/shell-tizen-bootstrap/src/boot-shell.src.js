@@ -2902,11 +2902,42 @@
       // {on,started,q,f,e,hits,misses,st,ms}; st: "" (running) | "done" |
       // "auth". jellyfin.shell.apiWarmDisabled is honored NOW as the
       // kill-switch reserved for the WS-6 default-ON flip.
-      'if(flg("jellyfin.shell.apiWarm")&&!flg("jellyfin.shell.apiWarmDisabled")&&!W.__shellAW){try{' +
+      //
+      // JELA-685 (JELA-679/P1) adds a SECOND, much narrower entry point:
+      // localStorage['jellyfin.shell.apiWarmSectionsOnly']='1' turns the warm
+      // on by itself and reduces the request list to exactly ONE URL,
+      // /HomeScreen/Sections?UserId=<uid>, with no chained fan-out.
+      //
+      // Why a separate mode rather than the full WS-5 list. On a COLD server
+      // that one call costs 5-19 s of server CPU (measured against production
+      // 2026-08-23: 4,926 / 7,285 / 8,657 / 12,656 / 16,097 ms of
+      // x-response-time-ms cold, 39-170 ms warm) and it is the EXCLUSIVE gate:
+      // the SPA cannot issue any /HomeScreen/Section/* until it returns, so
+      // round 1 and round 2 latencies add. The remaining WS-5 URLs are not on
+      // that exclusive path (JELA-433/434/435 each killed one), and firing
+      // ~35 of them at t~0.5 s competes for the very server CPU the Sections
+      // computation needs. Sections-only buys the head start without the
+      // storm.
+      //
+      // Why it works even though JELA-433 correctly killed client-side
+      // pre-warming: this does not need an HTTP cache or any client-side
+      // reuse. HomeScreenSections COALESCES concurrent identical in-flight
+      // requests server-side (measured: request B issued 4 s after request A
+      // returned at the byte-identical instant as A, xrt 6,401 vs 8,657 ms,
+      // i.e. B attached to A's computation instead of starting its own). So
+      // the head start survives even when the SPA's URL misses canon() and
+      // goes to the network; the in-store parking path is the faster of two
+      // working routes, not a precondition.
+      //
+      // Sizing: the shell issues at ~0.5 s, the SPA at ~5.9 s (JELA-679
+      // waterfall), so round 1 completes up to ~5.4 s earlier and everything
+      // downstream shifts with it. Not a byte lever - see [[m63-boot-cost-truth]].
+      'var awSO=flg("jellyfin.shell.apiWarmSectionsOnly");' +
+      'if((flg("jellyfin.shell.apiWarm")||awSO)&&!flg("jellyfin.shell.apiWarmDisabled")&&!W.__shellAW){try{' +
       'var aC=null;try{var ac0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),as0=ac0&&ac0.Servers&&ac0.Servers[0];if(as0&&as0.AccessToken&&as0.UserId)aC={t:as0.AccessToken,u:as0.UserId,a:String(as0.ManualAddress||as0.LocalAddress||"")}}catch(_){}' +
       'var aB="";try{aB=String(srv()||(aC&&aC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
       'if(aC&&/^https?:\\/\\//.test(aB)&&typeof W.XMLHttpRequest==="function"){' +
-      'var aw=W.__shellAW={on:1,started:0,q:0,f:0,e:0,hits:0,misses:0,st:"",ms:-1};' +
+      'var aw=W.__shellAW={on:1,so:awSO?1:0,started:0,q:0,f:0,e:0,hits:0,misses:0,st:"",ms:-1};' +
       "var sto={},uK={},sn={},PQ=[],pnd=0;" +
       'var bL=[aB];try{var ab2=String(aC.a||"").replace(/\\/+$/,"");if(ab2&&ab2!==aB)bL.push(ab2)}catch(_){}' +
       'var canon=function(u){try{u=String(u||"");for(var bi=0;bi<bL.length;bi++){if(u.indexOf(bL[bi]+"/")===0){u=u.slice(bL[bi].length);break}}' +
@@ -2987,6 +3018,13 @@
       // chained fan-out); the genre set was byte-identical across all three
       // WS-4 boots (a stale name = one cheap query + fallthrough, never a
       // wrong serve). Truncated-in-capture tier-2 Items URLs are NOT guessed.
+      //
+      // JELA-685 sections-only: one URL, and sK deliberately stays null so
+      // chain() never runs. Chaining the fan-out here would buy nothing - the
+      // SPA is handed the same Sections body at the same instant and issues
+      // its own fan-out then, so round 2 gets no head start - while doubling
+      // round-2 load on a server we are trying to unblock.
+      'if(awSO){enq("/HomeScreen/Sections?UserId="+aC.u);pump()}else{' +
       'sK=canon(aB+"/HomeScreen/Sections?UserId="+aC.u);' +
       'var AWL=["/JellyfinEnhanced/tag-cache/"+aC.u,"/HomeScreen/Sections?UserId="+aC.u,"/System/Info/Public","/System/Info","/Users/"+aC.u,"/UserViews?userId="+aC.u,"/DisplayPreferences/usersettings?userId="+aC.u+"&client=emby","/Branding/Configuration","/Plugins","/System/Configuration","/PluginPages/User","/CustomTabs/Config","/HomeScreen/Meta","/MediaBar/WebConfig","/JellyfinEnhanced/public-config","/JellyfinEnhanced/private-config","/JellyfinEnhanced/version","/JellyfinEnhanced/locales/en-US.json"];' +
       'var AWU=["settings","shortcuts","bookmark","elsewhere","hidden-content"],ui;for(ui=0;ui<AWU.length;ui++)AWL.push("/JellyfinEnhanced/user-settings/"+aC.u+"/"+AWU[ui]+".json");' +
@@ -2995,6 +3033,7 @@
       'var AWG=["Action","Adventure","Animation","Comedy","Crime","Documentary","Drama","Family","Fantasy","Horror","Mystery","Romance","Science%20Fiction","Thriller"],gi;for(gi=0;gi<AWG.length;gi++)AWL.push("/Genres?SearchTerm="+AWG[gi]+"&Limit=12&userId="+aC.u);' +
       "for(ui=0;ui<AWL.length;ui++)enq(AWL[ui]);" +
       "pump()" +
+      "}" +
       "}}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );

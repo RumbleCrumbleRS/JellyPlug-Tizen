@@ -640,6 +640,78 @@ function makeEnv(opts) {
     assert(fired === 0 && x.readyState !== 4, "9: aborted XHR never delivered");
   }
 
+  // ---- 10. JELA-685 sections-only mode ---------------------------------------
+  // The narrow entry point: apiWarmSectionsOnly=1 turns the warm on BY ITSELF
+  // and reduces the list to the single URL that is the exclusive round-1 gate,
+  // with no chained fan-out. Everything downstream (parking, intercept,
+  // one-shot, kill switch) is the JELA-51 machinery unchanged.
+  {
+    const env = makeEnv({
+      flagOff: true,
+      store: { "jellyfin.shell.apiWarmSectionsOnly": "1" },
+    });
+    env.run();
+    await env.advance(3000);
+    const aw = env.window.__shellAW;
+    assert(aw && aw.on === 1, "10: sections-only turns the warm on by itself");
+    assert(aw.so === 1, "10: so=1 records the narrowed mode");
+    assert(
+      env.xcalls.length === 1,
+      "10: exactly ONE prefetch request, got " + env.xcalls.length,
+    );
+    assert(
+      env.xcalls[0].url === "http://srv/HomeScreen/Sections?UserId=" + UID,
+      "10: the one request is Sections, got " + env.xcalls[0].url,
+    );
+  }
+  {
+    // No chain: answering Sections must NOT enqueue any /HomeScreen/Section/*,
+    // even though the fixture body carries sections the full mode would chain.
+    const env = makeEnv({
+      flagOff: true,
+      store: { "jellyfin.shell.apiWarmSectionsOnly": "1" },
+    });
+    env.run();
+    await env.resolveAll();
+    await env.advance(3000);
+    assert(
+      !env.xcalls.some((x) => x.url.indexOf("/HomeScreen/Section/") !== -1),
+      "10: sections-only never chains the fan-out",
+    );
+    assert(env.xcalls.length === 1, "10: still exactly one request after chain");
+  }
+  {
+    // The SPA's matching GET is still served from the store (the head start is
+    // handed over, not just spent), and the kill switch still wins.
+    const env = makeEnv({
+      flagOff: true,
+      store: { "jellyfin.shell.apiWarmSectionsOnly": "1" },
+    });
+    env.run();
+    await env.resolveAll();
+    const r = await env.window.fetch(
+      "http://srv/HomeScreen/Sections?UserId=" + UID,
+    );
+    assert(r.__net !== true, "10: SPA fetch served from the store, no network");
+    assert(env.window.__shellAW.hits === 1, "10: hit counted");
+  }
+  {
+    const env = makeEnv({
+      flagOff: true,
+      store: {
+        "jellyfin.shell.apiWarmSectionsOnly": "1",
+        "jellyfin.shell.apiWarmDisabled": "1",
+      },
+    });
+    env.run();
+    await env.advance(3000);
+    assert(
+      env.window.__shellAW === undefined,
+      "10: kill-switch beats sections-only too",
+    );
+    assert(env.xcalls.length === 0, "10: kill-switch -> zero requests");
+  }
+
   console.log("api-warm.test.cjs: all assertions passed");
 })().catch((e) => {
   console.error(e);
