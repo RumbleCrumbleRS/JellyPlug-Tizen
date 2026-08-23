@@ -46,6 +46,13 @@
  *     B8. release stops the re-guard interval (no leaked timer).
  *     B9. no access token at release -> timer armed, detectBitrate not called.
  *     B10. gate absent -> arms immediately and releases on the 20 s fallback.
+ *   PART C — COMPOSITION with JELA-686 (bitrateCache), which ships the other
+ *            bitrate shim into the SAME seed and the SAME paint gate:
+ *     C1. both flags on + warm store -> nothing probes pre-paint, and the
+ *         probe 684 re-arms is served from the store (zero requests).
+ *     C2. both flags on + cold store -> nothing pre-paint, then exactly one
+ *         real detection after paint, persisted for the next boot.
+ *     C3. bitrateCache alone does NOT defer — the flags stay independent.
  *
  * Run: node scripts/defer-bitrate-test.test.cjs
  *   or: pnpm --filter @jellyfin-tv/shell-tizen test
@@ -480,6 +487,187 @@ if (!shim) {
       "B10: fallback release fires the deferred probe",
       api.calls === 1,
       "calls=" + api.calls,
+    );
+  }
+}
+
+// ===========================================================================
+// PART C — COMPOSITION WITH JELA-686 (bitrateCache)
+//
+// Both shims now ship in the same seed and both register on the same paint
+// gate, so their interaction is only exercised here. 684 holds an INSTANCE
+// property (enableAutomaticBitrateDetection); 686 wraps detectBitrate. The
+// intended combined behaviour is: nothing probes before paint, and the
+// post-paint probe 684 re-arms is served from 686's persisted store, so a
+// warm boot costs zero requests instead of the 5.5 MiB ladder.
+//
+// The 686 shim is lifted from the SAME built seed by its own opt-in line, so
+// if either block is dropped or mangled by a merge this part stops resolving.
+// ===========================================================================
+const CACHE_FLAG = "jellyfin.shell.bitrateCache";
+const CACHE_KILL = 'localStorage.getItem("' + CACHE_FLAG + '")!=="1"';
+
+function extractShimAt(killLine) {
+  const kill = seed.indexOf(killLine);
+  if (kill === -1) return null;
+  const start = seed.lastIndexOf("try{(function(){", kill);
+  const endMark = "\n  })();}catch(_){}";
+  const end = seed.indexOf(endMark, kill);
+  if (start === -1 || end === -1 || start > kill || kill > end) return null;
+  return seed.slice(start, end + endMark.length);
+}
+
+const cacheShim = extractShimAt(CACHE_KILL);
+check(
+  srcLabel + ": C: the JELA-686 bitrateCache shim is present in the same seed",
+  cacheShim !== null,
+);
+
+if (!shim || !cacheShim) {
+  console.error("FAIL: both shims required — skipping PART C");
+  failures++;
+} else {
+  // A store that actually writes, plus a real Date, since 686 persists.
+  function runBoth(store, seedRow) {
+    const clock = makeClock();
+    const win = {};
+    const gateCbs = { api: [], paint: [] };
+    win.__shellPaintGate = {
+      onApi(cb) {
+        gateCbs.api.push(cb);
+      },
+      onPaint(cb) {
+        gateCbs.paint.push(cb);
+      },
+    };
+    if (seedRow) store["jellyfin.shell.bitrate"] = JSON.stringify(seedRow);
+    function FakeDate() {
+      this.getTime = () => clock.now() + 1;
+    }
+    const sandbox = {
+      window: win,
+      localStorage: {
+        getItem(k) {
+          return Object.prototype.hasOwnProperty.call(store, k)
+            ? store[k]
+            : null;
+        },
+        setItem(k, v) {
+          store[k] = String(v);
+        },
+      },
+      setTimeout: clock.setTimeout,
+      setInterval: clock.setInterval,
+      clearTimeout: clock.clear,
+      clearInterval: clock.clear,
+      Date: FakeDate,
+      Object,
+      JSON,
+      String,
+      Promise,
+      parseInt,
+    };
+    sandbox.Date.now = () => clock.now() + 1;
+    vm.createContext(sandbox);
+    // Registration order follows the seed: 686 wraps, then 684 holds.
+    vm.runInContext(cacheShim, sandbox);
+    vm.runInContext(shim, sandbox);
+    return {
+      win,
+      clock,
+      store,
+      fireApi: () => gateCbs.api.forEach((c) => c()),
+      firePaint: () => gateCbs.paint.forEach((c) => c()),
+    };
+  }
+
+  // A client the 686 shim can key a cache entry on.
+  function makeCacheApi(onDetect) {
+    return {
+      detectTimeout: null,
+      token: "tok",
+      calls: 0,
+      accessToken() {
+        return this.token;
+      },
+      serverId() {
+        return "srv1";
+      },
+      serverAddress() {
+        return "https://tv.example.test";
+      },
+      detectBitrate() {
+        this.calls++;
+        return Promise.resolve(onDetect === undefined ? 12345678 : onDetect);
+      },
+    };
+  }
+
+  // --- C1: both flags on, warm store -> 0 probes pre-paint, cache hit after.
+  {
+    const r = runBoth({ [FLAG]: "1", [CACHE_FLAG]: "1" }, {
+      bps: 42000000,
+      t: 1,
+      id: "srv1|https://tv.example.test",
+    });
+    const api = makeCacheApi();
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(30000);
+    check(
+      "C1: both armed",
+      r.win.__shellBT && r.win.__shellBT.on === 1 && r.win.__shellBitrate.armed === 1,
+      JSON.stringify({ bt: r.win.__shellBT, br: r.win.__shellBitrate }),
+    );
+    check(
+      "C1: zero detection before paint (684 holds through 686's wrap)",
+      api.calls === 0 && r.win.__shellBitrate.hits === 0,
+      JSON.stringify({ calls: api.calls, br: r.win.__shellBitrate }),
+    );
+    r.firePaint();
+    r.clock.advance(5000);
+    check(
+      "C1: post-paint probe is served from the store, not the network",
+      api.calls === 0 &&
+        r.win.__shellBitrate.hits === 1 &&
+        r.win.__shellBitrate.bps === 42000000,
+      JSON.stringify({ calls: api.calls, br: r.win.__shellBitrate }),
+    );
+  }
+
+  // --- C2: both flags on, cold store -> still 0 pre-paint, then one real
+  //         detection whose result is persisted for the next boot. ----------
+  {
+    const store = { [FLAG]: "1", [CACHE_FLAG]: "1" };
+    const r = runBoth(store, null);
+    const api = makeCacheApi(9000000);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(30000);
+    check("C2: cold store still probes nothing before paint", api.calls === 0);
+    r.firePaint();
+    r.clock.advance(5000);
+    check(
+      "C2: exactly one real detection after paint",
+      api.calls === 1 && r.win.__shellBitrate.miss === 1,
+      JSON.stringify({ calls: api.calls, br: r.win.__shellBitrate }),
+    );
+  }
+
+  // --- C3: 686 alone must not defer — the two flags stay independent. ------
+  {
+    const r = runBoth({ [CACHE_FLAG]: "1" }, null);
+    const api = makeCacheApi();
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(6000);
+    check(
+      "C3: bitrateCache alone leaves the pre-paint probe running (684 is the deferral)",
+      api.calls === 1 && !r.win.__shellBT,
+      JSON.stringify({ calls: api.calls, bt: r.win.__shellBT || null }),
     );
   }
 }
