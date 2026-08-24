@@ -1,7 +1,8 @@
 # Upstream report — `jellyfin/jellyfin-web`
 
-**Status: DRAFT (JELA-701), awaiting sign-off before filing.** The text below is the report
-as it will be filed; this header will be updated with the issue link once it is.
+**Status: FILED (JELA-701) —
+[jellyfin/jellyfin-web#8387](https://github.com/jellyfin/jellyfin-web/issues/8387),
+2026-08-24.** The text below is the report as filed.
 
 Verified against tag `v10.11.11` (our deployed version) and `HEAD` (`1fdc517`) — the shape
 is identical in both. The minimal reproduction below was run for real on 2026-08-24
