@@ -429,9 +429,52 @@ on. `card` (last SPA card render) ran 11.3–13.8 s in this window vs
 ranges, different shells, three boots each; the standing beacon will
 settle the warm class from natural household boots.
 
+## Pre-flight — run the gate before every measurement session (JELA-692)
+
+```sh
+tooling/perf/preflight.sh          # exit 0 = clear, 1 = blocked, 2 = unknown
+```
+
+**This is a gate, not a checklist item.** If it exits non-zero, the numbers you
+are about to take are not quotable and must not be published — including in an
+issue comment, including as a "rough" figure, including with a caveat.
+
+It checks three things that fail independently:
+
+| gate | what | why |
+| ---- | ---- | --- |
+| A | no non-Idle task in `GET /ScheduledTasks` | one CPU/IO-heavy task inflates every endpoint on the server |
+| B | median `x-response-time-ms` on `/System/Info` ≤ 5 ms | the server's own cost for a trivial request — excludes WAN RTT, and catches load the task list cannot enumerate (transcodes, neighbouring containers, the host) |
+| C | harness `/proc/loadavg` 1-min ≤ core count | a *different* box; the boot harness inflates `firstCard` **4.8x** under shared-box load, so a quiet server is not sufficient |
+
+Exit code 2 (`UNKNOWN` — no credentials, server unreachable) is deliberately
+not 0. An un-evaluated gate must never read as a clear one.
+
+**Why this is enforced in code.** It used to be a note, and the note did not
+work. Twice in the JELA-679 programme production timings were published as
+"server idle" when they were not: on 2026-08-23 the Intro Skipper task
+`Detect and Analyze Media Segments` ran a **3 h 15 m** full-library backfill —
+a one-time consequence of the plugin being installed the previous afternoon,
+not a defect — straight through the window in which `/HomeScreen/Sections` was
+measured at 11,577 / 14,457 / 16,097 ms for a 4 KB response. The same endpoint
+measured **2,024 ms** on a quiet box. That single confound is a plausible
+common cause behind a large share of the programme's unexplained variance, and
+it was invisible to everyone taking the measurements.
+
+Corollary, and the reason the script offers no `--kill-tasks` flag: **do not
+cancel a running task to clear the gate.** Stopping one is a deliberate
+configuration decision, and a task cancelled mid-run restarts from the top of
+its queue on the next trigger rather than resuming — so cancelling it converts
+a bounded backlog into a repeating one.
+
 ## Rules
 
+- **Run `tooling/perf/preflight.sh` first and quote its verdict alongside the
+  numbers.** No verdict, no claim.
 - Re-measure with the same TV, same server, same snippet-channel size when
   claiming a perf win; note any config drift alongside the numbers.
 - Compare like with like: first-boot-after-idle vs cold, warm vs warm.
 - One boot is not a baseline — capture at least 3 and quote the range.
+- A perf claim needs a control arm. The virtual boot harness has been measured
+  at **+89 % drift on a NULL change** (JELA-679); without a same-session
+  control, a "win" that size is indistinguishable from the noise floor.
