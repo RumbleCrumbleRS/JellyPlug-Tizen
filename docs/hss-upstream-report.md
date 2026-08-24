@@ -1,8 +1,8 @@
-# Draft upstream report — `IAmParadox27/jellyfin-plugin-home-sections`
+# Upstream report — `IAmParadox27/jellyfin-plugin-home-sections`
 
-**Status: DRAFT, NOT FILED.** Filing this posts publicly to a third-party repository under
-our GitHub account, so it needs sign-off first (JELA-693). Everything below is ready to
-paste as a single issue.
+**Status: FILED 2026-08-24 with CEO sign-off (JELA-693) as
+<https://github.com/IAmParadox27/jellyfin-plugin-home-sections/issues/269>.** The text
+below is the report as filed.
 
 Verified against tag `2.5.11.0` (our installed version) and `HEAD` (`dcf2484`) — all three
 defects are present in both.
