@@ -171,6 +171,36 @@ A fifth arm declared an intervention but set a misspelled key, so it never
 applied: **12 of 12 boots discarded, 0 plotted.** That is the JELA-680 arm-C
 failure, caught by the tool instead of by hindsight.
 
+### Real-app floor — this is the number to size against
+
+Two byte-identical null arms on the **real JellyPlug boot**, interleaved, 8
+cycles, loadavg 3.02–5.64, server pre-flighted (all 55 scheduled tasks Idle):
+
+| metric      | paired median Δ | 95% CI      | detection floor (±) | Wilcoxon p |
+| ----------- | --------------: | ----------- | ------------------: | ---------: |
+| `firstCard` |          +13 ms | [−489, 906] |              698 ms |      0.742 |
+| `handoff`   |         +142 ms | [−266, 354] |              310 ms |      0.547 |
+| `domReady`  |          −24 ms | [−49, 8]    |               29 ms |      0.078 |
+| `resN`      |     +5 requests | [−27, 31]   |         29 requests |      0.844 |
+
+Sizing table, from the sd of the paired difference:
+
+| metric      | MDE @ n=5 | MDE @ n=10 | MDE @ n=20 | MDE @ n=40 |
+| ----------- | --------: | ---------: | ---------: | ---------: |
+| `firstCard` |    850 ms |     601 ms |     425 ms |     301 ms |
+| `handoff`   |    473 ms |     334 ms |     236 ms |     167 ms |
+| `domReady`  |     32 ms |      23 ms |      16 ms |      11 ms |
+
+**An effect under about 600 ms on `firstCard` is not measurable at n=10 on this
+rig.** Read that against the history: JELA-435 deleted every skin image and
+reported `p=0.83` at n=8 — at that n the test could not have resolved anything
+under roughly 850 ms either way, so it was never evidence of a kill.
+
+Note also what pairing is worth on the real workload. The same 16 boots give a
+paired median Δ of **+13 ms** and an unpaired difference-of-medians of
+**+264 ms** — a twentyfold difference on arms that are byte-identical. The
+unpaired estimator is the one that produced +89%.
+
 ## Checklist before you publish a perf claim
 
 - [ ] Arms interleaved, order shuffled, seed recorded.
