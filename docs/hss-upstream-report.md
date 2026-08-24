@@ -52,10 +52,10 @@ Confirming it is the key and not the cache: pinning one `pageHash` across repeat
 requests 20 s apart, against a fresh `pageHash` per request, interleaved, n=12 per arm
 (server's own `x-response-time-ms`, box idle):
 
-| arm | min | median | max | response body |
-|---|---:|---:|---:|---|
-| pinned `pageHash` | 1 ms | **4 ms** | 20 ms | byte-identical |
-| fresh `pageHash` | 530 ms | **2,943 ms** | 8,563 ms | all distinct |
+| arm               |    min |       median |      max | response body  |
+| ----------------- | -----: | -----------: | -------: | -------------- |
+| pinned `pageHash` |   1 ms |     **4 ms** |    20 ms | byte-identical |
+| fresh `pageHash`  | 530 ms | **2,943 ms** | 8,563 ms | all distinct   |
 
 No overlap between the arms. The cache itself works perfectly — it just never gets a key it
 can find on the default path. (Entries also survived four consecutive 20 s gaps unchanged,
@@ -95,7 +95,7 @@ need (2) to land alongside it (otherwise entries become permanently stale) and (
 it safe.
 
 I'm not sending a PR blind since the caching semantics are yours to decide — particularly
-how long a section list *should* stay warm, given sections are intentionally shuffled per
+how long a section list _should_ stay warm, given sections are intentionally shuffled per
 page load. Happy to put one together if a direction sounds right.
 
 ### Environment

@@ -432,8 +432,12 @@ settle the warm class from natural household boots.
 ## Pre-flight — run the gate before every measurement session (JELA-692)
 
 ```sh
-tooling/perf/preflight.sh          # exit 0 = clear, 1 = blocked, 2 = unknown
+./preflight.sh          # exit 0 = clear, 1 = blocked, 2 = unknown
 ```
+
+The script is not a repo file (JEL-141 keeps QA harnesses out of `tooling/`);
+its canonical copy is the appendix of `docs/perf-measurement-protocol.md` —
+copy it into your local workspace and run it from there.
 
 **This is a gate, not a checklist item.** If it exits non-zero, the numbers you
 are about to take are not quotable and must not be published — including in an
@@ -441,11 +445,11 @@ issue comment, including as a "rough" figure, including with a caveat.
 
 It checks three things that fail independently:
 
-| gate | what | why |
-| ---- | ---- | --- |
-| A | no non-Idle task in `GET /ScheduledTasks` | one CPU/IO-heavy task inflates every endpoint on the server |
-| B | median `x-response-time-ms` on `/System/Info` ≤ 5 ms | the server's own cost for a trivial request — excludes WAN RTT, and catches load the task list cannot enumerate (transcodes, neighbouring containers, the host) |
-| C | harness `/proc/loadavg` 1-min ≤ core count | a *different* box; the boot harness inflates `firstCard` **4.8x** under shared-box load, so a quiet server is not sufficient |
+| gate | what                                                 | why                                                                                                                                                             |
+| ---- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A    | no non-Idle task in `GET /ScheduledTasks`            | one CPU/IO-heavy task inflates every endpoint on the server                                                                                                     |
+| B    | median `x-response-time-ms` on `/System/Info` ≤ 5 ms | the server's own cost for a trivial request — excludes WAN RTT, and catches load the task list cannot enumerate (transcodes, neighbouring containers, the host) |
+| C    | harness `/proc/loadavg` 1-min ≤ core count           | a _different_ box; the boot harness inflates `firstCard` **4.8x** under shared-box load, so a quiet server is not sufficient                                    |
 
 Exit code 2 (`UNKNOWN` — no credentials, server unreachable) is deliberately
 not 0. An un-evaluated gate must never read as a clear one.
@@ -469,8 +473,8 @@ a bounded backlog into a repeating one.
 
 ## Rules
 
-- **Run `tooling/perf/preflight.sh` first and quote its verdict alongside the
-  numbers.** No verdict, no claim.
+- **Run `preflight.sh` (appendix of `docs/perf-measurement-protocol.md`) first
+  and quote its verdict alongside the numbers.** No verdict, no claim.
 - Re-measure with the same TV, same server, same snippet-channel size when
   claiming a perf win; note any config drift alongside the numbers.
 - Compare like with like: first-boot-after-idle vs cold, warm vs warm.
