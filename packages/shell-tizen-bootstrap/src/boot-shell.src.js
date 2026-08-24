@@ -3051,6 +3051,54 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
+      // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
+      // if upstream fixes the key derivation): opt-in pinned pageHash for
+      // /HomeScreen/Sections, default OFF via
+      // localStorage['jellyfin.shell.hssPin']='1'. Patches window fetch/XHR
+      // to append PageHash=<uuid>&Page=1&NumResultsPerPage=1000 to any GET
+      // whose path ends /HomeScreen/Sections, so the request takes the
+      // plugin's caching branch instead of the Guid.NewGuid() always-miss
+      // path (measured on prod: median 2,943 ms fresh key -> 4 ms pinned,
+      // n=12/arm, zero overlap — docs/hss-sections-cache-diagnosis.md).
+      // SERVER-HEALTH lever only: the endpoint does not gate firstCard
+      // (rho=0.145, n=17). The key is FNV-1a(userId + ":" + bucket) formatted
+      // as a Guid — DETERMINISTIC so every load in a bucket presents the same
+      // key, PER-USER because the plugin's cache reads are not user-scoped
+      // (two users presenting one value would share a section list),
+      // TIME-BUCKETED (default 3600 s; 'jellyfin.shell.hssPinBucketSecs'
+      // accepts 60..86400) because nothing ever evicts entries — the bucket
+      // bounds the frozen section list, the pinned shuffle order, and the
+      // one leaked ~4 KB entry per (user,bucket). A URL already carrying a
+      // PageHash (the plugin's own pagination mode) is never touched;
+      // non-string fetch inputs pass through unpinned (= today's path).
+      // Installed BEFORE the JELA-51/685 apiWarm patches in this same body
+      // run, so the warm's Sections XHR is pinned too (its first hit seeds
+      // the entry the SPA's pinned request then finds) while apiWarm records
+      // pre-rewrite URLs and its store keys keep matching. One install per
+      // WINDOW (survives the document.write handoff); counters:
+      // window.__shellPH {on,n,b,u}.
+      'if(flg("jellyfin.shell.hssPin")&&!W.__shellPH){try{' +
+      'var ph=W.__shellPH={on:1,n:0,b:0,u:""};' +
+      'var phB=3600;try{var pb0=parseInt(localStorage.getItem("jellyfin.shell.hssPinBucketSecs")||"",10);if(pb0>=60&&pb0<=86400)phB=pb0}catch(_){}' +
+      "var phH=function(s,h){for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h};" +
+      'var phX=function(n){return("0000000"+n.toString(16)).slice(-8)};' +
+      'var phKey=function(){try{var c1=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s1=c1&&c1.Servers&&c1.Servers[0],u1=s1&&s1.UserId;if(!u1)return"";' +
+      'var bk=Math.floor(+new Date()/(phB*1000)),sd=String(u1)+":"+bk;' +
+      'var ha=phH(sd+"#0",2166136261),hb=phH(sd+"#1",2166136261),hc=phH(sd+"#2",2166136261),hd=phH(sd+"#3",2166136261);' +
+      'ph.b=bk;ph.u=phX(ha)+"-"+phX(hb).slice(0,4)+"-"+phX(hb).slice(4)+"-"+phX(hc).slice(0,4)+"-"+phX(hc).slice(4)+phX(hd);return ph.u}catch(_){return""}};' +
+      'var phRw=function(u){try{u=String(u||"");var pq=u.indexOf("?"),pp=pq<0?u:u.slice(0,pq);' +
+      "if(!/\\/HomeScreen\\/Sections$/.test(pp))return u;" +
+      "if(/[?&][Pp]age[Hh]ash=/.test(u))return u;" +
+      "var k=phKey();if(!k)return u;ph.n++;" +
+      'return u+(pq<0?"?":"&")+"PageHash="+k+"&Page=1&NumResultsPerPage=1000"}catch(_){return u}};' +
+      'if(typeof W.fetch==="function"){try{var pF=W.fetch;W.fetch=function(pu,po){try{' +
+      'var pm=po&&po.method?String(po.method).toUpperCase():"GET";' +
+      'if(pm==="GET"&&typeof pu==="string")pu=phRw(pu)' +
+      "}catch(_){G.err++}" +
+      "return pF.call(W,pu,po)}}catch(_){G.err++}}" +
+      "try{var PX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PX&&PX.open){var pO2=PX.open;" +
+      'PX.open=function(pm2,pu2){var pa=arguments,pn=arguments.length;try{if(String(pm2||"").toUpperCase()==="GET"){var pr2=phRw(String(pu2||""));if(pr2!==String(pu2||"")){pa=[pm2,pr2];for(var pj2=2;pj2<pn;pj2++)pa.push(arguments[pj2])}}}catch(_){G.err++}return pO2.apply(this,pa)}}}catch(_){G.err++}' +
+      "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
       // fires the DETERMINISTIC home-sections request list (JELA-50 WS-4
