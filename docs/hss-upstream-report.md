@@ -48,6 +48,19 @@ is a measured **0.3-6.5 s of server CPU per home load, per user**, for a ~4 KB r
 (times are the server's own `x-response-time-ms`, measured with the box otherwise idle —
 `/System/Info` sat at ~1 ms throughout).
 
+Confirming it is the key and not the cache: pinning one `pageHash` across repeated
+requests 20 s apart, against a fresh `pageHash` per request, interleaved, n=12 per arm
+(server's own `x-response-time-ms`, box idle):
+
+| arm | min | median | max | response body |
+|---|---:|---:|---:|---|
+| pinned `pageHash` | 1 ms | **4 ms** | 20 ms | byte-identical |
+| fresh `pageHash` | 530 ms | **2,943 ms** | 8,563 ms | all distinct |
+
+No overlap between the arms. The cache itself works perfectly — it just never gets a key it
+can find on the default path. (Entries also survived four consecutive 20 s gaps unchanged,
+so nothing is expiring or invalidating them.)
+
 ### 2. Unreachable entries are still stored, and nothing ever evicts them
 
 Those guaranteed-miss requests still execute

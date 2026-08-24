@@ -104,15 +104,55 @@ retires the ticket's headline numbers: the 5,725 / 11,577 / 14,457 / 16,097 ms r
 taken through the Intro Skipper backfill (JELA-692), not off the endpoint. **On a quiet
 server this endpoint costs roughly 0.3-6.5 s, not 5-16 s.**
 
-The `immediate` column — a re-hit issued with *zero* gap, which a working cache would serve
-as a hit — never took a hit-shaped value, and there is no monotone dependence on gap length.
-That is exactly what `Guid.NewGuid()` predicts, and it is inconsistent with a cache that
-expires or is invalidated.
+Two things in that data matter, and they point in different directions — both are reported
+because the second one is easy to mistake for a working cache.
+
+**There is no response cache.** The `immediate` column is a re-hit issued with *zero* gap,
+which a working cache would serve as a hit. Its median is **1,192 ms** (range 322-1,764) —
+never hit-shaped. And across all 48 requests the probe recorded **48 distinct body hashes**.
+A response cache must return identical bytes. This is exactly what `Guid.NewGuid()` predicts.
+
+**But there is a real warm effect, and it is not HSS's.** Gap length does correlate with
+cost: Spearman **rho = 0.659 (n=16)**, short gaps (<=10 s) median **780 ms** against long
+gaps (>=20 s) median **3,519 ms**. So JELA-685's "warm window under 30 s" was a real
+observation — its *attribution* was wrong. It cannot be the HSS section cache, which is
+provably unreachable on this path and which returns different bytes every time. It is the
+layer underneath: Jellyfin's own query results and the SQLite page cache staying warm for
+about ten seconds. Nothing in HSS's configuration reaches it, which is why no tunable ever
+moved this number.
+
+(`rho(control, after-gap) = 0.397` — even on a pre-flighted box some of the spread still
+tracks server state, so treat single readings here as soft.)
+
+**The decisive test.** `hss-pagehash-probe.py` pins one `pageHash` (arm `SAME`) against a
+fresh one per request (arm `DIFF`), 20 s between hits — past the alleged invalidation
+window — with the arms **interleaved** so drift cannot favour either. Repeats only, prime
+excluded, n=12 per arm:
+
+| arm | min | median | max | body SHA |
+|---|---:|---:|---:|---|
+| `SAME` (pinned `pageHash`) | 1 ms | **4 ms** | 20 ms | identical within each cycle |
+| `DIFF` (fresh `pageHash`) | 530 ms | **2,943 ms** | 8,563 ms | all 12 distinct |
+
+**Zero overlap** — the slowest `SAME` hit (20 ms) is faster than the fastest `DIFF` hit
+(530 ms). That is a ~700x separation on the median.
+
+Entries in the `SAME` arm survived four consecutive 20 s gaps (80 s per cycle) at 1-6 ms
+with byte-identical bodies. **Nothing is invalidating anything.** The cache works exactly as
+designed the moment it is given a key that can be found; supplying `Guid.NewGuid()` is the
+entire defect.
+
+Note also what `SAME` shows about staleness: the body stayed byte-identical for the whole
+cycle. Since nothing evicts (§3), a permanently pinned hash means a permanently frozen
+section list.
 
 ## Consequences for JELA-685 and JELA-693
 
-- **JELA-693's AC1 — "cold hit under ~500 ms" — is unreachable by configuration.** No
-  setting tunes a cache that is never read. The AC assumed a cache that does not exist.
+- **JELA-693's AC1 — "cold hit under ~500 ms" — is unreachable by configuration**, and as
+  literally worded it is unreachable at all: a genuinely cold build costs 0.9-6 s even with
+  the cache working (the `prime` hits above), because someone must always pay for the first
+  build. No setting tunes a cache that is never read. What *is* reachable is the goal behind
+  the AC — repeat hits at 1-20 ms instead of seconds — via option 2 below.
 - **JELA-685 was right to refuse to build the scheduled pre-warm**, though not for the
   reason it gave. The blocker is not that re-warming inside a sub-30 s window is
   unaffordable; it is that there is **no cross-request cache to warm at all**.
@@ -126,7 +166,8 @@ expires or is invalidated.
    `docs/hss-upstream-report.md`.
 2. **Client-side pinned `pageHash`** (no fork; lives entirely in our shell). Send a
    per-user-unique `PageHash` plus `Page`/`NumResultsPerPage` so requests take the caching
-   branch. **Three hazards, all real:**
+   branch. **Measured effect is large and certain: 2,943 ms -> 4 ms median, no overlap.**
+   **Three hazards, also all real and also measured:**
    - entries are never evicted, so a permanently pinned hash serves a **permanently stale**
      section list until the server restarts. A time-bucketed hash
      (`uuid5(userId + hour)`) bounds staleness but still leaks one entry per user per bucket.
@@ -138,9 +179,11 @@ expires or is invalidated.
    but it carries ongoing maintenance.
 
 **Recommendation: (1) now, and treat (2) as a separate costed ticket rather than a quick
-win.** The measured cost on a quiet box is much lower than this ticket assumed, so the
-server-health case for (2) or (3) is weaker than it looked — and (2) trades a CPU cost for a
-staleness bug, which is not obviously a good trade.
+win.** The 700x speedup makes (2) tempting, but it is not free: it trades server CPU for a
+frozen home screen, and the honest version needs a time-bucketed key plus a per-user
+derivation to avoid §4. The measured cost on a quiet box (0.3-6.5 s, not the 5-16 s this
+ticket quotes) also makes the server-health case weaker than it looked. Neither (2) nor (3)
+should be funded as a firstCard win — JELA-685 settled that separately (rho = 0.145, n=17).
 
 ## Reproducing
 
