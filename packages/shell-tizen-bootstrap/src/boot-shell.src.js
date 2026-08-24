@@ -1075,10 +1075,28 @@
       // so invalidating there would wipe the store on every boot and buy
       // nothing. A same-address link change is covered by the TTL instead.
       //
-      // Playback is untouched. The playback path calls detectBitrate(!0) —
-      // forced — which passes straight through to a real detection, so a
-      // Direct Play / transcode decision is made on a freshly measured value
-      // exactly as before. Only the unforced boot probe is served from store.
+      // Playback IS served from this store — CORRECTION, the opposite was
+      // claimed here and in PR #157 until JELA-684's follow-up re-checked it
+      // against the bundle the 10.11.11 server actually serves (main bundle,
+      // apiclient bundle, all 927 lazy chunks and every injected plugin
+      // script). detectBitrate has exactly two web-client call sites:
+      //   - playbackManager's pre-play max-bitrate step (play() chain, for
+      //     Video/Audio on a non-local item with automatic bitrate detection
+      //     enabled): detectBitrate() — UNFORCED, so it reads this store;
+      //   - the quality dialog (setMaxStreamingBitrate):
+      //     detectBitrate(!0) — forced, real detection, bypasses the store;
+      // plus the apiclient's own unforced boot probe (y() above).
+      //
+      // So with the flag on, a Direct Play / transcode decision can run on a
+      // persisted measurement up to TTL old. That is DELIBERATE — decided on
+      // the record, not by accident: vendor-stock already fed playback a
+      // boot-time value (the unforced play call hit the vendor's 1 h
+      // instance cache whenever play followed the boot probe within the same
+      // page), the store is keyed to the server identity, a panel's link is
+      // far more stable than a browser tab's, and the quality dialog still
+      // forces a fresh measurement as the user-facing remedy. Do NOT "fix"
+      // playback by forcing it: that would run the full download ladder at
+      // every play start — a cost even stock never paid.
       //
       // Composes with JELA-684 (deferBitrateTest), which holds the same probe
       // until after paint: with both on, boot 1 detects post-paint and
@@ -1087,8 +1105,10 @@
       // prototype method, so neither sees the other.
       //
       // TTL defaults to 24 h, not the vendor's 1 h: a panel's link is far more
-      // stable than a browser tab's, and a stale value only costs one
-      // suboptimal initial bitrate guess that playback re-measures anyway.
+      // stable than a browser tab's, and a stale value costs at most a
+      // suboptimal bitrate ceiling until the TTL lapses or the user opens
+      // the quality dialog, which forces a fresh detection (playback does
+      // NOT re-measure — see the call-site inventory above).
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
