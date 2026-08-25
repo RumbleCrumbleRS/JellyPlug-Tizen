@@ -334,6 +334,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1832 rewriteFontThirdPartyCss above — covers the string fast path
 *JEL-406 flow through the /407 dynamic-script interceptors, so legacy
 *JEL-557 engines still get the same transpile + cache treatment as th
+*JEL-1832 covers the string fast path AND the DOMParser path, and runs
 *JEL-621 kick the pre-lowered drop manifest fetch first so it overlap
 *JEL-1034 v53): speculative babel prime, flag-gated.
 *JEL-1984 align the speculative prime with the head-IIFE soft-skip

@@ -252,8 +252,10 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-707: re-pinned — both shells' load paths now route the fetched
     // index html through stripJeScriptsForDefer (a shared, auto-guarded
     // helper) after the JELA-710 font rewrite.
-    retail: "b34d3baee1c7cbc1",
-    boot: "4b844d440e452c15",
+    // JELA-716: re-pinned — both load paths now also route the html through
+    // stripDeadMediaBarJs (shared, auto-guarded) after the JE-defer strip.
+    retail: "4e85661be234164c",
+    boot: "ca0eed4d39976fb6",
   },
   {
     name: "bootstrap",

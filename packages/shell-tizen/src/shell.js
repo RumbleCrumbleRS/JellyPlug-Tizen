@@ -3772,7 +3772,10 @@
       'var p="";try{p=String(wr.p||"")}catch(_){}' +
       "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
       'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
+      // root-relative /gh/ jsdelivr pin resolved against the server origin
+      // and 404ed on prod — a spurious warm every CWS boot.
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
@@ -7272,6 +7275,49 @@
       return html;
     }
   }
+  // JELA-716: the Media Bar plugin pins slideshowpure.js on cdn.jsdelivr.net
+  // in the server's /web/index.html, and that copy carries 13 optional-chaining
+  // sites — on engines whose parser predates `?.` (Tizen 5.0 / Chromium 63)
+  // the tag can never execute; the hero there is the vendored es2017 copy in
+  // the JS-Injector channel (JELA-115). The fetch + parse-fail is pure waste
+  // on the boot path, so drop the tag from the html STRING before either
+  // write path parses the markup (same choke point as the two helpers above;
+  // covers the JEL-1832 string fast path AND the DOMParser path, and runs
+  // after the index cache read so cached markup stays pristine). The probe
+  // must PARSE-test, not feature-test: engines that parse `?.` run the CDN
+  // copy and must keep the tag. The stylesheet <link> is NOT stripped — it
+  // is repointed by rewriteFontThirdPartyCss above.
+  //
+  // Kill switch: localStorage["jellyfin.shell.keepCdnMediaBarJs"]="1"
+  // restores the stock tag. Diag: window.__shellMbStrip = {on,held,urls}.
+  function stripDeadMediaBarJs(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.keepCdnMediaBarJs") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      new Function("void 0?" + ".x");
+      return html;
+    } catch (_) {}
+    var d = (window.__shellMbStrip = { on: 1, held: 0, urls: [] });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/cdn\.jsdelivr\.net\/[^"']*slideshowpure[^"']*\.js/i.test(src)) {
+            return tag;
+          }
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     // JELA-67: opt-in Lite canvas home — when it boots from the LS byte
     // cache, the SPA below never loads this boot (OK/Back hands off).
@@ -7504,8 +7550,11 @@
       function (results) {
         // JELA-707: JE-defer strip runs after the font rewrite, same
         // string-level contract (both write paths covered, cache pristine).
-        var html = stripJeScriptsForDefer(
-          rewriteFontThirdPartyCss(results[0], serverUrl),
+        // JELA-716: then drop the parse-dead CDN media-bar tag.
+        var html = stripDeadMediaBarJs(
+          stripJeScriptsForDefer(
+            rewriteFontThirdPartyCss(results[0], serverUrl),
+          ),
         );
         var upstreamCfg = results[1];
         // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
