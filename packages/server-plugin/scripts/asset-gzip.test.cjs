@@ -164,4 +164,85 @@ assert.ok(
   "Tagged must pass the entity tag through the 5-arg File overload — the 3-arg call binds to `bool enableRangeProcessing` and silently drops the tag",
 );
 
-console.log("OK: /shell/ asset gzip (JELA-688)");
+// ---- 5. JELA-708: the tx-drop routes JELA-688 missed ------------------------
+
+// A cold boot pulls ~69 /shell/tx/*.js bodies (~875 KiB) before first paint;
+// they compress ~4x. Same rules as the three embedded assets: gzip only on an
+// explicit client opt-in through the SAME fail-closed AcceptsGzip, an
+// unconditional raw fallback (PhysicalFile off disk, byte-identical to
+// pre-JELA-708), and Vary on both representations.
+
+const rebuild = fs.readFileSync(
+  path.join(ROOT, "ScheduledTasks", "TxDropRebuildTask.cs"),
+  "utf8",
+);
+
+function methodScope(marker) {
+  const at = ctrl.indexOf(marker);
+  assert.ok(at >= 0, `${marker} missing from ShellController`);
+  return ctrl.slice(at, ctrl.indexOf("\n    }", at));
+}
+
+for (const [marker, gzipSource, rawFallback] of [
+  [
+    '[HttpGet("tx/{hash}.js")]',
+    "_drop.TxGzipBytes(hash)",
+    'return PhysicalFile(path, "application/javascript");',
+  ],
+  [
+    '[HttpGet("tx-manifest.json")]',
+    "_drop.TxManifestGzipBytes()",
+    'return PhysicalFile(_drop.TxManifestPath, "application/json");',
+  ],
+]) {
+  const scope = methodScope(marker);
+  assert.ok(
+    scope.includes("if (AcceptsGzip(Request.Headers.AcceptEncoding))"),
+    `${marker}: gzip must be gated on the shared fail-closed AcceptsGzip — a route with its own header parse would drift from the RFC 9110 rules the helper pins`,
+  );
+  assert.ok(
+    scope.includes(gzipSource) && scope.includes("if (gzip != null)"),
+    `${marker}: the compressed body must come from ShellDropService and be null-checked — null means "serve raw", never "fail the request"`,
+  );
+  assert.ok(
+    scope.includes('Response.Headers.ContentEncoding = "gzip";'),
+    `${marker}: the compressed representation must declare Content-Encoding`,
+  );
+  assert.ok(
+    scope.includes(rawFallback),
+    `${marker}: the raw fallback must stay a PhysicalFile of the on-disk bytes — that is what keeps the no-gzip response byte-identical to pre-JELA-708`,
+  );
+  const varyAt = scope.indexOf(
+    "Response.Headers.Vary = HeaderNames.AcceptEncoding",
+  );
+  assert.ok(
+    varyAt >= 0 && varyAt < scope.indexOf("if (AcceptsGzip"),
+    `${marker}: Vary must be set BEFORE the encoding branch so both representations carry it`,
+  );
+}
+
+// The service side: bounded per-hash cache, built on the same Gzip helper so
+// the null-when-not-smaller and never-throw contracts hold for tx bodies too.
+assert.ok(
+  /public byte\[\]\? TxGzipBytes\(string hash\)/.test(drop) &&
+    /public byte\[\]\? TxManifestGzipBytes\(\)/.test(drop),
+  "ShellDropService must own the tx gzip bodies — the controller only negotiates",
+);
+assert.ok(
+  /ConcurrentDictionary<string, Lazy<byte\[\]\?>>\s+_txGzip/.test(drop) &&
+    /TxGzipCacheCap/.test(drop),
+  "the per-hash tx gzip cache must be concurrent and bounded — tx bodies live on disk, not in memory, so an unbounded cache would grow with the corpus",
+);
+assert.ok(
+  /GzipTxFile[\s\S]*?Gzip\(File\.ReadAllBytes\(Path\.Combine\(TxDir, hash \+ "\.js"\)\)\)/.test(
+    drop,
+  ),
+  "tx bodies must compress through the shared Gzip helper (null when not smaller, never throws)",
+);
+assert.ok(
+  /public void ResetTxGzipCache\(\)/.test(drop) &&
+    (rebuild.match(/_drop\.ResetTxGzipCache\(\);/g) || []).length >= 2,
+  "TxDropRebuildTask must reset the tx gzip cache after BOTH rebuild passes (static + dynamic scan) — a rebuild can rewrite a deleted body with different bytes under the same hash",
+);
+
+console.log("OK: /shell/ asset gzip (JELA-688 + tx routes JELA-708)");
