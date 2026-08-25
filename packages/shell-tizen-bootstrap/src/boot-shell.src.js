@@ -1195,6 +1195,37 @@
       "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
+      // JELA-707: paint-gated re-injector for the JE tags held by
+      // stripJeScriptsForDefer (URLs on window.__shellJeDefer, survives the
+      // doc.write handoff). onPaint always eventually fires; then a settle
+      // delay ("jellyfin.shell.deferJeMs", default 3000) keeps JE's fan-out
+      // off the row-fill window. append-then-set-src is JE's own load shape
+      // so the JEL-407 setter interceptor transpiles/caches as usual;
+      // async=false keeps source order; "&amp;" decoded (raw attr text).
+      // No-gate fallback 20 s. Lockstep with shell.js.
+      "  try{(function(){",
+      "    var J=window.__shellJeDefer;",
+      "    if(!J||!J.urls||!J.urls.length)return;",
+      "    var D=3000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferJeMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    function inj(){",
+      "      if(J.rel)return;",
+      "      J.rel=1;J.tInj=Date.now();",
+      "      for(var i=0;i<J.urls.length;i++){",
+      "        try{",
+      '          var s=document.createElement("script");',
+      "          s.async=false;",
+      '          s.setAttribute("data-shell-je-deferred","1");',
+      "          (document.head||document.documentElement).appendChild(s);",
+      '          s.src=String(J.urls[i]).replace(/&amp;/g,"&");',
+      "          J.inj++;",
+      "        }catch(_){}",
+      "      }",
+      "    }",
+      "    function rel(){if(J.tRel)return;J.tRel=Date.now();setTimeout(inj,D);}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onPaint){pg.onPaint(rel);}else{setTimeout(inj,20000);}",
+      "  })();}catch(_){}",
       "  try{(function(){",
       "    var on=false;",
       '    try{on=(localStorage.getItem("jellyfin.shell.afSelfTest")==="1")||/shellSelfTest=focus/.test(String(location.hash||""))||/shellSelfTest=focus/.test(String(location.search||""));}catch(_){}',
@@ -5440,6 +5471,47 @@
       return html;
     }
   }
+  // JELA-707 (JELA-699 follow-up): defer the JellyfinEnhanced injection until
+  // after firstCard — the JELA-690-calibrated ring measured blocking JE's
+  // injection at firstCard −3,340 ms (p=0.0024); its ~197-request fan-out
+  // contends with the boot burst (latency tracks in-flight request count).
+  // Strip JE's <script src> tag(s) from the fetched index.html string (same
+  // choke point as rewriteFontThirdPartyCss — covers both write paths, cache
+  // stays pristine), park URLs on window.__shellJeDefer; the seed's
+  // paint-gated re-injector (buildSeedScript) restores them post-paint via
+  // the dynamic-interceptor pipeline. Lockstep with shell.js.
+  // Flag-dark: localStorage["jellyfin.shell.deferJe"]="1"; delay
+  // "jellyfin.shell.deferJeMs" (default 3000). Diag: window.__shellJeDefer.
+  function stripJeScriptsForDefer(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
+    } catch (_) {
+      return html;
+    }
+    var d = (window.__shellJeDefer = {
+      on: 1,
+      held: 0,
+      urls: [],
+      rel: 0,
+      inj: 0,
+      tRel: 0,
+      tInj: 0,
+    });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/jellyfinenhanced|jellyfin-enhanced/i.test(src)) return tag;
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
@@ -5618,7 +5690,10 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = rewriteFontThirdPartyCss(results[0], serverUrl),
+        // JELA-707: JE-defer strip after the font rewrite (same contract).
+        var html = stripJeScriptsForDefer(
+            rewriteFontThirdPartyCss(results[0], serverUrl),
+          ),
           upstreamCfg = results[1],
           fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
         if (fast) {
