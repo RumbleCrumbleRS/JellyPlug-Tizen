@@ -38,6 +38,8 @@
  *      spinning, and no request is made.
  *  10) USER SWITCH: the shipped user-change reset still refetches.
  *  11) IDEMPOTENT: a duplicate arm is refused; a module cannot double-fetch.
+ *  11b) HELD BACK: top10-badges is defined and pinned but NOT applied — a
+ *      matched warm rig pair measured its query moving 5,693 -> 12,005 ms.
  *  12) COMPOSES: jp738 and jp745 apply to tizen-compat in EITHER order.
  */
 "use strict";
@@ -581,6 +583,43 @@ test("11) idempotent: a duplicate arm is refused", async (mod) => {
   h.login(400);
   await h.clock.advance(500, flush);
   assert.strictEqual(h.calls.length, 1, "still exactly one query");
+});
+
+test("11b) top10-badges is defined but HELD BACK from the applied set", async (mod) => {
+  // Measured regression, not a style choice: arming top10 moved its query from
+  // 5,693 ms to 12,005 ms on a matched warm pair. Its fetch latch is keyed on
+  // a DOM lookup (`j(S())`), unlike every other module in scope, so a
+  // pre-render call latches under a key the real call never matches.
+  assert.ok(
+    mod.PATCHES.indexOf(mod.PATCH_TOP10) < 0,
+    "PATCH_TOP10 must not be in the applied set",
+  );
+  assert.ok(
+    mod.HELD_BACK.indexOf(mod.PATCH_TOP10) >= 0,
+    "PATCH_TOP10 must be declared held back, not silently dropped",
+  );
+  assert.strictEqual(mod.PATCHES.length, 5, "store + four row modules");
+  // patchConfig must therefore leave top10-badges byte-identical.
+  const top10 = MODULES.filter((m) => m.key === "top10-badges")[0];
+  const cfg = {
+    CustomJavaScripts: [
+      { Name: "tizen-compat", Script: LIVE_TC_TAIL + "0;" },
+      { Name: "watch-it-again", Script: MODULES[0].anchor },
+      { Name: "top-picks", Script: MODULES[1].anchor },
+      { Name: "my-list", Script: MODULES[2].anchor },
+      { Name: "top10-badges", Script: top10.anchor },
+      { Name: "genre-rows", Script: MODULES[4].anchor },
+    ],
+  };
+  mod.patchConfig(cfg);
+  const after = cfg.CustomJavaScripts.filter(
+    (e) => e.Name === "top10-badges",
+  )[0];
+  assert.strictEqual(
+    after.Script,
+    top10.anchor,
+    "top10-badges must come out of patchConfig unchanged",
+  );
 });
 
 test("12) composes: jp738 and jp745 apply in either order", async (mod) => {

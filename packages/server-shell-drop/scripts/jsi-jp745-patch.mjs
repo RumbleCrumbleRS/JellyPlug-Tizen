@@ -59,8 +59,9 @@
  *   PATCH_AGAIN   (watch-it-again)
  *   PATCH_PICKS   (top-picks)
  *   PATCH_MYLIST  (my-list)
- *   PATCH_TOP10   (top10-badges)
  *   PATCH_GENRES  (genre-rows)     arm that module's apply with the store.
+ *   PATCH_TOP10   (top10-badges)   defined, tested, and HELD BACK — see the
+ *                                  comment on PATCHES for the measured reason.
  *
  * ---------------------------------------------------------------------------
  * Why the mount cannot break, and why a row cannot go missing
@@ -303,14 +304,41 @@ export const PATCH_GENRES = {
   ],
 };
 
+/*
+ * PATCH_TOP10 is defined and unit-tested above but is deliberately NOT applied.
+ *
+ * On a matched warm rig pair (same snapshot, same patched channel, flag the
+ * only difference — 282 cards and 18 rows in both arms) arming top10-badges
+ * moved its query the WRONG way:
+ *
+ *   module           flag off   flag on     delta
+ *   my-list             3,021     1,577    -1,444
+ *   watch-it-again      3,190     1,735    -1,455
+ *   top-picks           3,197     1,738    -1,459
+ *   genre-rows          5,822     5,532      -290
+ *   top10-badges        5,693    12,005    +6,312   <-- worse
+ *
+ * The mechanism is visible in the snippet: top10's fetch latch is keyed on
+ * `pe = j(S()) + ":" + (m()||"")`, where `S()` is a DOM lookup for the source
+ * row. Every other module in scope keys its latch on the user id alone. Called
+ * before the home has rendered, `S()` answers null, so the early call latches
+ * under a key that the real, DOM-present call does not match — and top10 also
+ * carries `jpEmpty` / `jp473` "empty result" latches that a premature call can
+ * arm. That is a state hazard, not a timing miss, so it is held out rather
+ * than shipped dark and hoped for.
+ *
+ * Investigating that latch (and why genre-rows barely moves) is a follow-up.
+ */
 export const PATCHES = [
   PATCH_STORE,
   PATCH_AGAIN,
   PATCH_PICKS,
   PATCH_MYLIST,
-  PATCH_TOP10,
   PATCH_GENRES,
 ];
+
+/** Held out of PATCHES; see the comment above. Exported so the guard can pin it. */
+export const HELD_BACK = [PATCH_TOP10];
 
 /** Apply one patch's edits. Throws unless every anchor matches exactly once. */
 export function applyPatch(body, patch) {
