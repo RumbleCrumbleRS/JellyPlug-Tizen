@@ -18,5 +18,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // OnStarting is the only order-independent hook here — RegisterServices runs
         // before Startup.ConfigureServices, so a direct middleware substitution loses.
         serviceCollection.AddTransient<IStartupFilter, WebAssetCacheStartupFilter>();
+
+        // JELA-732: short private cache over /HomeScreen/Section/{name}. The store is
+        // a singleton so it survives across requests; the filter itself stays transient
+        // like its sibling (ASP.NET resolves IStartupFilter once, at pipeline build).
+        serviceCollection.AddSingleton<HomeScreenSectionCache>();
+        serviceCollection.AddTransient<IStartupFilter, HomeScreenSectionCacheStartupFilter>();
     }
 }
