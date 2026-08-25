@@ -24,8 +24,7 @@ Verified against upstream `main` at release `12.4.1.0` (2026-08-23), whose
   Network domain, not Resource Timing, so CORS preflights are not
   double-counted): **2.5–2.8 MiB uncompressed across 157–179 requests, ~15%
   of the 16.5 MiB cold boot**, landing in a single burst that is fully
-  issued by ~2.4 s with in-flight concurrency to the server peaking above
-  130. The spread across boots is server config, not measurement error —
+  issued by ~2.4 s with in-flight concurrency to the server peaking above 130. The spread across boots is server config, not measurement error —
   which modules the loader appends depends on which JE features are enabled.
 
 ## What is deliberately NOT in the report
@@ -64,8 +63,8 @@ CTL − ALLJE  median  +294 ms  95% CI [ -44, 3470]   mean +1389 ms  CI [ 217, 2
 ```
 
 **On the pre-registered endpoint this is a null**: both median CIs include
-zero. Per the JELA-690 framing that is *"not resolvable at this n on this
-box"* — never "confirmed", never "killed".
+zero. Per the JELA-690 framing that is _"not resolvable at this n on this
+box"_ — never "confirmed", never "killed".
 
 What the re-run did surface is that the effect is not a median shift at all,
 it is **a race with a bimodal outcome**, and that shape is what we report
@@ -77,7 +76,7 @@ upstream because it is mechanism-grounded rather than statistical:
 - In the slow control boots, **5.18 MiB / 422 requests** had completed
   before the first card. In the fast control boots, **2.38 MiB / 192
   requests**. The ≈2.8 MiB difference is the JE module set.
-- Host load does not explain it: the slow boots started at a *lower* loadavg
+- Host load does not explain it: the slow boots started at a _lower_ loadavg
   (median 1.87) than the fast ones (2.27), so this is not the
   JELA-682 shared-box confound.
 
@@ -91,7 +90,7 @@ the data. All 3 slow boots falling in the 7 control boots has Fisher
 one-sided p = 0.026, but that p-value is not pre-registered and should not be
 quoted as a result. A confirmatory ring would pre-register "fraction of boots
 over 3 s" as the endpoint. The mean-difference CI for CTL−ALLJE excludes zero
-([217, 2700] ms) and is the better summary of *user-visible* cost for a race
+([217, 2700] ms) and is the better summary of _user-visible_ cost for a race
 like this, but it is also not what was pre-registered.
 
 ## Drain evidence (JELA-726) — the cost is execution, not download
@@ -107,7 +106,7 @@ measured the fan-out directly rather than through an A/B:
 The 3.4 s tail is therefore neither server time nor network time — it is the
 M63 renderer draining ~250 concurrent responses while the main thread is
 blocked. Both boots show it as a hard network-idle window (3.0–6.0 s and
-3.0–5.5 s) with the responses already on the wire. This is *execution* cost,
+3.0–5.5 s) with the responses already on the wire. This is _execution_ cost,
 not parse cost, so it does not contradict the ~2% parse figure from M63
 boot-cost work — it is a separate cost that a byte count understates. It also
 lines up exactly with the race above: 5,833 ms is where the losing control
@@ -230,7 +229,7 @@ null on the pre-registered endpoint**, so that condition is not met and the
 spike stays parked. Two further reasons not to build it yet:
 
 - The `DEFER` arm — which is exactly what this mitigation would implement —
-  is the *weaker* of the two arms (median +117 ms, CI [-609, 2806]; mean
+  is the _weaker_ of the two arms (median +117 ms, CI [-609, 2806]; mean
   +936 ms, CI [-164, 2132]) and its per-arm median (2,672 ms) is worse than
   the control's (2,144 ms). Only `ALLJE`, which blocks the whole plugin, has
   a mean CI that clears zero. If the goal is "don't pay for JE at boot", the
