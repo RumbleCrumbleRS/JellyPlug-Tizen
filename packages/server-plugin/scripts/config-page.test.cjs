@@ -114,6 +114,7 @@ for (const prop of [
   "DisableLatestShowsFastPath",
   "DisableDiagIngest",
   "DiagMaxRings",
+  "DisableCorsPreflightMaxAge", // JELA-709 kill switch
 ]) {
   assert.ok(formIds.includes(prop), `operator setting ${prop} missing from the form`);
 }

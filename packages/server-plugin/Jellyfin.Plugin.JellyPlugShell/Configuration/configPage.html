@@ -159,6 +159,18 @@
                                 Hands GET /HomeScreen/Section/LatestShows back to Home Screen Sections' own
                                 30-day window walk (54 queries / ~1.2 s of server time on this library).
                                 Leave off unless the row looks wrong.
+
+                        <h2 class="sectionTitle">CORS preflight cache (JELA-709)</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableCorsPreflightMaxAge" />
+                                <span>Disable Access-Control-Max-Age on preflights</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch. By default the plugin appends Access-Control-Max-Age: 600 to every CORS
+                                preflight the server approves, letting browsers reuse the verdict instead of
+                                re-preflighting every request (98 of 555 requests in a cold TV boot). Takes effect
+                                without a restart; never overwrites a max-age another layer set.
                             </div>
                         </div>
                     </div>
@@ -210,6 +222,8 @@
                     { id: 'LiteNativeDefaultOn', type: 'bool' },
                     { id: 'LiteSubsDefaultOn', type: 'bool' },
                     { id: 'DisableLatestShowsFastPath', type: 'bool' },
+
+                    { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];
