@@ -1281,6 +1281,152 @@
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
+      // ---- JELA-761: idle-home UserDataChanged gate ------------------------
+      //
+      // With nothing playing and no input at all, the production server
+      // pushes a `UserDataChanged` notification on the jellyfin-web
+      // WebSocket every ~90 s. jellyfin-web reacts by rebuilding the ENTIRE
+      // home tab: the hometab chunk stylesheet, 5 `/Users/{u}/Items` row
+      // queries and 6 `/HomeScreen/Section/*` calls (BecauseYouWatched three
+      // times, one per seed) — ~13 requests plus ~13 CORS preflights and
+      // ~230 KB — whether or not any affected item is on screen. Measured in
+      // JELA-759: an idle TV burns ~2,430 requests / ~23.7 MB an hour doing
+      // nothing. The socket itself is free (2,484 B in 240 s); it is the
+      // REACTION to one message type that costs.
+      //
+      // The frame carries Data.UserDataList[].ItemId. If none of those ids
+      // is rendered anywhere in the document and none appears in the current
+      // route (hash/search), nothing the user can see depends on the
+      // message, so we swallow it before jellyfin-web's socket handler runs.
+      // That test is a strict SUPERSET of "is it on the home" — it is
+      // route-agnostic and cannot hide an update for a visible item. Ids are
+      // compared dash-stripped and lower-cased because the socket and the
+      // DOM do not agree on GUID formatting.
+      //
+      // Everything else fails OPEN: a non-string frame, unparseable JSON, a
+      // different MessageType, an empty/oddly-shaped UserDataList, a
+      // querySelectorAll that throws, or a <video> in the document (playback
+      // consumes progress pushes for items that need not be in the DOM) all
+      // deliver unchanged.
+      //
+      // Frames that DO hit are coalesced: the first delivers, and within the
+      // coalesce window only a frame carrying an id not already delivered
+      // re-fires — a rebuild refetches every row anyway, so a burst should
+      // cost one refresh, not one each. While the page is hidden the newest
+      // surviving frame is held and delivered on visibilitychange.
+      //
+      // Hooking the prototype accessor rather than the constructor is
+      // deliberate: jellyfin-apiclient assigns `socket.onmessage = fn` on a
+      // socket it constructs itself, and a wrapped constructor would have to
+      // fake native `new` semantics on M63. addEventListener/
+      // removeEventListener are wrapped too so a vendor switch of transport
+      // cannot silently un-gate this.
+      //
+      // Flag-dark: opt in with localStorage["jellyfin.shell.udcGate"]="1".
+      // Tunable: "jellyfin.shell.udcCoalesceMs" (default 3000; 0 = no
+      // coalescing, diff only).
+      // Diag: window.__shellUdc =
+      //   {on,seen,pass,dropNoHit,dropDup,held,ids,err}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.udcGate")!=="1")return;',
+      "    if(window.__shellUdc)return;",
+      "    var P=window.WebSocket&&window.WebSocket.prototype;if(!P)return;",
+      "    var G=window.__shellUdc={on:1,seen:0,pass:0,dropNoHit:0,dropDup:0,held:0,ids:0,err:0};",
+      '    function cw(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.udcCoalesceMs")||"",10);}catch(_){}return (v>=0&&v<=600000)?v:3000;}',
+      "    var winAt=0,winIds={},pend=null;",
+      "    function now(){return (new Date).getTime();}",
+      '    function norm(s){return String(s).replace(/-/g,"").toLowerCase();}',
+      // Payload ids, or null for "not a UserDataChanged frame we understand".
+      "    function udcIds(ev){",
+      "      var d=ev&&ev.data;",
+      '      if(typeof d!=="string"||d.indexOf("UserDataChanged")===-1)return null;',
+      "      var j;try{j=JSON.parse(d);}catch(_){return null;}",
+      '      if(!j||j.MessageType!=="UserDataChanged")return null;',
+      "      var L=j.Data&&j.Data.UserDataList;",
+      "      if(!L||!L.length)return null;",
+      "      var out=[];",
+      "      for(var i=0;i<L.length;i++){",
+      '        var id=L[i]&&L[i].ItemId;if(typeof id!=="string"||!id)continue;',
+      "        out.push(norm(id));",
+      "      }",
+      "      return out.length?out:null;",
+      "    }",
+      // Every id the user could currently be looking at. null = fail open.
+      "    function shown(){",
+      "      var m={},n=0,i;",
+      "      try{",
+      '        var a=document.querySelectorAll("[data-id]");',
+      '        for(i=0;i<a.length;i++){var v=a[i].getAttribute("data-id");if(v){m[norm(v)]=1;n++;}}',
+      "      }catch(_){return null;}",
+      "      try{",
+      '        var h=String(location.hash||"")+"|"+String(location.search||"");',
+      "        var r=/[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}|[0-9a-fA-F]{32}/g,x;",
+      "        while((x=r.exec(h)))m[norm(x[0])]=1;",
+      "      }catch(_){}",
+      "      G.ids=n;return m;",
+      "    }",
+      "    function decide(ev){",
+      '      var L=udcIds(ev);if(!L)return "pass";',
+      "      G.seen++;",
+      '      try{if(document.getElementsByTagName("video").length){G.pass++;return "pass";}}catch(_){}',
+      '      var m=shown();if(!m){G.pass++;return "pass";}',
+      "      var hit=[],i;",
+      "      for(i=0;i<L.length;i++){if(m[L[i]])hit.push(L[i]);}",
+      '      if(!hit.length){G.dropNoHit++;return "drop";}',
+      "      var t=now(),w=cw();",
+      "      if(w>0&&winAt&&t-winAt<=w){",
+      "        var fresh=0;",
+      "        for(i=0;i<hit.length;i++){if(!winIds[hit[i]]){fresh=1;winIds[hit[i]]=1;}}",
+      '        if(!fresh){G.dropDup++;return "drop";}',
+      "      }else{winAt=t;winIds={};for(i=0;i<hit.length;i++)winIds[hit[i]]=1;}",
+      '      try{if(document.visibilityState==="hidden"){G.held++;return "hold";}}catch(_){}',
+      '      G.pass++;return "pass";',
+      "    }",
+      // One verdict per frame: a socket with BOTH an onmessage handler and a
+      // message listener must not have the frame classified (and coalesced)
+      // twice, or one of the two would silently lose it.
+      "    function verdict(ev){",
+      "      var v;try{v=ev.__shellUdcV;}catch(_){}",
+      "      if(v)return v;",
+      "      v=decide(ev);",
+      "      try{ev.__shellUdcV=v;}catch(_){}",
+      "      return v;",
+      "    }",
+      "    function route(ev,call){",
+      "      var v;try{v=verdict(ev);}catch(e){G.err++;call();return;}",
+      '      if(v==="drop")return;',
+      '      if(v==="hold"){pend=call;return;}',
+      "      call();",
+      "    }",
+      '    try{window.addEventListener("visibilitychange",function(){try{if(document.visibilityState==="hidden")return;var p=pend;pend=null;if(p){G.pass++;p();}}catch(_){}},false);}catch(_){}',
+      '    var D=Object.getOwnPropertyDescriptor(P,"onmessage");',
+      "    if(D&&D.set&&D.get){",
+      '      Object.defineProperty(P,"onmessage",{configurable:true,enumerable:!!D.enumerable,',
+      "        get:function(){var h;try{h=this.__shellUdcH;}catch(_){}return h===undefined?D.get.call(this):h;},",
+      "        set:function(fn){",
+      "          var self=this;try{this.__shellUdcH=fn;}catch(_){}",
+      '          if(typeof fn!=="function"){D.set.call(this,fn);return;}',
+      "          D.set.call(this,function(ev){var a=arguments;route(ev,function(){fn.apply(self,a);});});",
+      "        }});",
+      "    }else{G.err++;}",
+      "    var AEL=P.addEventListener,REL=P.removeEventListener;",
+      "    if(AEL){",
+      "      P.addEventListener=function(type,fn,opt){",
+      '        if(type==="message"&&typeof fn==="function"){',
+      "          var w=fn.__shellUdcW;",
+      "          if(!w){w=function(ev){var s=this,a=arguments;route(ev,function(){fn.apply(s,a);});};try{fn.__shellUdcW=w;}catch(_){}}",
+      "          return AEL.call(this,type,w,opt);",
+      "        }",
+      "        return AEL.apply(this,arguments);",
+      "      };",
+      "    }",
+      "    if(REL){",
+      "      P.removeEventListener=function(type,fn,opt){",
+      '        if(type==="message"&&fn&&fn.__shellUdcW)return REL.call(this,type,fn.__shellUdcW,opt);',
+      "        return REL.apply(this,arguments);",
+      "      };",
+      "    }",
+      "  })();}catch(_){}",
       // Flag-dark: opt in with localStorage["jellyfin.shell.bitrateCache"]="1".
       // Diag: window.__shellBitrate = {on,armed,hits,miss,saves,bps,age}.
       "  try{(function(){",
