@@ -82,7 +82,10 @@ For the record, `Users/{u}/Items/Latest?IncludeItemTypes=Series` is itself
 redundant: it returns the same 16 titles, in the same order, as a plain
 `Items?IncludeItemTypes=Series&SortBy=DateCreated&SortOrder=Descending`, for
 2,170 ms against 496 ms. That is worth an upstream report of its own; it is not
-on this path.
+on this path. JELA-734 wrote it up as
+`docs/jellyfin-latest-series-upstream-report.md` — and found, on the way, that
+the `Limit * 5` over-fetch is _not_ the cause (the cost is independent of
+`limit`), plus a correctness bug in the same endpoint.
 
 ## Fix: the windows are wasted work
 
@@ -145,6 +148,12 @@ install, not just this one. Two changes would fix it there:
    `LatestShowsSection` — the count is never read.
 2. Replace the fixed 30-day increment with a single ordered query (or, minimally,
    grow `dayIncrement` geometrically: 27 windows becomes ~5).
+
+JELA-734 drafted that as
+`docs/home-sections-latest-window-walk-upstream-report.md`, and added a second
+case this doc did not reach: a library with fewer than 16 eligible series can
+never satisfy the loop's exit condition, so it walks all 1,237 windows to the
+1925 stop date.
 
 Related: `docs/hss-sections-cache-diagnosis.md` (the sibling
 `/HomeScreen/Sections` cache defect, upstream `home-sections#269`),
