@@ -3939,7 +3939,7 @@
       // A GET whose response varies by request header must never share a slot.
       // Headers may arrive as a Headers instance, an array of pairs, or a plain
       // object; anything we cannot walk is treated as unsafe (return 1).
-      'var fcRe=/^(range|if-none-match|if-modified-since)$/i;' +
+      "var fcRe=/^(range|if-none-match|if-modified-since)$/i;" +
       "var fcUns=function(fo){try{if(!fo||!fo.headers)return 0;var fh=fo.headers,fb=0,fi3,fn3;" +
       'if(Object.prototype.toString.call(fh)==="[object Array]"){for(fi3=0;fi3<fh.length;fi3++)if(fh[fi3]&&fcRe.test(String(fh[fi3][0])))fb=1;return fb}' +
       'if(typeof fh.forEach==="function"){fh.forEach(function(fv3,fk3){if(fcRe.test(String(fk3)))fb=1});return fb}' +
@@ -3947,10 +3947,10 @@
       'var fcK=function(u){var fh=u.indexOf("#");if(fh>=0)u=u.slice(0,fh);' +
       'var fq=u.indexOf("?"),fp=fq<0?u:u.slice(0,fq),fbs=fp.split("/");' +
       "for(var fi2=0;fi2<FCP.length;fi2++){var fe2=FCP[fi2];" +
-      'if(!fe2.w){var fs2=fe2.p;if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u;continue}' +
+      "if(!fe2.w){var fs2=fe2.p;if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u;continue}" +
       "var fa2=fe2.a;if(fbs.length<fa2.length)continue;var fof=fbs.length-fa2.length,fok=1,fj2;" +
       'for(fj2=0;fj2<fa2.length;fj2++){var fx2=fa2[fj2],fy2=fbs[fof+fj2];if(fx2==="*"){if(!fy2){fok=0;break}continue}if(fx2!==fy2){fok=0;break}}' +
-      "if(fok)return u}return\"\"};" +
+      'if(fok)return u}return""};' +
       "var fcSnap=function(fr){return fr.text().then(function(ft){var fhs={};" +
       'try{fr.headers.forEach(function(fv,fn2){fhs[fn2]=fv})}catch(_){try{var fct=fr.headers.get("content-type");if(fct)fhs["content-type"]=fct}catch(__){}}' +
       'return{s:fr.status,x:fr.statusText||"",h:fhs,b:ft}})};' +
@@ -3959,7 +3959,7 @@
       "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
       'if(typeof fu==="string"&&!(fo&&(fo.body||fo.signal))&&(fo&&fo.method?String(fo.method).toUpperCase():"GET")==="GET"){' +
       "var fk=fcK(fu);" +
-      "if(fk&&fcUns(fo)){FC.hdr++;fk=\"\"}" +
+      'if(fk&&fcUns(fo)){FC.hdr++;fk=""}' +
       // (method, credentials, mode, full URL) — unset credentials/mode
       // normalise to the fetch defaults so they join their explicit twins.
       'if(fk)fk="GET "+(fo&&fo.credentials?String(fo.credentials):"same-origin")+" "+(fo&&fo.mode?String(fo.mode):"cors")+" "+fk;' +
