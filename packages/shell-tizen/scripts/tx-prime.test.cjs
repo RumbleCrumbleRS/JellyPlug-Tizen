@@ -105,6 +105,24 @@ for (const [name, src] of ARTIFACTS) {
   );
   check(name + ": diag HUD pr= field present", src.includes('" pr="'));
   check(name + ": QA HUD TP: field present", src.includes('"TP:"'));
+  // JELA-749
+  check(
+    name + ": credential-aware auth gate present",
+    src.includes("__txAuthed") && src.includes("jellyfin_credentials"),
+  );
+  check(
+    name + ": arming poll consults __txAuthed (not getCurrentUserId alone)",
+    /if\(__txAuthed\(\)\)\{__tpP\.st="auth";return;\}/.test(src),
+  );
+  check(
+    name + ": scraped candidates inherit a recorded query",
+    src.includes("__dqAdd") && src.includes("__dqFor"),
+  );
+  check(
+    name + ": shadowed-bare sweep present and armed",
+    src.includes("__txSweepBare") &&
+      /setTimeout\(__txSweepBare,\s*12000\)/.test(src),
+  );
 }
 
 // ============================================================================
@@ -310,6 +328,16 @@ function makeHarness(seedText, opts) {
     },
     removeItem(k) {
       delete store[k];
+    },
+    // JELA-749: the shadowed-bare sweep enumerates the store, so the stub
+    // needs the real Storage index API (already used by shell.js's
+    // ceInvalidate, so it is proven on M63).
+    get length() {
+      return Object.keys(store).length;
+    },
+    key(i) {
+      const ks = Object.keys(store);
+      return i >= 0 && i < ks.length ? ks[i] : null;
     },
   };
 
@@ -544,6 +572,159 @@ async function scenarioWarmNoop(name, seedText) {
   );
 }
 
+// JELA-749 (B7): THE measured defect. On a credentialed boot the SPA's
+// ApiClient exists for a few hundred ms before its async user restore
+// answers, and the 500 ms arming poll lands in that window. Pre-fix the
+// primer started, scraped, fired a 5-wide probe fan-out (4 × 404) and ~24
+// bare module fetches, and only then saw auth and set st="auth" — so the
+// end-state counter read "never ran" while the downloads had happened.
+// The stored credential is the durable signal, so nothing may be fetched.
+async function scenarioCredentialedRace(name, seedText) {
+  const creds = JSON.stringify({
+    Servers: [
+      { Id: "s1", ManualAddress: SERVER, UserId: "u1", AccessToken: "tok" },
+    ],
+  });
+  const h = makeHarness(seedText, {
+    localStorage: { jellyfin_credentials: creds },
+  });
+  // ApiClient present but its user is not restored yet — the exact race.
+  h.win.ApiClient = { getCurrentUserId: () => null };
+  await h.pump(10);
+  const P = h.win.__shellTxPrime;
+  check(
+    name + " B7: credentialed boot — primer stands down before any fetch",
+    P && P.st === "auth" && P.q === 0 && h.fetched.length === 0,
+    JSON.stringify({ P, fetched: h.fetched }),
+  );
+  check(
+    name + " B7: no probe fan-out 404s on a credentialed boot",
+    h.fetched.filter((u) => !MODULES[new URL(u).pathname]).length === 0,
+    JSON.stringify(h.fetched),
+  );
+  // A logged-OUT boot is still the primer's window: a server entry that
+  // kept its address but lost UserId/AccessToken must NOT read as authed.
+  const out = JSON.stringify({
+    Servers: [{ Id: "s1", ManualAddress: SERVER }],
+  });
+  const h2 = makeHarness(seedText, {
+    localStorage: { jellyfin_credentials: out },
+  });
+  h2.win.ApiClient = { getCurrentUserId: () => null };
+  await h2.pump(10);
+  check(
+    name + " B7: logged-out credential entry still primes (window intact)",
+    h2.win.__shellTxPrime.q > 0 && h2.fetched.length > 0,
+    JSON.stringify({ P: h2.win.__shellTxPrime, fetched: h2.fetched }),
+  );
+}
+
+// JELA-749 (B8): the scrape path can only ever yield BARE paths, but a
+// version-stamping plugin reads its token from the DOM at runtime, so the
+// runtime asks with `?v=`. __txKey keeps a class-2 token ⇒ the bare slot is
+// unreachable and the module downloads twice. The recorded dynPluginUrls
+// entry is the evidence of the real shape, so candidates inherit its query.
+async function scenarioQueryInheritance(name, seedText) {
+  const TOKEN = "?v=12.0.0.0-639231118740000000";
+  const h = makeHarness(seedText, {
+    localStorage: {
+      // Only ONE module was ever recorded; its siblings must inherit the
+      // token from the directory, and nothing may be primed bare.
+      "jellyfin.shell.dynPluginUrls": JSON.stringify([
+        SERVER + "/MyPlugin/js/sub/beta.js" + TOKEN,
+      ]),
+    },
+  });
+  h.win.ApiClient = { getCurrentUserId: () => null };
+  await h.pump(10);
+  const txKeys = Object.keys(h.store).filter((k) => k.indexOf(TXPFX) === 0);
+  const bare = txKeys.filter(
+    (k) => k.indexOf("/MyPlugin/js/sub/") >= 0 && k.indexOf("?") < 0,
+  );
+  check(
+    name + " B8: recorded module primed under the runtime's versioned key",
+    h.store[TXPFX + SERVER + "/MyPlugin/js/sub/beta.js" + TOKEN] ===
+      "window.__beta=1;",
+    JSON.stringify(txKeys),
+  );
+  check(
+    name + " B8: an unrecorded sibling inherits the directory's token",
+    h.store[TXPFX + SERVER + "/MyPlugin/js/sub/gamma.js" + TOKEN] ===
+      "window.__gamma=1;",
+    JSON.stringify(txKeys),
+  );
+  check(
+    name + " B8: no bare slot written for a query-only module path",
+    bare.length === 0,
+    JSON.stringify(bare),
+  );
+  // AC1 restated as a property: no PATH may be fetched in both shapes. The
+  // dir-probe misses are bare by design (an unrecorded directory gets no
+  // invented token) and never collide with a primed module.
+  const paths = h.fetched.map((u) => new URL(u).pathname);
+  const both = paths.filter(
+    (p, i) =>
+      h.fetched[i].indexOf("?") < 0 &&
+      h.fetched.some(
+        (u2) => u2.indexOf("?") >= 0 && new URL(u2).pathname === p,
+      ),
+  );
+  check(
+    name + " B8: no path fetched both bare and versioned",
+    both.length === 0,
+    JSON.stringify(both),
+  );
+}
+
+// JELA-749 (B9): reclaim the residue already in the store. A bare slot with
+// a version-keyed sibling is unreachable by construction; one without a
+// sibling may still be the live key (a class-1 URL strips to its bare path)
+// and must survive, as must the ts:/vqk:/txc: bookkeeping keys.
+async function scenarioSweepShadowed(name, seedText) {
+  const shadowed = SERVER + "/MyPlugin/js/sub/alpha.js";
+  const live = SERVER + "/OtherPlugin/plain.js";
+  const pre = {};
+  pre[TXPFX + shadowed] = "DEAD-BARE-BODY";
+  pre[TXPFX + shadowed + "?v=12.0.0.0-x"] = "@@shellref:txc:abc";
+  pre[TXPFX + "txc:abc"] = "real body";
+  pre[TXPFX + live] = "LIVE-BARE-BODY";
+  pre[TXPFX + "ts:" + shadowed + "?v=12.0.0.0-x"] = "1";
+  pre[TXPFX + "vqk:" + shadowed] = '{"k":"x","c":"txc:abc"}';
+  // Primer OFF: store hygiene must run independently of the primer's kill
+  // switch (the residue outlives whichever boot wrote it), and it keeps this
+  // scenario from racing the primer — the virtual clock fires the 12 s sweep
+  // in the same round as the 500 ms arming poll, which on device it cannot.
+  pre["jellyfin.shell.txPrimeDisabled"] = "1";
+  const h = makeHarness(seedText, { localStorage: pre });
+  h.win.ApiClient = { getCurrentUserId: () => null };
+  await h.pump(10);
+  check(
+    name + " B9: shadowed bare slot swept",
+    !(TXPFX + shadowed in h.store),
+    JSON.stringify(Object.keys(h.store)),
+  );
+  check(
+    name + " B9: version-keyed sibling and its txc: body survive",
+    h.store[TXPFX + shadowed + "?v=12.0.0.0-x"] === "@@shellref:txc:abc" &&
+      h.store[TXPFX + "txc:abc"] === "real body",
+    JSON.stringify(Object.keys(h.store)),
+  );
+  check(
+    name + " B9: unshadowed bare slot and bookkeeping keys survive",
+    h.store[TXPFX + live] === "LIVE-BARE-BODY" &&
+      h.store[TXPFX + "ts:" + shadowed + "?v=12.0.0.0-x"] === "1" &&
+      h.store[TXPFX + "vqk:" + shadowed] === '{"k":"x","c":"txc:abc"}',
+    JSON.stringify(Object.keys(h.store)),
+  );
+  check(
+    name + " B9: sweep reports what it reclaimed",
+    h.win.__shellTxSweep &&
+      h.win.__shellTxSweep.n === 1 &&
+      h.win.__shellTxSweep.b === "DEAD-BARE-BODY".length,
+    JSON.stringify(h.win.__shellTxSweep),
+  );
+}
+
 async function main() {
   for (const [name, src] of [
     ["shell.js", tvSrc],
@@ -557,6 +738,9 @@ async function main() {
     await scenarioRecordThenPrime(name, seed);
     await scenarioPrimeVersionPinned(name, seed);
     await scenarioWarmNoop(name, seed);
+    await scenarioCredentialedRace(name, seed);
+    await scenarioQueryInheritance(name, seed);
+    await scenarioSweepShadowed(name, seed);
   }
   console.log(
     failures === 0

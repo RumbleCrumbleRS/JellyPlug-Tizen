@@ -1429,6 +1429,38 @@
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
       '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      // JELA-749: drop bare slots SHADOWED by a version-keyed sibling. The
+      // JELA-183 primer's scrape path minted `<url>` keys for modules the
+      // runtime only ever asks for as `<url>?v=<token>`; __txKey keeps a
+      // class-2 token, so the bare slot is unreachable and just holds quota
+      // (JELA-746 measured 49.5 KB of them on a store already at 70%).
+      // Deleting one is safe by construction: a "@@shellref:" pointer only
+      // ever targets a `txc:` body, never a URL slot, so nothing can deref
+      // through the key being removed — and the presence of a `<url>?…`
+      // sibling is itself the proof that the runtime asks WITH a query. A
+      // path whose query is fully stripped by __txKey (class 1) has no `?`
+      // sibling, so its bare key IS its live key and is never touched. Worst
+      // case if some other caller did want the bare URL: one cache miss and
+      // a refetch. Deferred well past the boot window; ~200 keys, one pass.
+      "    function __txSweepBare(){try{",
+      "      var n=0;try{n=localStorage.length;}catch(_){return;}",
+      "      var i,k,ks=[];",
+      "      for(i=0;i<n;i++){try{k=localStorage.key(i);}catch(_){continue;}if(k&&k.lastIndexOf(__TXPFX,0)===0)ks.push(k.substring(__TXPFX.length));}",
+      "      var q={},b=[],j,kk,qi;",
+      '      for(j=0;j<ks.length;j++){kk=ks[j];qi=kk.indexOf("?");if(qi>=0)q[kk.substring(0,qi)]=1;else if(/^https?:\\/\\//.test(kk))b.push(kk);}',
+      "      var m=__txLru(),cut=0,by=0,dirty=false;",
+      "      for(j=0;j<b.length;j++){",
+      "        if(!q[b[j]])continue;",
+      "        var v=null;try{v=localStorage.getItem(__TXPFX+b[j]);}catch(_){}",
+      "        if(v==null)continue;",
+      "        cut++;by+=v.length;",
+      "        try{localStorage.removeItem(__TXPFX+b[j]);}catch(_){}",
+      '        try{localStorage.removeItem(__TXPFX+"ts:"+b[j]);}catch(_){}',
+      "        if(m[b[j]]!=null){delete m[b[j]];dirty=true;}",
+      "      }",
+      "      if(dirty)__txPersistLru(m);",
+      "      try{window.__shellTxSweep={n:cut,b:by};}catch(_){}",
+      "    }catch(_){}}",
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -1646,10 +1678,29 @@
       "      }",
       "      return {exact:exact,groups:groups};",
       "    }",
+      // JELA-749: the primer's "prime only while logged out" contract used
+      // to be `ApiClient.getCurrentUserId()` alone, which RACES the SPA's
+      // async credential restore: on a credentialed boot ApiClient exists
+      // for a few hundred ms before it can answer with a user, and the
+      // 500 ms arming poll landed in that window on every boot measured in
+      // JELA-746. The primer started, scraped, fired a probe fan-out and
+      // ~24 module fetches, and only then saw auth appear and set st="auth"
+      // — so the end-state counter reads "never ran" while the downloads
+      // already happened. Consult the stored credential too: it is the
+      // durable signal that ApiClient is merely still deriving a user we
+      // already have. Same shape as instantHomeBody's authed() (a logged-out
+      // server entry keeps its address but loses AccessToken/UserId, so this
+      // stays false on a real login-screen boot — the window the primer is
+      // actually for). Plugin-agnostic: jellyfin-web's own credential key.
+      "    function __txAuthed(){",
+      '      try{if(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId())return true;}catch(_){}',
+      '      try{var c=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null");var sv=c&&c.Servers;for(var ai=0;sv&&ai<sv.length;ai++){if(sv[ai]&&sv[ai].UserId&&sv[ai].AccessToken)return true;}}catch(_){}',
+      "      return false;",
+      "    }",
       "    function __txPrimeStart(P){",
       '      var origin="";try{origin=new URL(document.baseURI).origin;}catch(_){}',
       "      var seen={},fq=[],bodies=[],pend=0,busy=false,stopped=false;",
-      '      function authed(){try{return !!(window.ApiClient&&typeof window.ApiClient.getCurrentUserId==="function"&&window.ApiClient.getCurrentUserId());}catch(_){return false;}}',
+      "      function authed(){return __txAuthed();}",
       // JELA-183: version-pinned query URLs (class 2 per __txQC — e.g. a
       // plugin's ?v=<a.b.c> submodules) are cache-stable until the version
       // token changes, so the primer may pre-cache them under their __txKey
@@ -1657,7 +1708,30 @@
       // those bodies are config-mutable and must be fetched fresh at boot.
       // __txQGate (not __txQC) so the fetch-cache kill switch also stops
       // priming entries the runtime would then refuse to read.
-      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;if(String(abs).indexOf('?')>=0&&__txQGate(abs)!==2)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      // JELA-749: the SCRAPE path can only ever yield BARE paths — a plugin
+      // that version-stamps its modules reads that token from a DOM
+      // attribute at runtime, so it is nowhere in the body we scrape. But
+      // __txKey KEEPS a class-2 token, so a bare-primed slot and the
+      // runtime's versioned slot can never match: priming bare costs a full
+      // download now and a dead slot forever after. __DYNKEY already holds
+      // the REAL URLs the dynamic interceptor saw, so inherit their query —
+      // exact path first, then any sibling recorded in the same directory
+      // (a plugin stamps its whole module tree with one token). Never
+      // invent a token: a path with no recorded evidence stays bare, and an
+      // inherited query that is not class 2 drops the candidate through the
+      // gate below rather than falling back to the unreadable bare key.
+      // Three tiers, each strictly evidence-backed: the exact path, then any
+      // sibling recorded in the same directory, then — only when EVERY
+      // query-bearing record agrees on one token — that token. Tier 3 is
+      // what covers a module whose whole directory is new this boot
+      // (JELA-746 saw js/others/ and js/extras/ in exactly that state); a
+      // store that mixes tokens (e.g. a second plugin's ?_jsi=1 marker) is
+      // not unanimous, so tier 3 stays empty and the candidate stays bare.
+      "      var __dqP={},__dqD={},__dqU=null,__dqUok=true;",
+      '      try{var __ds=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");for(var __di=0;__di<__ds.length;__di++){var __du=String(__ds[__di]||"");var __dqi=__du.indexOf("?");if(__dqi<0)continue;var __dp=__du.substring(0,__dqi),__dqs=__du.substring(__dqi);__dqP[__dp]=__dqs;var __dsl=__dp.lastIndexOf("/");if(__dsl>0&&!__dqD[__dp.substring(0,__dsl)])__dqD[__dp.substring(0,__dsl)]=__dqs;if(__dqU===null)__dqU=__dqs;else if(__dqU!==__dqs)__dqUok=false;}}catch(_){}',
+      '      function __dqFor(abs){try{var q=__dqP[abs];if(q)return q;var sl=abs.lastIndexOf("/");if(sl>0){q=__dqD[abs.substring(0,sl)];if(q)return q;}if(__dqUok&&__dqU)return __dqU;}catch(_){}return "";}',
+      '      function __dqAdd(abs){if(String(abs).indexOf("?")>=0)return abs;var q=__dqFor(abs);return q?abs+q:abs;}',
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;abs=__dqAdd(abs);if(String(abs).indexOf('?')>=0&&__txQGate(abs)!==2)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
       "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
       '      function stopAuth(){stopped=true;P.st="auth";}',
       "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
@@ -1696,13 +1770,21 @@
       "        finishMaybe();",
       "      }",
       "      function probe(g){",
+      // JELA-749: probe() was the one fetch site with no stop/auth guard, so
+      // a dir fan-out could fire (and 404 once per wrong dir) after auth had
+      // already appeared. Every other fetch site checks; this one now does.
+      "        if(stopped)return;",
+      "        if(authed()){stopAuth();return;}",
       "        var name=g.names[0],left=0,best=null;",
       // Warm/partial cache: if names[0] is already cached under one of the
       // candidate dirs, that dir won the probe on an earlier boot — commit
       // to it without any network probe (a fully-warm boot fetches nothing)
       // and let enq's cached-skip fill only the gaps.
       "        for(var w=0;w<g.dirs.length;w++){",
-      '          var wAbs;try{wAbs=new URL(g.dirs[w]+"/"+name,document.baseURI).href;}catch(_){continue;}',
+      // JELA-749: look the warm hit up under the SAME key norm() would
+      // enqueue (query inherited) — otherwise inheritance turns every warm
+      // boot back into a full probe fan-out.
+      '          var wAbs;try{wAbs=__dqAdd(new URL(g.dirs[w]+"/"+name,document.baseURI).href);}catch(_){continue;}',
       "          var wHit=null;try{wHit=localStorage.getItem(__TXPFX+__txKey(wAbs));}catch(_){}",
       "          if(wHit!=null){",
       '            for(var w2=1;w2<g.names.length;w2++)enq(g.dirs[w]+"/"+g.names[w2]);',
@@ -1740,6 +1822,10 @@
       "      for(var pi=0;pi<scraped.groups.length;pi++)probe(scraped.groups[pi]);",
       "      pump();",
       "    }",
+      // JELA-749: store hygiene runs on EVERY boot, independent of the
+      // primer's kill switch — the residue it clears outlives whichever boot
+      // wrote it. 12 s is well past the boot window this program measures.
+      "    try{setTimeout(__txSweepBare,12000);}catch(_){}",
       "    try{",
       '      if(localStorage.getItem("jellyfin.shell.txPrimeDisabled")!=="1"){',
       '        var __tpP={q:0,f:0,t:0,e:0,st:"",done:0};',
@@ -1750,9 +1836,9 @@
       "            __tpN++;",
       '            if(__tpN>360){clearInterval(__tpT);__tpP.st="cap";return;}',
       '            if(!window.ApiClient||typeof window.ApiClient.getCurrentUserId!=="function")return;',
-      "            var uid=null;try{uid=window.ApiClient.getCurrentUserId();}catch(_){}",
       "            clearInterval(__tpT);",
-      '            if(uid){__tpP.st="auth";return;}',
+      // JELA-749: __txAuthed, not getCurrentUserId() alone — see the helper.
+      '            if(__txAuthed()){__tpP.st="auth";return;}',
       "            __txPrimeStart(__tpP);",
       "          }catch(_){try{clearInterval(__tpT);}catch(__){}}",
       "        },500);",
