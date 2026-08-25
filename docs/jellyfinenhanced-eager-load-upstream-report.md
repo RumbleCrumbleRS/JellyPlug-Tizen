@@ -93,7 +93,7 @@ over 3 s" as the endpoint. The mean-difference CI for CTL−ALLJE excludes zero
 ([217, 2700] ms) and is the better summary of _user-visible_ cost for a race
 like this, but it is also not what was pre-registered.
 
-## Drain evidence (JELA-726) — the cost is execution, not download
+## Fan-out evidence (JELA-726, corrected by JELA-736) — the cost is concurrency, not bytes
 
 Two further cold boots on the same rig, gate CLEAR before and after,
 measured the fan-out directly rather than through an A/B:
@@ -103,20 +103,103 @@ measured the fan-out directly rather than through an A/B:
   **5,833 ms**.
 - The server answers each in **under 1 ms** (`x-response-time-ms`).
 
-The 3.4 s tail is therefore neither server time nor network time — it is the
-M63 renderer draining ~250 concurrent responses while the main thread is
-blocked. Both boots show it as a hard network-idle window (3.0–6.0 s and
-3.0–5.5 s) with the responses already on the wire. This is _execution_ cost,
-not parse cost, so it does not contradict the ~2% parse figure from M63
-boot-cost work — it is a separate cost that a byte count understates. It also
-lines up exactly with the race above: 5,833 ms is where the losing control
-boots land.
+### CORRECTED 2026-08-25 — the tail is queueing, not renderer execution
 
-Note this changes the relative weight of the two upstream asks. Compressing
-the bodies (ask 2) cuts the bytes but not the 179 requests and not the drain
-tail; only lazy-loading (ask 1) removes those. Our own server-side gzip of
-this route (JELA-727, ~2,853 → ~713 KiB) is a local mitigation that
-deliberately does **not** overlap with ask 1.
+An earlier revision of this section read the 3.4 s tail as "the M63 renderer
+draining ~250 concurrent responses on a blocked main thread, responses already
+on the wire". **That was wrong, and it was wrong in the verbatim upstream body
+too.** Three measurements on the JELA-736 cold-boot captures
+(`/tmp/jela736/out/a1.json`, out of git per the JEL-141 guard) rule it out:
+
+- **The responses were not on the wire.** Splitting each request at
+  `responseReceived`, the JE module bodies transfer in a **median of ~0 ms**
+  (`endTs − respTs`), while **TTFB** (`respTs − ts`) is the whole cost:
+  median 246 ms, p95 2,641 ms. Nothing is waiting to be drained — the
+  response headers have not arrived yet.
+- **The link is not saturated.** Bytes completed per second in the same boot:
+  3.26 MiB/s in second 0 and 5.92 MiB/s in second 7, but **0.41–0.68 MiB/s
+  through the wave** (seconds 3–5). A bandwidth-bound wave would run _at_ the
+  ceiling, not 8–14× under it. (An apparent "~0.32 MiB/s link average" is an
+  average over the whole 53 s capture including idle time, not a link
+  ceiling.)
+- **Latency is a monotonic function of in-flight request count.** Bucketing
+  every JE and `/shell/tx/` request by the number of requests already
+  in flight when it was issued:
+
+  | in-flight at issue |   n | median TTFB |
+  | -----------------: | --: | ----------: |
+  |               0–24 |  32 |      194 ms |
+  |              25–49 |  25 |      206 ms |
+  |              50–74 |  25 |      223 ms |
+  |              75–99 |  25 |      502 ms |
+  |            100–124 |  25 |    1,512 ms |
+  |            125–149 |  83 |    2,789 ms |
+  |            150–174 |   6 |    2,686 ms |
+
+  Flat to ~75 concurrent, then a knee, then a 14× climb — against a server
+  handler that answers in a **median 0.3 ms** (`x-response-time-ms`).
+
+So the cost is driven by **concurrency**, not by bytes and not by renderer
+execution. What is _not_ yet resolved is which side of the wire the queue
+lives on: `x-response-time-ms` measures the app handler only, so it cannot
+exclude time spent queued ahead of the handler (Kestrel stream admission),
+and it equally cannot exclude M63's own h2 stream scheduling. Distinguishing
+those needs either server-side instrumentation or a concurrency-capped client
+run. **We should not assert a side in the upstream report**, and the ask does
+not depend on it: every candidate mechanism is driven by the request count,
+which is exactly what ask 1 removes.
+
+This also fixes the weight of the two asks, and in the same direction the
+earlier text had it, but for a reason that now holds up. Compression (ask 2)
+does not reduce the 149-request burst, and the burst — not the byte total —
+is what the dose-response curve tracks. Only lazy-loading (ask 1) removes it.
+Our own server-side gzip of this route (JELA-727, ~2,853 → ~713 KiB) is a
+local mitigation that deliberately does **not** overlap with ask 1, and on
+this evidence it should be expected to help less than its byte ratio suggests.
+
+### What the burst actually delays — measure `/HomeScreen/Sections`, not `firstCard`
+
+`firstCard` was the wrong endpoint for this lever. It sits downstream of two
+other gates, which is why the ring reads null on it. The request the burst
+demonstrably delays is the host client's own home-screen call. Three
+consecutive cold boots, same rig, same build:
+
+| boot | `/HomeScreen/Sections` wire | server handler | firstCard |
+| ---- | --------------------------: | -------------: | --------: |
+| a1   |                    3,345 ms |         565 ms |  5,536 ms |
+| a2   |                       91 ms |          85 ms |  4,305 ms |
+| a3   |                       54 ms |          50 ms |  1,919 ms |
+
+In a1 that single request was issued **into** the wave (at 1,662 ms) and took
+**3,345 ms on the wire against 565 ms of server cost**. In a2/a3 it landed
+outside the wave and cost ~50–90 ms. Same code, same server, 37–62× spread —
+decided purely by whether the request is issued inside the burst.
+
+That is also the honest explanation of the bimodality reported above: this is
+a **race, not a distribution**, so a paired median is the wrong statistic and
+a confirmatory ring should pre-register `/HomeScreen/Sections` completion (or
+`settle`) as its endpoint rather than `firstCard`.
+
+### Scope: this is a cold / post-update cost, not a per-boot one
+
+Three boots sharing one browser profile on the same rig:
+
+| boot          | requests |       MiB | `/JellyfinEnhanced/js/*` |    firstCard |
+| ------------- | -------: | --------: | -----------------------: | -----------: |
+| w1 cold       |      620 |     18.27 |      219 req (3,577 KiB) |     4,784 ms |
+| w2 warm       |      490 |     16.18 |      113 req (1,965 KiB) |     3,317 ms |
+| w3 fully warm |  **326** | **11.86** |        **0 req (0 KiB)** | **1,286 ms** |
+
+By the third boot the module set is served entirely from cache with **zero
+network**. Upstream's `immutable` cache headers are doing their job, and our
+shell's JEL-619 version-keyed store covers it as well. So the 2.5 MiB is what
+a **cold or freshly-updated** client pays — every user on every plugin
+release, plus every TV whose HTTP cache has been evicted, which on TV-class
+devices with small caches is not a rare event. We should state this scoping
+in the upstream report ourselves rather than have the maintainer find it: it
+is the difference between "your plugin costs 2.5 MiB every boot" (false) and
+"your plugin costs 2.5 MiB on every cold and post-update boot" (true, and
+still worth fixing).
 
 ---
 
@@ -174,29 +257,46 @@ uncompressed) — dominates cold-boot network on TV-class devices**
 > **Why it matters on TVs**
 >
 > TV-class devices run old engines (Tizen 5.0 = Chromium 63) on weak SoCs,
-> and the cost there is not really the download — it is the drain. In a
-> traced cold boot, all 179 module requests are **issued by 2.4 s**, the
-> server answers each in **under 1 ms**, and yet the last response body does
-> not **finish** until **5.8 s**. The waterfall shows a hard network-idle
-> window from ~3 s to ~5.8 s with the responses already on the wire: the
-> renderer is working through ~250 concurrent module responses on a blocked
-> main thread. Compression would shrink the bytes but would not remove that
-> window; only not requesting the modules would.
+> and the dominant cost is not the byte total — it is the **request
+> concurrency**. In a traced cold boot all 152 module requests are issued
+> between 1.1 s and 2.1 s, in-flight peaks at **151**, and response latency
+> tracks that concurrency almost perfectly. Bucketing every request by how
+> many were already in flight when it was issued:
 >
-> The user-visible effect is a race. In a 3-arm interleaved A/B on our rig
-> (n=7, cycles shuffled, CDP URL blocking), 3 of 7 unmodified boots painted
-> their first card at 3.8–6.0 s and the other 4 at ~2.0 s, while **no boot
-> with `/JellyfinEnhanced/js/*` blocked exceeded 2.9 s** (0 of 14 across both
-> intervention arms). In the slow boots ~5.2 MiB had landed before the first
-> card versus ~2.4 MiB in the fast ones — the difference is the module set.
-> First card either beats the fan-out or waits behind it.
+> | in-flight at issue |   n | median TTFB |
+> | -----------------: | --: | ----------: |
+> |               0–24 |  32 |      194 ms |
+> |              50–74 |  25 |      223 ms |
+> |              75–99 |  25 |      502 ms |
+> |            100–124 |  25 |    1,512 ms |
+> |            125–149 |  83 |    2,789 ms |
 >
-> In fairness to the numbers: on our pre-registered statistic (paired median)
-> the confidence intervals include zero at n=7, so we are **not** claiming a
-> confirmed median win, and the bimodal split is a post-hoc reading. The byte
-> counts, request counts and the 2.4 s→5.8 s issue-to-finish gap are exact
-> measurements, not inferences, and they are the part of this report we would
-> ask you to act on.
+> Meanwhile the server handler answers in a **median 0.3 ms**, and the
+> response **bodies** transfer in ~0 ms — the entire delay is time-to-first-
+> byte, i.e. queueing. The link is not saturated either: the same boot
+> sustains 3.3–5.9 MiB/s outside the burst but only 0.4–0.7 MiB/s during it.
+>
+> The victim is your host application. In one cold boot the web client's own
+> `/HomeScreen/Sections` request was issued at 1,662 ms — inside the burst —
+> and took **3,345 ms on the wire against 565 ms of server cost**. In two
+> other boots of the same build the same request landed outside the burst and
+> completed in **54 ms and 91 ms**. Same code, same server; a 37–62× spread
+> decided by whether the home-screen call is issued inside the module wave.
+>
+> **Scoping, stated plainly:** your `immutable` headers work, so this is a
+> **cold-boot and post-update** cost, not a per-boot one — a third boot on a
+> warm profile fetches 0 modules and paints in 1.3 s versus 4.8 s cold. It is
+> still paid by every user on every plugin release, and TV browsers evict
+> small caches often.
+>
+> We also ran a 3-arm interleaved A/B (n=7, shuffled, CDP URL blocking) on
+> first-card time. **On our pre-registered statistic it is a null** — the
+> confidence intervals include zero — and we now think first card was simply
+> the wrong endpoint, since it sits downstream of the request above. We are
+> **not** claiming a confirmed first-paint win. The request counts, byte
+> counts, the concurrency/latency curve and the `/HomeScreen/Sections`
+> measurements are exact and are the part of this report we would ask you to
+> act on.
 >
 > **The ask**
 >
@@ -208,10 +308,18 @@ uncompressed) — dominates cold-boot network on TV-class devices**
 >    `loadScripts()` already returns a promise, so a
 >    `JE.require(subtree)`-style gate in front of each feature's init would
 >    keep the dependency-order guarantees the array encodes today.
-> 2. **Compress the module bodies.** Either enable response compression for
->    the `js/{**path}` route or embed precompressed (`.js.gz`) resources and
->    serve with `Content-Encoding: gzip`. With `immutable` already set this
->    is a one-time cost per version, ~3–4× smaller.
+> 2. **Compress the module bodies** (secondary — see below). Either enable
+>    response compression for the `js/{**path}` route or embed precompressed
+>    (`.js.gz`) resources and serve with `Content-Encoding: gzip`. With
+>    `immutable` already set this is a one-time cost per version, ~3–4×
+>    smaller.
+>
+> To be straight about the ordering: on our measurements ask 1 is worth much
+> more than ask 2. Compression shrinks the bytes but leaves the 149-request
+> burst intact, and it is the burst — not the byte total — that the latency
+> curve above tracks. Ask 2 is still worth doing and is far cheaper to
+> implement; we just would not expect it to move cold-boot paint much on its
+> own.
 >
 > Happy to help with a PR for either piece if useful.
 
@@ -240,6 +348,21 @@ spike stays parked. Two further reasons not to build it yet:
   every native card surface while `onerror`/`unhandledrejection` both stayed
   at 0.
 
-The next measurement that would actually change this decision is a
-confirmatory ring with "fraction of boots over 3 s" pre-registered as the
-endpoint, at a larger n than 7.
+**Updated 2026-08-25.** The mitigation still stays parked, but the reason
+above is now only half right. The ring's null was measured on `firstCard`,
+which the JELA-736 captures show is the wrong endpoint — it sits downstream of
+`/HomeScreen/Sections`, which is the request the burst actually delays (54 ms
+outside the wave, 3,345 ms inside it). So the null does not license "no effect
+here"; it licenses "this endpoint cannot resolve it".
+
+What has genuinely changed the decision is scope, not significance: on a warm
+profile the module set costs **zero** requests, so a boot-window deferral list
+would buy nothing on the boots most users experience most of the time. It
+would pay only on cold and post-update boots — real, but a much smaller prize
+than the ring was set up to detect, and still a sharp tool aimed at a
+third-party plugin's load order.
+
+The next measurement that would change this decision is a confirmatory ring
+that (a) pre-registers **`/HomeScreen/Sections` completion time** — or
+`settle` — as the endpoint rather than `firstCard`, (b) restricts to cold
+profiles, and (c) runs at a larger n than 7.
