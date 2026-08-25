@@ -440,7 +440,7 @@
           total = 0;
         for (i = 0; i < keys.length; i++)
           total += (items[keys[i]] && items[keys[i]].size) || 0;
-        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0; ) {
+        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0;) {
           var biggestKey = null,
             biggestSize = 0;
           for (i = 0; i < keys.length; i++) {
@@ -3445,12 +3445,15 @@
       "m=/^\\/Items\\/([0-9a-fA-F]{32})\\/ThemeMedia$/.exec(pp);" +
       'if(m){if(uid&&uid!==cC.u)return"";return"T:"+m[1].toLowerCase()+"?"+rq}' +
       'if(pp==="/Shows/NextUp")return uid&&uid!==cC.u?"":"N:?"+rq;' +
+      // A C: key carries the PLUGIN ROOT it came from ("C:<root>/<what>?…") so
+      // cFl can retire one plugin's config without touching another's — see
+      // the invalidation note below.
       "m=/^\\/JellyfinEnhanced\\/tag-cache\\/([0-9a-fA-F]{32})$/.exec(pp);" +
-      'if(m)return m[1].toLowerCase()===cC.u?"C:tag?"+rq:"";' +
+      'if(m)return m[1].toLowerCase()===cC.u?"C:JellyfinEnhanced/tag?"+rq:"";' +
       "m=/^\\/JellyfinEnhanced\\/user-settings\\/([0-9a-fA-F]{32})\\/([A-Za-z0-9._-]{1,64})$/.exec(pp);" +
-      'if(m)return m[1].toLowerCase()===cC.u?"C:us/"+m[2]+"?"+rq:"";' +
-      'if(pp==="/JellyfinEnhanced/jellyseerr/user-status")return"C:jsr?"+rq;' +
-      'if(pp==="/NotifySync/Data")return"C:ns?"+rq}' +
+      'if(m)return m[1].toLowerCase()===cC.u?"C:JellyfinEnhanced/us/"+m[2]+"?"+rq:"";' +
+      'if(pp==="/JellyfinEnhanced/jellyseerr/user-status")return"C:JellyfinEnhanced/jsr?"+rq;' +
+      'if(pp==="/NotifySync/Data")return"C:NotifySync/data?"+rq}' +
       'return""}catch(_){co.err++;return""}};' +
       'var cTok=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===cC.t)}catch(_){return!1}};' +
       // cGet consumes a ONE-SHOT slot: it is deleted, and the caller keeps the
@@ -3487,13 +3490,25 @@
       // leaves config alone. Only writes that provably cannot touch an item
       // body or its UserData are exempt outright. Unknown still flushes, so a
       // shape we have not seen fails toward correctness.
+      //
+      // The config half is scoped one step further, to the WRITING PLUGIN'S
+      // ROOT. Replaying the JELA-759 capture through this shim showed why: the
+      // seven settings.json POSTs are all JellyfinEnhanced's, yet a root-blind
+      // config flush also retired NotifySync's slot — a different plugin, a
+      // different controller, a body the write cannot reach. Scoping recovers
+      // 16 of the drill's requests (78 -> 94 eliminated) and closes a real
+      // cross-plugin coupling. It stays conservative WITHIN a plugin: a
+      // JellyfinEnhanced write still retires every JellyfinEnhanced slot,
+      // because one plugin's endpoints can legitimately share state.
       'var cFl=function(u){try{if(!cIC)return;var p=String(u||"");' +
       'for(var fi=0;fi<cBL.length;fi++){if(p.indexOf(cBL[fi]+"/")===0){p=p.slice(cBL[fi].length);break}}' +
       'var fq=p.indexOf("?");if(fq>=0)p=p.slice(0,fq);' +
       "if(/^\\/(DisplayPreferences|QuickConnect|Sessions\\/Capabilities|Sessions\\/Viewing)/.test(p))return;" +
-      "var fc=/^\\/(JellyfinEnhanced|NotifySync|CustomTabs|MediaBar)\\//.test(p),n=0,k,no=[],oi;" +
+      "var fm=/^\\/(JellyfinEnhanced|NotifySync|CustomTabs|MediaBar)\\//.exec(p);" +
+      'var fc=!!fm,fp=fm?"C:"+fm[1]+"/":"",n=0,k,no=[],oi;' +
       "for(k in cSto){if(!Object.prototype.hasOwnProperty.call(cSto,k))continue;" +
-      'if((k.charAt(0)==="C")===fc){delete cSto[k];n++}}' +
+      "if(fc){if(k.indexOf(fp)===0){delete cSto[k];n++}}" +
+      'else if(k.charAt(0)!=="C"){delete cSto[k];n++}}' +
       "if(n){co.fl+=n;for(oi=0;oi<cOrd.length;oi++)if(cSto[cOrd[oi]])no.push(cOrd[oi]);cOrd=no}" +
       "}catch(_){co.err++}};" +
       // fetch: serve a completed entry as a synthesized Response, park on an

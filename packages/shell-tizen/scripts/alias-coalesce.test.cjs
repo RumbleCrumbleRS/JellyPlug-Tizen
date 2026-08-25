@@ -885,8 +885,9 @@ async function G() {
 }
 
 // ---- H. classed invalidation (the JELA-757 trap) ---------------------------
-// Seed one item slot and one config slot, then fire `method url` and report
-// which survived.
+// Seed one item slot and two config slots — one under the plugin root that
+// does the writing (JellyfinEnhanced) and one under a DIFFERENT plugin
+// (NotifySync) — then fire `method url` and report which survived.
 async function H() {
   async function seeded() {
     const e = icEnv();
@@ -899,7 +900,11 @@ async function H() {
     e.netCalls[1].resolve(200, NOTIFY);
     await bodyOf(p);
     await e.drainMicro();
-    assert.strictEqual(e.netCalls.length, 2, "H: seeded 2 slots");
+    p = get(e, "/JellyfinEnhanced/tag-cache/" + UID);
+    e.netCalls[2].resolve(200, TAGS);
+    await bodyOf(p);
+    await e.drainMicro();
+    assert.strictEqual(e.netCalls.length, 3, "H: seeded 3 slots");
     return e;
   }
   async function probe(e) {
@@ -915,7 +920,13 @@ async function H() {
     if (!cfgLive) e.netCalls[e.netCalls.length - 1].resolve(200, NOTIFY);
     await bodyOf(b);
     await e.drainMicro();
-    return { item: itemLive, cfg: cfgLive };
+    const mid2 = e.netCalls.length;
+    const c = get(e, "/JellyfinEnhanced/tag-cache/" + UID);
+    const cfgSameLive = e.netCalls.length === mid2;
+    if (!cfgSameLive) e.netCalls[e.netCalls.length - 1].resolve(200, TAGS);
+    await bodyOf(c);
+    await e.drainMicro();
+    return { item: itemLive, cfg: cfgLive, cfgSame: cfgSameLive };
   }
 
   // H1 — the exact write JELA-757 measured inside every dwell. A blanket flush
@@ -931,8 +942,15 @@ async function H() {
   await e.drainMicro();
   let r = await probe(e);
   assert(r.item, "H1: a plugin write must NOT retire the item slot");
-  assert(!r.cfg, "H1: a plugin write DOES retire the config slots");
+  assert(!r.cfgSame, "H1: it DOES retire its own plugin's config slots");
   console.log("OK: H1: a plugin-namespace write retires config only");
+
+  // H1b — and the config half is scoped to the WRITING plugin's root. The
+  // seven settings.json POSTs in the JELA-759 capture are all
+  // JellyfinEnhanced's; retiring NotifySync's slot as well cost 16 of the
+  // drill's requests for a body the write cannot reach.
+  assert(r.cfg, "H1b: a write must NOT retire another plugin's config slot");
+  console.log("OK: H1b: the config flush is scoped to the writing plugin");
 
   // H2 — a play-state write must retire the item bodies it can have changed.
   e = await seeded();
@@ -943,7 +961,7 @@ async function H() {
   await e.drainMicro();
   r = await probe(e);
   assert(!r.item, "H2: PlayedItems retires the item slots");
-  assert(r.cfg, "H2: PlayedItems leaves config alone");
+  assert(r.cfg && r.cfgSame, "H2: PlayedItems leaves config alone");
   console.log("OK: H2: a play-state write retires the item slots");
 
   // H3 — unknown shapes fail toward correctness.
@@ -963,7 +981,10 @@ async function H() {
   e.netCalls[e.netCalls.length - 1].resolve(204, "");
   await e.drainMicro();
   r = await probe(e);
-  assert(r.item && r.cfg, "H4: DisplayPreferences retires nothing");
+  assert(
+    r.item && r.cfg && r.cfgSame,
+    "H4: DisplayPreferences retires nothing",
+  );
   console.log("OK: H4: an exempt write retires nothing");
 
   // H5 — the flush is transport-agnostic (ThemeMedia proved XHR is in play).
@@ -975,7 +996,7 @@ async function H() {
   await e.drainMicro();
   r = await probe(e);
   assert(!r.item, "H5: an XHR write retires the item slots too");
-  assert(r.cfg, "H5: and still spares config");
+  assert(r.cfg && r.cfgSame, "H5: and still spares config");
   console.log("OK: H5: the flush fires over XHR as well as fetch");
 
   // H6 — with the drill flag off, JELA-742's behaviour is byte-for-byte intact:
