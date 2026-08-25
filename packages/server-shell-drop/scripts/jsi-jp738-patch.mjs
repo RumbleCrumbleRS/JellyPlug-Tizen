@@ -22,7 +22,7 @@
  *
  *   8 x /Genres?SearchTerm=...&Limit=12   781.5 ms total   ~4.3 KB   (8 bodies)
  *   1 x /Genres?Limit=200                  98.2 ms         11,155 B  (28 genres)
- *   1 x the same + Fields=&EnableImages=false&EnableTotalRecordCount=false
+ *   1 x the same + EnableImages=false&EnableTotalRecordCount=false
  *                                          71.5 ms          5,914 B
  *
  * The cost is FLAT per call and independent of the search term — the server
@@ -96,6 +96,13 @@ export const BULK_LIMIT = 200;
  *
  * Returning null (rather than throwing, or resolving to null) is the signal to
  * the call site that it should do exactly what it does today.
+ *
+ * The ticket also asked for `Fields=`. It is NOT here: the apiclient's URL
+ * builder drops empty-string params, so `Fields=""` never reaches the wire —
+ * confirmed against the emitted URL on the rig, which is
+ * `/Genres?Limit=200&EnableImages=false&EnableTotalRecordCount=false&userId=`.
+ * That request still returns the trimmed 5,914-byte body, so the halving the
+ * ticket measured comes from EnableImages + EnableTotalRecordCount alone.
  */
 export const GENRE_BULK_SRC =
   "(function(){" +
@@ -114,7 +121,7 @@ export const GENRE_BULK_SRC =
   "if(key!==k){key=k;pend=null}" +
   "if(!pend){" +
   "var p=null;" +
-  'try{p=api.getGenres(uid,{Limit:L,Fields:"",EnableImages:!1,EnableTotalRecordCount:!1})}catch(e){p=null}' +
+  "try{p=api.getGenres(uid,{Limit:L,EnableImages:!1,EnableTotalRecordCount:!1})}catch(e){p=null}" +
   'if(!p||typeof p.then!="function")return null;' +
   "pend=p}" +
   "return pend.then(function(r){" +

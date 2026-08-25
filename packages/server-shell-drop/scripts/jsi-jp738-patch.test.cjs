@@ -23,8 +23,8 @@
  *     name resolves to the same {id,name} the SearchTerm query returned.
  *  5) SHARED: row-see-all rides the SAME in-flight request genre-rows started,
  *     so the JELA-683 double-resolve collapses into it rather than doubling it.
- *  6) SHAPE: the one request asks for the fields the row code actually needs
- *     and nothing else (Fields=, no images, no total count).
+ *  6) SHAPE: the one request asks only for what the row code reads — no
+ *     images, no total count — and is scoped to the current user.
  *  7) FALLBACK: a rejected bulk read, a malformed response, and a response
  *     that may be truncated at the limit each fall back to the shipped
  *     per-name query — a row is never lost.
@@ -327,9 +327,11 @@ async function main() {
     const b = boot(mod, {});
     await resolveAll(b.rows, b.api, ["Action"]);
     const q = plain(b.calls[0].q);
+    // No `Fields`: the apiclient drops empty-string params, so `Fields=""`
+    // would never reach the wire. EnableImages + EnableTotalRecordCount are
+    // what actually halve the body and the server CPU.
     assert.deepStrictEqual(q, {
       Limit: BULK_LIMIT,
-      Fields: "",
       EnableImages: false,
       EnableTotalRecordCount: false,
     });
