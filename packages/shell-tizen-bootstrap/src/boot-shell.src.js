@@ -2346,6 +2346,243 @@
       // first-paint is early enough by seconds.
       "    (function(){function kick(){setTimeout(__shellWalkWebpack,200);}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(kick);}else{kick();}})();",
       "  }catch(_){}",
+      // JELA-753: reuse the home tab controller across a route change.
+      //
+      // Pressing Back from an item detail page rebuilds the ENTIRE home from
+      // the network — 47-59 requests, 227-300 KB and a ~2.1-2.4 s network
+      // span per press, measured n=6 on the JELA-112 rig. Back-to-home is the
+      // single most common navigation on a remote, so ~3.5 browsed items cost
+      // a second entire boot; under the JELA-713 concurrency-queueing model
+      // that is exactly the regime that queues.
+      //
+      // The cause is upstream, and it is NOT a missing cache — the cheap path
+      // already exists and is simply unreachable. `hometab`'s controller has
+      // it:
+      //
+      //   onResume(e){ if(this.sectionsRendered) return sections.resume(...);
+      //                this.destroyHomeSections(); this.sectionsRendered=1;
+      //                return apiClient.getCurrentUser().then(loadSections); }
+      //
+      // but the `home` chunk parks that controller in
+      // `var m = useMemo(() => [], [])` — an array scoped to the Home REACT
+      // COMPONENT INSTANCE. Navigating to /details unmounts the Home route, so
+      // `m` dies with it; coming back constructs a brand-new controller whose
+      // `sectionsRendered` is undefined and the resume branch is never
+      // reachable across a navigation. It only ever helps a tab switch inside
+      // one mount.
+      //
+      // So the fix is to move the cache OUT of the React instance: a
+      // module-level (here: seed-level) map keyed by user id + tab index,
+      // exactly as the controller's own author would have written it had the
+      // owning component not been the storage.
+      //
+      // Two halves, because the controller alone is not enough:
+      //
+      //   1. CONTROLLER REUSE. Wrap the hometab module's default export. A
+      //      constructor that returns an object wins over `this`, so
+      //      `new Wrapped(view,params)` hands the home component back the
+      //      cached instance verbatim — no upstream call site changes, and
+      //      `refreshed` is already true on it so `E()` passes refresh:false
+      //      and `sections.resume` takes the no-op branch per container.
+      //   2. DOM RE-ADOPTION. The cached controller's `sectionsContainer` is
+      //      the OLD `.sections` node, which React detached on unmount (its
+      //      children survive — nothing calls destroyHomeSections()). The new
+      //      mount renders a fresh, EMPTY `.sections`. Reusing the controller
+      //      without moving the rendered rows across would resume a container
+      //      that is not in the document. So adopt(): copy the class list the
+      //      old container accumulated (`.sections` IS the
+      //      `.homeSectionsContainer` — Home Screen Sections stamps that class
+      //      on React's own node, so a fresh mount does not have it until
+      //      loadSections runs), move every child over, re-bind the
+      //      `settingschange` listener the constructor installed on the old
+      //      node, and re-point the controller.
+      //
+      // Interception point. `__webpack_require__` is not global (verified on
+      // the rig: `typeof window.__webpack_require__ === "undefined"`), and the
+      // hometab chunk is executed one microtask after its chunk lands — so a
+      // poll of `wr.m` cannot get in front of the first construction, and
+      // missing the FIRST construction is precisely missing the instance worth
+      // caching. The one hook with the right ordering is the chunk-loading
+      // global: webpack's `webpackJsonpCallback` installs the incoming
+      // modules into `wr.m`, then calls the ORIGINAL `push` it captured as its
+      // parent, and only then resolves the chunk promise that executes them.
+      // We create `self.webpackChunk` first (the seed runs before every
+      // jellyfin-web script) so our push becomes that parent, and wrap the
+      // hometab factory in the window between registration and execution.
+      // `wr` itself comes from the JEL-535 probe-push idiom (QA-verified on a
+      // physical QN82Q60RAFXZA), captured lazily on the first real chunk.
+      //
+      // FRESHNESS (stated policy, both halves enforced):
+      //   - TTL, default 5 min, tunable via
+      //     `jellyfin.shell.homeResumeTtlMs`. NOT sliding — the stamp is the
+      //     time of the last full build, so the home is rebuilt from the
+      //     network at least every TTL however much the user bounces.
+      //   - DIRTY invalidation. Any non-GET request to a user-data mutation
+      //     route (PlayedItems / FavoriteItems / Rating / UserData /
+      //     Sessions/Playing) bumps a counter; a cache entry is only reused
+      //     while the counter is unchanged. Mark something watched on the
+      //     detail page and the return to home is a full rebuild, which is
+      //     what makes the stale-watched-state case impossible rather than
+      //     unlikely. Playback start counts, so finishing an episode also
+      //     invalidates.
+      // Anything not matching those routes (browsing, scrolling, backing out)
+      // is exactly the case this exists for.
+      //
+      // Flag-dark; the flag IS the kill switch (default OFF), same as
+      // chunkWarm. Diag/proof-of-arm: window.__shellHR =
+      // {on,push,wr,found,mid,wrap,ctor,hits,miss,stale,dirty,moved,err,why}.
+      // An arm reporting hits:0 has not fired and must be discarded (JELA-690).
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.homeResume")!=="1")return;',
+      "    var W=window;",
+      '    var D=W.__shellHR={on:1,push:0,wr:0,found:0,mid:"",wrap:0,ctor:0,hits:0,miss:0,stale:0,dirty:0,moved:0,err:0,why:""};',
+      "    var TTL=300000;",
+      '    try{var tv=parseInt(localStorage.getItem("jellyfin.shell.homeResumeTtlMs")||"",10);if(tv>0&&tv<=3600000)TTL=tv;}catch(_){}',
+      "    var CACHE={},wr=null,DIRTY=0;",
+      "    function now(){return (new Date).getTime();}",
+      // Dirty tracking. Both transports are wrapped because jellyfin-web's
+      // apiclient uses fetch on modern engines and XHR on the legacy path.
+      "    var MUT=/(PlayedItems|FavoriteItems|\\/Rating|UserData|Sessions\\/Playing)/i;",
+      "    function note(m,u){try{",
+      '      m=String(m||"GET").toUpperCase();',
+      '      if(m==="GET"||m==="HEAD"||m==="OPTIONS")return;',
+      '      if(MUT.test(String(u||"")))DIRTY++;',
+      "    }catch(_){}}",
+      "    try{var XO=XMLHttpRequest.prototype.open;",
+      "      XMLHttpRequest.prototype.open=function(m,u){note(m,u);return XO.apply(this,arguments);};}catch(_){D.err++;}",
+      "    try{var OF=W.fetch;",
+      '      if(typeof OF==="function")W.fetch=function(i,init){',
+      '        try{note((init&&init.method)||(i&&i.method)||"GET",typeof i==="string"?i:(i&&i.url)||"");}catch(_){}',
+      "        return OF.apply(this,arguments);};}catch(_){D.err++;}",
+      // Cache key: user id + tab index, so a user switch never inherits the
+      // previous user's home and the favorites tab can never collide with it.
+      '    function uid(){try{var a=W.ApiClient;return a&&a.getCurrentUserId?String(a.getCurrentUserId()||""):"";}catch(_){return "";}}',
+      "    function keyOf(v){",
+      '      var ix="0";try{ix=String((v&&v.getAttribute&&v.getAttribute("data-index"))||"0");}catch(_){}',
+      '      return uid()+"|"+ix;',
+      "    }",
+      // Verbatim re-implementation of the `settingschange` handler the
+      // upstream constructor bound to the container it was handed.
+      "    function bindSettings(inst,el){",
+      '      try{el.addEventListener("settingschange",function(){',
+      "        try{inst.sectionsRendered=false;if(!inst.paused)inst.onResume({refresh:true});}catch(_){}",
+      "      },false);}catch(_){D.err++;}",
+      "    }",
+      "    function adopt(inst,view,params){",
+      '      var nu=view&&view.querySelector?view.querySelector(".sections"):null;',
+      "      var old=inst.sectionsContainer;",
+      "      if(!nu||!old)return false;",
+      "      if(nu!==old){",
+      "        try{nu.className=old.className;}catch(_){}",
+      "        while(old.firstChild)nu.appendChild(old.firstChild);",
+      "        bindSettings(inst,nu);",
+      "        D.moved++;",
+      "      }",
+      "      inst.view=view;inst.params=params;inst.sectionsContainer=nu;",
+      "      return true;",
+      "    }",
+      // Returns "" when the entry may be reused, else the reason it may not.
+      "    function usable(ent,view){",
+      '      if(!ent||!ent.inst)return "none";',
+      '      if(!ent.inst.sectionsRendered)return "unrendered";',
+      '      if(now()-ent.t>TTL)return "ttl";',
+      '      if(ent.dirty!==DIRTY)return "dirty";',
+      "      var c=ent.inst.sectionsContainer;",
+      '      if(!c||!c.firstChild)return "empty";',
+      '      if(!view||!view.querySelector)return "noview";',
+      '      return "";',
+      "    }",
+      "    function wrapCtor(Orig){",
+      '      if(!Orig||typeof Orig!=="function"||Orig.__shellHR)return Orig;',
+      "      function HR(view,params){",
+      "        D.ctor++;",
+      "        var k=keyOf(view),ent=CACHE[k],why=usable(ent,view);",
+      "        if(!why){",
+      "          try{",
+      "            if(adopt(ent.inst,view,params)){D.hits++;return ent.inst;}",
+      '            why="adopt";',
+      '          }catch(e){D.err++;why="throw:"+String((e&&e.message)||e).slice(0,40);}',
+      "        }",
+      '        if(why==="ttl")D.stale++;else if(why==="dirty")D.dirty++;',
+      "        D.miss++;D.why=why;",
+      // The stamp is deliberately the build time, never refreshed on reuse:
+      // TTL must bound how old the SHOWN rows can be, not how long the user
+      // has been idle.
+      "        var inst=new Orig(view,params);",
+      "        CACHE[k]={inst:inst,t:now(),dirty:DIRTY};",
+      "        return inst;",
+      "      }",
+      "      try{HR.prototype=Orig.prototype;}catch(_){}",
+      "      HR.__shellHR=1;D.wrap++;",
+      "      return HR;",
+      "    }",
+      // JEL-535 probe-push: a chunk with no modules whose runtime callback is
+      // handed __webpack_require__. Re-entrant from inside our own push hook —
+      // webpackJsonpCallback runs the runtime fn synchronously, so `wr` is set
+      // before the outer call resumes.
+      "    var capturing=0;",
+      "    function capture(){",
+      "      if(wr||capturing)return;",
+      "      capturing=1;",
+      "      try{",
+      "        var a=W.webpackChunk;",
+      '        if(a&&typeof a.push==="function")a.push([["__shellHR"+now()],{},function(r){wr=r;D.wr=1;}]);',
+      "      }catch(_){D.err++;}",
+      "      capturing=0;",
+      "    }",
+      // Anchored on the two names that define the controller. Both must be
+      // present, so an unrelated module mentioning one of them cannot match
+      // and a renamed upstream degrades to a silent skip (shipped behaviour),
+      // never to a wrong wrap.
+      "    function scan(data){",
+      "      try{",
+      "        if(!wr||D.found)return;",
+      "        var mods=data&&data[1];if(!mods)return;",
+      "        for(var id in mods){",
+      "          if(!Object.prototype.hasOwnProperty.call(mods,id))continue;",
+      '          var f=mods[id];if(typeof f!=="function")continue;',
+      '          var s="";try{s=String(f);}catch(_){continue;}',
+      '          if(s.indexOf("destroyHomeSections")<0||s.indexOf("sectionsRendered")<0)continue;',
+      '          var base=wr.m&&wr.m[id];if(typeof base!=="function")continue;',
+      "          (function(mid,orig){",
+      "            wr.m[mid]=function(mod,exp,req){",
+      "              orig(mod,exp,req);",
+      "              try{",
+      "                var ex=(mod&&mod.exports)||exp;",
+      '                if(ex&&typeof ex.default==="function")ex.default=wrapCtor(ex.default);',
+      "              }catch(_){D.err++;}",
+      "            };",
+      "          })(id,base);",
+      "          D.found=1;D.mid=String(id);",
+      "          return;",
+      "        }",
+      "      }catch(_){D.err++;}",
+      "    }",
+      "    function hook(a){",
+      "      try{",
+      '        if(!a||a.__shellHR||typeof a.push!=="function")return;',
+      "        a.__shellHR=1;",
+      "        var np=a.push;",
+      "        a.push=function(d){D.push++;try{capture();scan(d);}catch(_){D.err++;}return np.apply(a,arguments);};",
+      "      }catch(_){D.err++;}",
+      "    }",
+      // The seed runs before every jellyfin-web script, so this array IS the
+      // one webpack adopts (`self.webpackChunk=self.webpackChunk||[]`).
+      "    try{hook(W.webpackChunk=W.webpackChunk||[]);}catch(_){D.err++;}",
+      // Belt and braces for a build that renames the chunk-loading global: the
+      // window scan is capped at 3 s (it is not cheap on M63) and the whole
+      // interval stops the moment the factory is wrapped.
+      "    var tries=0,iv=null;",
+      "    function tick(){",
+      "      try{",
+      "        tries++;",
+      "        if(D.found||tries>240){if(iv)clearInterval(iv);return;}",
+      "        if(tries<=12){for(var k in W){if(/^webpackChunk/.test(k))hook(W[k]);}}",
+      "        capture();",
+      "      }catch(_){D.err++;}",
+      "    }",
+      "    try{iv=setInterval(tick,250);}catch(_){D.err++;}",
+      "  })();}catch(_){}",
       "})();",
     ].join(`
 `);
