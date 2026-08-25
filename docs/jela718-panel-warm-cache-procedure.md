@@ -18,11 +18,11 @@ workspace before the session.
 Measured 2026-08-25 against the pinned Chromium 63.0.3239.0 rig (engine-class
 identical to the Q60R webview). Two plausible instruments are both wrong:
 
-| Signal | On M63 | Verdict |
-|---|---|---|
+| Signal                                     | On M63                                                                                            | Verdict                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | `performance.getEntriesByType('resource')` | emits an entry for cache hits too; `transferSize`/`encodedBodySize` are 0 from a `file://` origin | unusable for both the request and the bytes question |
-| `Network.requestServedFromCache` | **never fires** — 0 events across a memory-cache hit *and* a true network fetch | unusable |
-| `Network.responseReceived.fromDiskCache` | `true` on a cache hit, `false` on a network fetch | **use this** |
+| `Network.requestServedFromCache`           | **never fires** — 0 events across a memory-cache hit _and_ a true network fetch                   | unusable                                             |
+| `Network.responseReceived.fromDiskCache`   | `true` on a cache hit, `false` on a network fetch                                                 | **use this**                                         |
 
 Concretely, what M63 reports for the same URL:
 
@@ -32,7 +32,7 @@ network   -> responseReceived status=200 fromDiskCache=false  encodedDataLength>
 ```
 
 **This corrects the acceptance criterion as originally written.** JELA-718 says "a
-plain `200` with a full body is a fail" — but a cache hit *is* a plain 200, at the JS
+plain `200` with a full body is a fail" — but a cache hit _is_ a plain 200, at the JS
 layer (`fetch(...).status === 200`) and at the CDP layer. Judging on status alone
 reports a false FAIL on a perfectly good result. The discriminator is
 `fromDiskCache`. (M63 folds its memory cache into that flag; on this engine it means
@@ -55,8 +55,7 @@ node jela718-web-cache-capture.mjs --compare prime.json warm.json
 ```
 
 The script closes the app, relaunches it under `shell 0 debug`, attaches CDP, and
-only then drives the Lite→SPA handoff with a synthetic Back keydown (`keyCode`
-10009) — so the whole bundle load happens inside the capture window and nothing
+only then drives the Lite→SPA handoff with a synthetic Back keydown (`keyCode` 10009) — so the whole bundle load happens inside the capture window and nothing
 races the attach. Add `--no-handoff` if the panel is already sitting in the SPA.
 
 **Pass:** every hashed bundle either makes no network request (`fromDiskCache: true`)
@@ -89,14 +88,14 @@ POST /System/Restart
 Re-confirmed against live prod 2026-08-25 (plugin 1.2.0.0 Active, build hash
 `4c3e5ec610f9c71cad1c`), 7/7 cases:
 
-| Case | Result |
-|---|---|
-| current-hash bundle, no Origin | `public, max-age=604800, immutable` + `Vary: Accept-Encoding, Origin` |
-| current-hash bundle, with Origin | same + `access-control-allow-origin: *` |
-| stale hash | degrades to `public, max-age=0, must-revalidate` |
-| bare url, no query | falls through to core `no-cache` (never immutable) |
-| conditional GET, our ETag | `304` carrying full cache-control + vary |
-| conditional GET, our ETag + Origin | `304` still carries ACAO |
-| conditional GET, core's ETag | full `200` (the empty-buffer trap does not fire) |
+| Case                               | Result                                                                |
+| ---------------------------------- | --------------------------------------------------------------------- |
+| current-hash bundle, no Origin     | `public, max-age=604800, immutable` + `Vary: Accept-Encoding, Origin` |
+| current-hash bundle, with Origin   | same + `access-control-allow-origin: *`                               |
+| stale hash                         | degrades to `public, max-age=0, must-revalidate`                      |
+| bare url, no query                 | falls through to core `no-cache` (never immutable)                    |
+| conditional GET, our ETag          | `304` carrying full cache-control + vary                              |
+| conditional GET, our ETag + Origin | `304` still carries ACAO                                              |
+| conditional GET, core's ETag       | full `200` (the empty-buffer trap does not fire)                      |
 
 Raw captures go to the Paperclip issue, not git — `tooling/tv-validate/EVIDENCE-POLICY.md`.
