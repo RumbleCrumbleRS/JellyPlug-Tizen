@@ -149,6 +149,21 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">Home rows</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableLatestShowsFastPath" />
+                                <span>Disable the Latest Shows fast path</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Hands GET /HomeScreen/Section/LatestShows back to Home Screen Sections' own
+                                30-day window walk (54 queries / ~1.2 s of server time on this library).
+                                Leave off unless the row looks wrong.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">Boot diagnostics</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -194,6 +209,7 @@
                     { id: 'LiteDefaultOn', type: 'bool' },
                     { id: 'LiteNativeDefaultOn', type: 'bool' },
                     { id: 'LiteSubsDefaultOn', type: 'bool' },
+                    { id: 'DisableLatestShowsFastPath', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];

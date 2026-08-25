@@ -111,6 +111,7 @@ for (const prop of [
   "JsiChannelPath",
   "ExtraSourceUrls",
   "TransformTimeoutSeconds",
+  "DisableLatestShowsFastPath",
   "DisableDiagIngest",
   "DiagMaxRings",
 ]) {
