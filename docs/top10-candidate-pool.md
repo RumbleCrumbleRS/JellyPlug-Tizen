@@ -107,6 +107,53 @@ The consumer keeps only `id`, `name`, `serverId`, `imageTag`, `critic`, `us`
 so its 13.4% is not reachable from the client. That is an upstream ask, not a
 client-side lever.
 
+## Rig result (JELA-112 virtual Tizen 5.0, primed profile, n=3 matched pairs)
+
+Both arms run the SAME patched channel and differ only in the localStorage
+flags (JELA-696), so the substitution itself cannot be confounded with. The
+measurement is a request COUNT, so it is immune to the JELA-682 load confound
+(loadavg ranged 2.0–5.4 across the ring with zero effect on the counts).
+
+| arm           | pool GET @boot | pool GET @nav | total | CORS preflights | pool bytes/session |
+| ------------- | -------------- | ------------- | ----- | --------------- | ------------------ |
+| flag off (×3) | 1              | 1             | **2** | 2               | 575,885–575,895    |
+| flag on (×3)  | 1              | **0**         | **1** | 1               | 272,387–272,411    |
+
+`jp:top10:<today>:<user>` was seeded into every arm, so AC1's precondition
+("the cache is present and matches today") held in all six runs.
+
+AC4, diffed on the cache VALUE rather than the card count: the stored payload
+is byte-identical (1,828 chars, same ids, same order) across all six runs —
+`Moana, Creed, Arrival, Iron Man, Spider-Man: No Way Home, …` — matching the
+Node replay. Card count was 49 in all six.
+
+The rank badge still works off the shared pool. Navigating to `Arrival` (#3 in
+today's list) mounts **"TOP 10 · #3 in Movies Today"** in BOTH arms — the flag-on
+arm just does it with zero additional requests:
+
+| arm      | badge text           | pool GET @nav |
+| -------- | -------------------- | ------------- |
+| flag off | `#3 in Movies Today` | 1             |
+| flag on  | `#3 in Movies Today` | **0**         |
+
+### Rig trap (cost three boots)
+
+Shell v1.0.90 does **not** keep the channel in `jellyfin.shell.jsiChannel.c*` —
+that key does not exist on this profile, so JELA-745's install recipe reports
+"no meta" and every arm silently runs the shipped bytes. The channel URL carries
+a `?v=` token, so JEL-178 stores its **transpiled** body under a
+content-addressed slot `shell.tx<sid>:txc:<txFnv1a(SOURCE)>` (877,743 chars) and
+`txGetStatic()` serves it with no further verification. The key is the hash of
+the SOURCE, so patching the VALUE in place substitutes the executed code and
+still reads as a cache hit — no `meta.h` to recompute. Find the slot by content
+(`indexOf('jellyplug-top10')`), never by a hard-coded hash.
+
+Second trap: `jp:top10:` does **not** survive between browser processes on this
+rig (JELA-748 — Chromium's rate-limited localStorage commit, and the 877 KB
+channel slot eats the write budget), so a "primed" profile boots with
+`top10cache=0`. Seed the key explicitly, identically in both arms, or AC1's
+precondition is never actually under test.
+
 ## Reproducing
 
 The module ships a `module.exports` block, so its ranking is replayable in Node
