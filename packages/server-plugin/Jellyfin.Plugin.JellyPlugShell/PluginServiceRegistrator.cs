@@ -18,5 +18,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // OnStarting is the only order-independent hook here — RegisterServices runs
         // before Startup.ConfigureServices, so a direct middleware substitution loses.
         serviceCollection.AddTransient<IStartupFilter, WebAssetCacheStartupFilter>();
+
+        // JELA-731: one-query "Latest Shows" row in place of Home Screen Sections'
+        // 30-day sliding-window scan (54 queries / 1,166 ms of server time on
+        // production). Same hook, and for the same reason — the route belongs to a
+        // third-party plugin, so there is nothing to substitute into.
+        serviceCollection.AddTransient<IStartupFilter, LatestShowsFastPathStartupFilter>();
     }
 }
