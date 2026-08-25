@@ -239,9 +239,36 @@ public class ShellController : ControllerBase
         }
 
         Response.Headers.CacheControl = "no-cache";
+        Response.Headers.Vary = HeaderNames.AcceptEncoding + ", " + HeaderNames.Origin;
+
+        if (AcceptsGzip(Request.Headers.AcceptEncoding))
+        {
+            var gzip = _drop.TxManifestGzipBytes();
+            if (gzip != null)
+            {
+                Response.Headers.ContentEncoding = "gzip";
+                return File(gzip, "application/json");
+            }
+        }
+
         return PhysicalFile(_drop.TxManifestPath, "application/json");
     }
 
+    /// <summary>
+    /// JELA-708: these bodies were the routes JELA-688 missed — a cold boot
+    /// fetches ~69 of them (~875 KiB) before first paint, all raw. Compression
+    /// is on the same strictly-client-opt-in terms as
+    /// <see cref="ContentAddressed"/>: no Accept-Encoding (or gzip refused, or
+    /// the compressed body unavailable/not smaller) gets the identical raw
+    /// file it always got, because a TV must never be handed bytes it cannot
+    /// inflate. The bytes the TV executes are unchanged either way, so the
+    /// tx-manifest hashes — fnv1a of the SOURCE text, not of what went over
+    /// the wire — stay correct. Vary carries Accept-Encoding on BOTH
+    /// representations so an intermediary can never hand a cached gzip body
+    /// to an identity client, and Origin for the M63 cache-mode-collision
+    /// reason documented on ContentAddressed (these bodies are only ever
+    /// fetch()ed today, but the header is cheap and the policy uniform).
+    /// </summary>
     [AllowAnonymous]
     [HttpGet("tx/{hash}.js")]
     public IActionResult GetTxBody([FromRoute] string hash)
@@ -259,6 +286,18 @@ public class ShellController : ControllerBase
 
         // Content-addressed: same hash always means same bytes.
         Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+        Response.Headers.Vary = HeaderNames.AcceptEncoding + ", " + HeaderNames.Origin;
+
+        if (AcceptsGzip(Request.Headers.AcceptEncoding))
+        {
+            var gzip = _drop.TxGzipBytes(hash);
+            if (gzip != null)
+            {
+                Response.Headers.ContentEncoding = "gzip";
+                return File(gzip, "application/javascript");
+            }
+        }
+
         return PhysicalFile(path, "application/javascript");
     }
 
