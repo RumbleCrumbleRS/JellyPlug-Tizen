@@ -3885,13 +3885,72 @@
       // Counters: window.__shellFC {on,n,lead,join,serve,rep,err}.
       // Installed BEFORE the api-warm patch below, so the warm store still
       // gets first refusal and only its fallthrough reaches the coalescer.
+      // JELA-752: the SAME machinery, widened to the item-detail route.
+      //
+      // A CDP census of 5 detail opens (JELA-750, 4 primed profiles) found the
+      // detail route re-issuing 19-44% of its requests to the byte-identical
+      // URL, against a 4.4-5.8% baseline for the rest of the app. The worst
+      // offender is GET /Users/{u}/Items/{id} — FOUR concurrent copies of one
+      // 6.2-8.9 KB body on every open, all inside ~250 ms — and a series open
+      // adds SIX concurrent /JellyfinEnhanced/jellyseerr/user-status. Because
+      // every one is cross-origin the true cost is ~2x that (each duplicate
+      // drags its own preflight): one series open cost 73 requests / 690 KB.
+      //
+      // 29 of the 30 duplicate extras measured genuinely OVERLAP in flight, so
+      // an in-flight join collapses them. (This is the opposite of JELA-742,
+      // whose alias pair is 300-874 ms apart and explicitly NOT joinable.)
+      //
+      // Three changes to the JELA-724 shape, all of them measurement-driven:
+      //
+      //  1. Segment wildcards. The detail set is keyed by user and item id, so
+      //     a plain suffix list cannot express it. A pattern containing "*"
+      //     matches per SEGMENT against the tail of the path ("/Users/*/Items/*"),
+      //     which keeps the suffix semantics that make the list base-path safe.
+      //     "*" never matches an empty segment, so "/Users/*/Items/*" does not
+      //     also swallow the (different, and separately listed) "/Users/*/Items".
+      //
+      //  2. The key carries credentials + mode, not just the URL. The census
+      //     showed the SAME url fetched with credentials:"same-origin" and with
+      //     credentials unset (/System/Info/Public, /JellyfinEnhanced/version) —
+      //     those are the same mode, so the key normalises unset to the fetch
+      //     defaults ("same-origin"/"cors") and they still join. Mode is in the
+      //     key for the reverse reason: a no-cors fetch yields an OPAQUE
+      //     response, and handing that to a cors caller would be a silent
+      //     miscompare — the same request-mode collision JELA-707 hit in the
+      //     HTTP cache.
+      //
+      //  3. Conditional/ranged GETs opt out. Two callers may send the same URL
+      //     with different Range / If-None-Match / If-Modified-Since and get
+      //     legitimately different bodies (or a 304 only one of them can read),
+      //     so those never share a slot. Anything we cannot parse counts as
+      //     unsafe and passes through.
+      //
+      // Not fixed here, deliberately: /Items/{id}/ThemeMedia is issued twice
+      // per open over XMLHttpRequest, not fetch (confirmed by an in-page
+      // transport probe), so a fetch-level join cannot see it. It is the single
+      // residual duplicate per open and is left for an XHR-level pass.
       'if(!flg("jellyfin.shell.fetchCoalesceDisabled")&&!W.__shellFC&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
-      'var FCL=["/PluginPages/User"];' +
+      'var FCL=["/PluginPages/User","/Users/*/Items/*","/Users/*/Items","/Items/*/Similar","/JellyfinEnhanced/tag-cache/*","/JellyfinEnhanced/user-settings/*/settings.json","/JellyfinEnhanced/tmdb/*/*/reviews","/JellyfinEnhanced/jellyseerr/user-status","/Shows/*/Seasons","/Shows/NextUp","/LiveTv/Programs"];' +
       'try{var fcx=String(localStorage.getItem("jellyfin.shell.fetchCoalescePaths")||"").replace(/\\s+/g,"").split(","),fci;for(fci=0;fci<fcx.length;fci++)if(fcx[fci].charAt(0)==="/"&&FCL.length<32)FCL.push(fcx[fci])}catch(_){}' +
-      "var FC=W.__shellFC={on:1,n:FCL.length,lead:0,join:0,serve:0,rep:0,err:0},fcQ={};" +
+      "var FC=W.__shellFC={on:1,n:FCL.length,lead:0,join:0,serve:0,rep:0,hdr:0,err:0},fcQ={};" +
+      // Precompute the matcher once: plain entries keep the JELA-724 suffix
+      // test, "*" entries become a segment array matched against the path tail.
+      'var FCP=[],fcb,fcp,fca;for(fcb=0;fcb<FCL.length;fcb++){fcp=FCL[fcb];if(fcp.indexOf("*")<0){FCP.push({w:0,p:fcp})}else{fca=fcp.split("/");if(fca[0]==="")fca=fca.slice(1);FCP.push({w:1,a:fca})}}' +
+      // A GET whose response varies by request header must never share a slot.
+      // Headers may arrive as a Headers instance, an array of pairs, or a plain
+      // object; anything we cannot walk is treated as unsafe (return 1).
+      'var fcRe=/^(range|if-none-match|if-modified-since)$/i;' +
+      "var fcUns=function(fo){try{if(!fo||!fo.headers)return 0;var fh=fo.headers,fb=0,fi3,fn3;" +
+      'if(Object.prototype.toString.call(fh)==="[object Array]"){for(fi3=0;fi3<fh.length;fi3++)if(fh[fi3]&&fcRe.test(String(fh[fi3][0])))fb=1;return fb}' +
+      'if(typeof fh.forEach==="function"){fh.forEach(function(fv3,fk3){if(fcRe.test(String(fk3)))fb=1});return fb}' +
+      "for(fn3 in fh)if(fcRe.test(fn3))fb=1;return fb}catch(_){return 1}};" +
       'var fcK=function(u){var fh=u.indexOf("#");if(fh>=0)u=u.slice(0,fh);' +
-      'var fq=u.indexOf("?"),fp=fq<0?u:u.slice(0,fq);' +
-      'for(var fi2=0;fi2<FCL.length;fi2++){var fs2=FCL[fi2];if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u}return""};' +
+      'var fq=u.indexOf("?"),fp=fq<0?u:u.slice(0,fq),fbs=fp.split("/");' +
+      "for(var fi2=0;fi2<FCP.length;fi2++){var fe2=FCP[fi2];" +
+      'if(!fe2.w){var fs2=fe2.p;if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u;continue}' +
+      "var fa2=fe2.a;if(fbs.length<fa2.length)continue;var fof=fbs.length-fa2.length,fok=1,fj2;" +
+      'for(fj2=0;fj2<fa2.length;fj2++){var fx2=fa2[fj2],fy2=fbs[fof+fj2];if(fx2==="*"){if(!fy2){fok=0;break}continue}if(fx2!==fy2){fok=0;break}}' +
+      "if(fok)return u}return\"\"};" +
       "var fcSnap=function(fr){return fr.text().then(function(ft){var fhs={};" +
       'try{fr.headers.forEach(function(fv,fn2){fhs[fn2]=fv})}catch(_){try{var fct=fr.headers.get("content-type");if(fct)fhs["content-type"]=fct}catch(__){}}' +
       'return{s:fr.status,x:fr.statusText||"",h:fhs,b:ft}})};' +
@@ -3899,7 +3958,12 @@
       "return new Response(fst===204||fst===205||fst===304?null:fd.b,{status:fst,statusText:fd.x,headers:fd.h})};" +
       "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
       'if(typeof fu==="string"&&!(fo&&(fo.body||fo.signal))&&(fo&&fo.method?String(fo.method).toUpperCase():"GET")==="GET"){' +
-      "var fk=fcK(fu);if(fk){var fe=fcQ[fk];" +
+      "var fk=fcK(fu);" +
+      "if(fk&&fcUns(fo)){FC.hdr++;fk=\"\"}" +
+      // (method, credentials, mode, full URL) — unset credentials/mode
+      // normalise to the fetch defaults so they join their explicit twins.
+      'if(fk)fk="GET "+(fo&&fo.credentials?String(fo.credentials):"same-origin")+" "+(fo&&fo.mode?String(fo.mode):"cors")+" "+fk;' +
+      "if(fk){var fe=fcQ[fk];" +
       "if(fe){FC.join++;return fe.then(function(fd){FC.serve++;return fcMk(fd)},function(){FC.rep++;return fcF.call(W,fu,fo)})}" +
       "FC.lead++;" +
       "fe=fcQ[fk]=fcF.call(W,fu,fo).then(fcSnap).then(function(fd){delete fcQ[fk];return fd},function(fer){delete fcQ[fk];throw fer});" +

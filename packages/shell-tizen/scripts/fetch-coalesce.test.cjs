@@ -297,6 +297,11 @@ const PAYLOAD = JSON.stringify({
   Items: [{ Id: "a", Url: "u", Icon: "i", DisplayText: "d" }],
 });
 
+// Size of the SHIPPED default allowlist, read back off the counters rather
+// than hard-coded, so tests assert behaviour instead of a list length.
+const DEFAULT_N = makeEnv().run().window.__shellFC.n;
+assert(DEFAULT_N >= 1, "default allowlist is non-empty");
+
 let failures = 0;
 function check(name, fn) {
   return Promise.resolve()
@@ -397,6 +402,161 @@ async function main() {
     assert.strictEqual(env.window.__shellFC.join, 1);
   });
 
+  // ---- 4b. JELA-752: segment wildcards ------------------------------------
+  const U = "c36be5ddc9ad4742b3635e71af9fd147";
+  const ID = "b8f3ad6990b69a50a4c914670901d768";
+
+  await check("JELA-752 wildcard joins the x4 /Users/{u}/Items/{id}", async () => {
+    const env = makeEnv().run();
+    const u = `http://srv/Users/${U}/Items/${ID}`;
+    const rs = [
+      env.window.fetch(u),
+      env.window.fetch(u),
+      env.window.fetch(u),
+      env.window.fetch(u),
+    ];
+    assert.strictEqual(env.net.length, 1, "4 concurrent -> 1 network call");
+    assert.strictEqual(env.window.__shellFC.join, 3, "3 waiters joined");
+    await env.serve(env.net[0], PAYLOAD, {
+      status: 200,
+      statusText: "OK",
+      headers: { "content-type": "application/json" },
+    });
+    // Every caller still gets an independently readable body.
+    const bodies = await Promise.all((await Promise.all(rs)).map((r) => r.json()));
+    assert.strictEqual(bodies.length, 4);
+    for (const b of bodies) assert.strictEqual(b.TotalRecordCount, 1);
+  });
+
+  await check("JELA-752 wildcard is segment-exact, not a prefix", async () => {
+    const env = makeEnv().run();
+    // "/Users/*/Items/*" must NOT swallow the collection endpoint, and the
+    // separately-listed "/Users/*/Items" must not swallow the item endpoint.
+    const coll = `http://srv/Users/${U}/Items?Recursive=true`;
+    env.window.fetch(coll);
+    env.window.fetch(coll);
+    assert.strictEqual(env.net.length, 1, "/Users/*/Items coalesces on its own");
+    // A deeper path than either pattern is not matched by either.
+    env.net.length = 0;
+    const deep = `http://srv/Users/${U}/Items/${ID}/SpecialFeatures`;
+    env.window.fetch(deep);
+    env.window.fetch(deep);
+    assert.strictEqual(env.net.length, 2, "extra segment -> no match");
+    // "*" never matches an empty segment.
+    env.net.length = 0;
+    const empty = `http://srv/Users/${U}/Items/`;
+    env.window.fetch(empty);
+    env.window.fetch(empty);
+    assert.strictEqual(env.net.length, 2, "empty segment does not match *");
+  });
+
+  await check("JELA-752 wildcard survives a server base path", async () => {
+    const env = makeEnv().run();
+    const u = `http://srv/jellyfin/Users/${U}/Items/${ID}`;
+    env.window.fetch(u);
+    env.window.fetch(u);
+    assert.strictEqual(env.net.length, 1, "matched under a base path");
+    // ...but a same-shaped path with the wrong literal segment is not matched.
+    env.net.length = 0;
+    const wrong = `http://srv/Users/${U}/NotItems/${ID}`;
+    env.window.fetch(wrong);
+    env.window.fetch(wrong);
+    assert.strictEqual(env.net.length, 2, "literal segments still required");
+  });
+
+  await check("JELA-752 detail-route paths are all allowlisted", async () => {
+    const env = makeEnv().run();
+    const urls = [
+      `http://srv/Items/${ID}/Similar?userId=${U}&limit=12`,
+      `http://srv/JellyfinEnhanced/tag-cache/${U}?since=1787634789447`,
+      `http://srv/JellyfinEnhanced/user-settings/${U}/settings.json`,
+      `http://srv/JellyfinEnhanced/tmdb/movie/1154298/reviews?language=en-US&page=1`,
+      `http://srv/JellyfinEnhanced/jellyseerr/user-status`,
+      `http://srv/Shows/${ID}/Seasons?userId=${U}`,
+      `http://srv/Shows/NextUp?SeriesId=${ID}`,
+      `http://srv/LiveTv/Programs?UserId=${U}`,
+    ];
+    for (const u of urls) {
+      env.net.length = 0;
+      env.window.fetch(u);
+      env.window.fetch(u);
+      assert.strictEqual(env.net.length, 1, "not coalesced: " + u);
+    }
+  });
+
+  // ---- 4c. JELA-752: credentials + mode are part of the key ----------------
+  await check("JELA-752 unset credentials joins its 'same-origin' twin", async () => {
+    const env = makeEnv().run();
+    // The census saw the same URL fetched both ways; they are the same mode,
+    // so they must share one slot.
+    env.window.fetch(URL_PP, { credentials: "same-origin" });
+    env.window.fetch(URL_PP);
+    env.window.fetch(URL_PP, { credentials: "same-origin", mode: "cors" });
+    assert.strictEqual(env.net.length, 1, "defaults normalise into one key");
+    assert.strictEqual(env.window.__shellFC.join, 2, "both joined the leader");
+  });
+
+  await check("JELA-752 differing credentials/mode never share a slot", async () => {
+    const env = makeEnv().run();
+    env.window.fetch(URL_PP, { credentials: "include" });
+    env.window.fetch(URL_PP, { credentials: "omit" });
+    env.window.fetch(URL_PP, { credentials: "same-origin" });
+    assert.strictEqual(env.net.length, 3, "three credential modes, three calls");
+    // An opaque no-cors response must never be handed to a cors caller. A
+    // fresh env, because the leaders above are still in flight and a repeat
+    // of one of their keys would (correctly) join them.
+    const env2 = makeEnv().run();
+    env2.window.fetch(URL_PP, { mode: "no-cors" });
+    env2.window.fetch(URL_PP, { mode: "cors" });
+    assert.strictEqual(env2.net.length, 2, "no-cors and cors are distinct keys");
+    assert.strictEqual(env2.window.__shellFC.join, 0, "neither joined");
+  });
+
+  // ---- 4d. JELA-752: conditional / ranged GETs opt out ---------------------
+  await check("JELA-752 Range and conditional GETs are never joined", async () => {
+    const shapes = [
+      { Range: "bytes=0-99" },
+      { "If-None-Match": '"abc"' },
+      { "if-modified-since": "Wed, 21 Oct 2015 07:28:00 GMT" },
+    ];
+    for (const h of shapes) {
+      // plain object headers
+      let env = makeEnv().run();
+      env.window.fetch(URL_PP, { headers: h });
+      env.window.fetch(URL_PP, { headers: h });
+      assert.strictEqual(env.net.length, 2, "object headers: " + JSON.stringify(h));
+      assert(env.window.__shellFC.hdr > 0, "hdr counter moved");
+      // array-of-pairs headers
+      env = makeEnv().run();
+      const pairs = Object.keys(h).map((k) => [k, h[k]]);
+      env.window.fetch(URL_PP, { headers: pairs });
+      env.window.fetch(URL_PP, { headers: pairs });
+      assert.strictEqual(env.net.length, 2, "pair headers: " + JSON.stringify(h));
+    }
+    // A benign header (the one the apiclient actually sends) still coalesces —
+    // otherwise the coalescer would be inert against every real API call.
+    const env = makeEnv().run();
+    const auth = { "X-Emby-Authorization": 'MediaBrowser Token="tok"' };
+    env.window.fetch(URL_PP, { headers: auth });
+    env.window.fetch(URL_PP, { headers: auth });
+    assert.strictEqual(env.net.length, 1, "X-Emby-Authorization still coalesces");
+    assert.strictEqual(env.window.__shellFC.hdr, 0, "not counted as unsafe");
+  });
+
+  await check("JELA-752 unparseable headers fail open (pass through)", async () => {
+    const env = makeEnv().run();
+    const hostile = Object.create(null);
+    Object.defineProperty(hostile, "forEach", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    env.window.fetch(URL_PP, { headers: hostile });
+    env.window.fetch(URL_PP, { headers: hostile });
+    assert.strictEqual(env.net.length, 2, "unreadable headers -> no join");
+    assert.strictEqual(env.window.__shellFC.err, 0, "handled, not an error");
+  });
+
   // ---- 5. suffix match cannot be spoofed ----------------------------------
   await check("suffix match requires the leading slash", async () => {
     const env = makeEnv().run();
@@ -462,9 +622,11 @@ async function main() {
           " /CustomTabs/Config , MediaBar/WebConfig ,/HomeScreen/Meta",
       },
     }).run();
+    // Counted relative to the shipped default list rather than a literal, so
+    // widening that list (JELA-752) does not falsify this check.
     assert.strictEqual(
       env.window.__shellFC.n,
-      3,
+      DEFAULT_N + 2,
       "default + 2 valid overrides (the slash-less one is rejected)",
     );
     env.window.fetch("http://srv/CustomTabs/Config");
