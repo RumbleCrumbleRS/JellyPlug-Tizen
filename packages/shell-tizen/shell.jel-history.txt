@@ -329,6 +329,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-618 splice the cached channel body in last, immediately before
 *JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
 *JEL-134 JEL-132 v2): boot-time restore from the IndexedDB creds
+*JEL-1832 String-level on purpose: it has to cover both the string fas
 *JEL-621 kick the pre-lowered drop manifest fetch first so it overlap
 *JEL-1034 v53): speculative babel prime, flag-gated.
 *JEL-1984 align the speculative prime with the head-IIFE soft-skip

@@ -27,6 +27,11 @@ public class ShellController : ControllerBase
 {
     private static readonly Regex HashRe = new("^[0-9a-z]{1,13}$", RegexOptions.ECMAScript);
 
+    // JELA-710: served font-drop names ("inter-v20-400-latin.woff2",
+    // "inter-sora.css"). The FontAssets dictionary is the real whitelist —
+    // this just refuses obvious junk before the lookup.
+    private static readonly Regex FontNameRe = new("^[a-z0-9.-]{1,64}$", RegexOptions.ECMAScript);
+
     // A boot beacon is tiny (an ~10-entry ring of numbers). Refuse anything
     // that could not plausibly be one so a hostile POST can't stream a large
     // body through the sanitizer.
@@ -94,6 +99,35 @@ public class ShellController : ControllerBase
     [HttpGet("babel.min.js")]
     public IActionResult GetBabel()
         => ContentAddressed(_drop.BabelBytes, _drop.BabelGzipBytes, _drop.BabelSha256);
+
+    /// <summary>
+    /// JELA-710: the self-hosted webfont drop — WOFF2 bodies plus the two
+    /// stylesheets that replace the boot's Google Fonts pulls (Google serves
+    /// the Tizen UA TrueType, 771 KiB/boot, over two extra origins).
+    /// Anonymous like every TV-facing asset: fonts are fetched pre-login.
+    ///
+    /// Cache policy falls out of <see cref="ContentAddressed"/> unchanged:
+    /// the woff2 url()s inside the emitted CSS carry ?v=&lt;sha256&gt;, so the
+    /// font bodies earn `immutable`; the CSS files themselves are fetched at
+    /// BARE urls from long-lived call sites (the theme-css loadFonts link and
+    /// the shell's rewritten media-bar &lt;link&gt;) and so stay on the
+    /// revalidate branch, which is what lets a plugin update swap them.
+    /// WOFF2 is pre-compressed, so its gzip body is null and the raw bytes go
+    /// out; the CSS compresses normally.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("fonts/{name}")]
+    public IActionResult GetFontAsset([FromRoute] string name)
+    {
+        if (string.IsNullOrEmpty(name)
+            || !FontNameRe.IsMatch(name)
+            || !_drop.FontAssets.TryGetValue(name, out var asset))
+        {
+            return NotFound(); // unknown names 404 — the dictionary is the whitelist
+        }
+
+        return ContentAddressed(asset.Bytes, asset.GzipBytes, asset.Sha256, asset.ContentType);
+    }
 
     /// <summary>
     /// JELA-689: serve a /shell/ JS body under the cache policy its URL has
@@ -166,7 +200,7 @@ public class ShellController : ControllerBase
     /// no-cors entry and goes to the network, where it gets its `*`. This keeps
     /// JELA-689's immutable win instead of trading it away for the old TTL.
     /// </summary>
-    private IActionResult ContentAddressed(byte[] bytes, byte[]? gzip, string sha256)
+    private IActionResult ContentAddressed(byte[] bytes, byte[]? gzip, string sha256, string contentType = "application/javascript")
     {
         var addressed = string.Equals(Request.Query["v"].ToString(), sha256, StringComparison.Ordinal);
         Response.Headers.CacheControl = addressed
@@ -177,20 +211,20 @@ public class ShellController : ControllerBase
         if (gzip != null && AcceptsGzip(Request.Headers.AcceptEncoding))
         {
             Response.Headers.ContentEncoding = "gzip";
-            return Tagged(gzip, sha256 + "-gzip");
+            return Tagged(gzip, sha256 + "-gzip", contentType);
         }
 
-        return Tagged(bytes, sha256);
+        return Tagged(bytes, sha256, contentType);
     }
 
     // Strong ETag — the sha256 IS a hash of the exact bytes below. Passing it
     // to File() is what makes MVC honour If-None-Match and answer 304; setting
     // the header by hand would not. It has to be the 5-arg overload: the 3-arg
     // call binds to `bool enableRangeProcessing` and silently drops the tag.
-    private FileContentResult Tagged(byte[] body, string tag)
+    private FileContentResult Tagged(byte[] body, string tag, string contentType = "application/javascript")
         => File(
             body,
-            "application/javascript",
+            contentType,
             fileDownloadName: null,
             lastModified: null,
             entityTag: new EntityTagHeaderValue("\"" + tag + "\""));

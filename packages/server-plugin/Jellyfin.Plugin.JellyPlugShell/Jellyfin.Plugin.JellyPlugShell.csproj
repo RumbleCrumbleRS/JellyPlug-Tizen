@@ -34,6 +34,17 @@
     <EmbeddedResource Include="Configuration/configPage.html" />
   </ItemGroup>
 
+  <!-- JELA-710: self-hosted webfonts. Google Fonts UA-sniffs the Tizen UA to
+       TrueType (771 KiB/boot vs ~150 KiB of WOFF2) and puts two Google hosts
+       serially on the boot path, so the WOFF2 bodies plus the two replacement
+       stylesheets are embedded and served under /shell/fonts/. Regenerate the
+       whole directory with scripts/fetch-webfonts.py (upstream provenance is
+       pinned in fonts-manifest.json, which is docs, not served). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/fonts/*.woff2" LogicalName="JellyPlugShell.Resources.fonts.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources/fonts/*.css" LogicalName="JellyPlugShell.Resources.fonts.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Server-side transform engine: the official @babel/standalone UMD at the
        exact version the vendored slim build was cut from (@babel/core 7.29.7,
        see the shell-tizen babel.min.js header). The slim chrome56 esbuild
