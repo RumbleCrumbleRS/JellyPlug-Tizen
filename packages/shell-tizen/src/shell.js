@@ -917,6 +917,75 @@
       "    return origFetch.call(this,i,init);",
       "  };",
       "  window.__shellSeededServer=S;",
+      // JELA-695: cross-origin Worker shim.
+      //
+      // We keep the widget origin and document.write the server's markup in,
+      // so every /web/ asset URL is cross-origin to the running document.
+      // `new Worker(crossOriginUrl)` is a hard SecurityError in every engine
+      // (confirmed on M63: "Script at '<server>/web/blurhash.worker.bundle.js'
+      // cannot be accessed from origin '<widget>'"), and jellyfin-web builds
+      // its blurhash worker at MODULE SCOPE:
+      //
+      //   var l=new function(){return new Worker(r.p+"blurhash.worker.bundle.js")},
+      //       ... function decls ...
+      //       var g={setLazyImage:b,...,getPrimaryImageAspectRatio:v}
+      //
+      // The throw aborts imageLoader's module body before `var g` is reached,
+      // yet webpack has already installed the `r.d` export getters and cached
+      // the half-built namespace — so imageLoader.default is permanently
+      // undefined for every later importer. cardBuilder's setCardData opens
+      // with `h.default.getPrimaryImageAspectRatio(items)`, so EVERY native
+      // getCardsHtml() call throws TypeError. On the home that silently kills
+      // all Home Screen Sections rows (data arrives, render rejects, the
+      // row-reaper then reaps the empty titles).
+      //
+      // Fix: native-first Worker wrapper. When the native constructor throws
+      // we hand back a queueing proxy and asynchronously re-create the worker
+      // from a same-origin blob built out of the fetched script (every
+      // /web/ asset is served Access-Control-Allow-Origin:*), replaying
+      // queued postMessage
+      // and re-binding listeners. If even that fails the proxy stays an inert
+      // stub — the module body still completes, which is what matters.
+      // Kill switch: localStorage["jellyfin.shell.workerShimDisabled"]="1".
+      // Diag: window.__shellWorkerShim={st,n,fb,up,why,err}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.workerShimDisabled")==="1"){window.__shellWorkerShim={st:"off"};return;}',
+      '    var OW=window.Worker;if(typeof OW!=="function")return;',
+      '    var D={st:"on",n:0,fb:0,up:0,why:"",err:""};window.__shellWorkerShim=D;',
+      "    function msg(e){return String((e&&e.message)||e).slice(0,80);}",
+      "    function proxy(url){",
+      "      var q=[],ls=[],real=null,dead=0;",
+      "      var p={onmessage:null,onerror:null,",
+      "        postMessage:function(m){if(real){try{real.postMessage(m);}catch(_){}}else if(!dead&&q.length<200)q.push(m);},",
+      "        addEventListener:function(t,f){ls.push([t,f]);if(real){try{real.addEventListener(t,f);}catch(_){}}},",
+      "        removeEventListener:function(t,f){if(real){try{real.removeEventListener(t,f);}catch(_){}}for(var i=0;i<ls.length;i++){if(ls[i][0]===t&&ls[i][1]===f){ls.splice(i,1);break;}}},",
+      "        terminate:function(){dead=1;q.length=0;if(real){try{real.terminate();}catch(_){}}}};",
+      "      function adopt(w){",
+      "        if(dead){try{w.terminate();}catch(_){}return;}",
+      "        real=w;D.up++;",
+      "        for(var i=0;i<ls.length;i++){try{w.addEventListener(ls[i][0],ls[i][1]);}catch(_){}}",
+      '        try{w.onmessage=function(e){if(typeof p.onmessage==="function")p.onmessage(e);};}catch(_){}',
+      '        try{w.onerror=function(e){if(typeof p.onerror==="function")p.onerror(e);};}catch(_){}',
+      "        for(var j=0;j<q.length;j++){try{w.postMessage(q[j]);}catch(_){}}",
+      "        q.length=0;",
+      "      }",
+      "      try{",
+      "        var x=new XMLHttpRequest();",
+      '        x.open("GET",url,true);',
+      '        x.onload=function(){if(x.status<200||x.status>=300){D.err="http"+x.status;return;}try{var b=new Blob([x.responseText],{type:"application/javascript"});adopt(new OW(((window.URL||window.webkitURL)).createObjectURL(b)));}catch(e){D.err=msg(e);}};',
+      '        x.onerror=function(){D.err="neterr";};',
+      "        x.send();",
+      "      }catch(e2){D.err=msg(e2);}",
+      "      return p;",
+      "    }",
+      "    function W(u,o){",
+      "      D.n++;",
+      "      try{return new OW(u,o);}catch(e){D.fb++;D.why=msg(e);}",
+      "      return proxy(String(u));",
+      "    }",
+      "    W.prototype=OW.prototype;",
+      "    try{window.Worker=W;}catch(_){}",
+      "  })();}catch(_){}",
       // JEL-623: boot paint-gate. The cosmetic sweeps this seed installs
       // (auto-focus 600ms poll, remember-me 300ms poll, YT-iframe cap
       // sweep + whole-tree MutationObserver, webpack CM/PM walker) used
@@ -1132,6 +1201,127 @@
       // iframe src setter/setAttribute intercepts and the one-shot
       // cap() stay armed from t0 (essential guard).
       '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}',
+      // JELA-686 (JELA-679/P2): persist the bitrate detection across boots.
+      //
+      // jellyfin-apiclient's detectBitrate DOES have a cache, with a sane
+      // 1-hour TTL (verified against the shipped bundle, not the docs):
+      //   detectBitrate(e){if(!e&&this.lastDetectedBitrate&&(new Date).getTime()
+      //     -(this.lastDetectedBitrateTime||0)<=36e5)return Promise.resolve(
+      //     this.lastDetectedBitrate);...}
+      // but lastDetectedBitrate/lastDetectedBitrateTime are plain instance
+      // fields on the ApiClient. In a browser tab that is fine. On a TV every
+      // app launch is a fresh page, so the instance is rebuilt from nothing and
+      // the 1-hour cache can never once be hit — the ladder re-runs in full,
+      // every boot, forever: 512 KiB + 1 MiB + 4 MiB = 5.77 MB of throwaway
+      // payload, landing at t~13.9-18.3 s i.e. straddling firstCard.
+      //
+      // The ladder also punishes a GOOD link. It escalates on threshold:
+      //   R(e,[{bytes:5e5,threshold:5e5},{bytes:1e6,threshold:2e7},
+      //        {bytes:3e6,threshold:5e7}],0)
+      // so >20 Mbit/s buys the 1 MB rung and >50 Mbit/s the 3 MB rung. The
+      // faster the panel's connection, the more it downloads.
+      //
+      // Fix: do not patch the vendor's logic — make its OWN cache work by
+      // giving it a store that survives the page. We wrap detectBitrate and
+      // serve from localStorage on the unforced path.
+      //
+      // Why a wrap and not a one-shot field assignment at onApi (which is what
+      // the ticket originally proposed): it would be silently wiped. The
+      // scheduler that fires the boot probe is
+      //   function g(e){p(e),e.accessToken()&&!1!==e.enableAutomaticBitrateDetection
+      //                 &&(e.detectTimeout=setTimeout(y.bind(e),6e3))}
+      //   function y(){this.detectTimeout=null,this.accessToken()&&this.detectBitrate()}
+      // and its only caller is onNetworkChange(), whose FIRST act is
+      //   this.lastDetectedBitrate=0,this.lastDetectedBitrateTime=0
+      // Pre-seeded fields are therefore zeroed by the very call that schedules
+      // the probe 6 s later. Reading the store at call time is immune to that.
+      //
+      // Keyed on serverId()+serverAddress(), so pointing the TV at a different
+      // server (or the same server on a different address) misses and
+      // re-detects. Deliberately NOT invalidated on onNetworkChange: the
+      // serverAddress setter calls it on EVERY set, changed or not
+      //   (var t=e!==this._serverAddress;this._serverAddress=e,this.onNetworkChange(),...)
+      // so invalidating there would wipe the store on every boot and buy
+      // nothing. A same-address link change is covered by the TTL instead.
+      //
+      // Playback IS served from this store — CORRECTION, the opposite was
+      // claimed here and in PR #157 until JELA-684's follow-up re-checked it
+      // against the bundle the 10.11.11 server actually serves (main bundle,
+      // apiclient bundle, all 927 lazy chunks and every injected plugin
+      // script). detectBitrate has exactly two web-client call sites:
+      //   - playbackManager's pre-play max-bitrate step (play() chain, for
+      //     Video/Audio on a non-local item with automatic bitrate detection
+      //     enabled): detectBitrate() — UNFORCED, so it reads this store;
+      //   - the quality dialog (setMaxStreamingBitrate):
+      //     detectBitrate(!0) — forced, real detection, bypasses the store;
+      // plus the apiclient's own unforced boot probe (y() above).
+      //
+      // So with the flag on, a Direct Play / transcode decision can run on a
+      // persisted measurement up to TTL old. That is DELIBERATE — decided on
+      // the record, not by accident: vendor-stock already fed playback a
+      // boot-time value (the unforced play call hit the vendor's 1 h
+      // instance cache whenever play followed the boot probe within the same
+      // page), the store is keyed to the server identity, a panel's link is
+      // far more stable than a browser tab's, and the quality dialog still
+      // forces a fresh measurement as the user-facing remedy. Do NOT "fix"
+      // playback by forcing it: that would run the full download ladder at
+      // every play start — a cost even stock never paid.
+      //
+      // Composes with JELA-684 (deferBitrateTest), which holds the same probe
+      // until after paint: with both on, boot 1 detects post-paint and
+      // persists, boots 2..N short-circuit to zero requests. 684 wraps an
+      // instance property (enableAutomaticBitrateDetection), this wraps a
+      // prototype method, so neither sees the other.
+      //
+      // TTL defaults to 24 h, not the vendor's 1 h: a panel's link is far more
+      // stable than a browser tab's, and a stale value costs at most a
+      // suboptimal bitrate ceiling until the TTL lapses or the user opens
+      // the quality dialog, which forces a fresh detection (playback does
+      // NOT re-measure — see the call-site inventory above).
+      // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
+      // without a shell release.
+      //
+      // Flag-dark: opt in with localStorage["jellyfin.shell.bitrateCache"]="1".
+      // Diag: window.__shellBitrate = {on,armed,hits,miss,saves,bps,age}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")!=="1")return;',
+      '    var K="jellyfin.shell.bitrate";',
+      "    var G=window.__shellBitrate={on:1,armed:0,hits:0,miss:0,saves:0,bps:0,age:-1};",
+      '    function ttl(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.bitrateTtlMs")||"",10);}catch(_){}return v>0?v:864e5;}',
+      '    function idOf(a){var s="",u="";try{s=String(a.serverId()||"");}catch(_){}try{u=String(a.serverAddress()||"");}catch(_){}return s+"|"+u;}',
+      "    function rd(a){",
+      '      try{var j=JSON.parse(localStorage.getItem(K)||"null");',
+      '      if(!j||typeof j.bps!=="number"||!(j.bps>0)||j.id!==idOf(a))return 0;',
+      "      var g=(new Date).getTime()-(j.t||0);",
+      "      if(g<0||g>ttl())return 0;",
+      "      G.age=g;return j.bps;}catch(_){return 0;}",
+      "    }",
+      "    function wr(a,v){",
+      "      try{if(!(v>0))return;",
+      "      localStorage.setItem(K,JSON.stringify({bps:v,t:(new Date).getTime(),id:idOf(a)}));",
+      "      G.saves++;}catch(_){}",
+      "    }",
+      "    function arm(){",
+      "      try{var A=window.ApiClient;if(!A)return;",
+      "      var P=null;try{P=Object.getPrototypeOf(A);}catch(_){}",
+      '      if(!P||typeof P.detectBitrate!=="function")P=A;',
+      '      if(typeof P.detectBitrate!=="function"||P.__shellBrWrap)return;',
+      "      P.__shellBrWrap=1;",
+      "      var orig=P.detectBitrate;",
+      "      P.detectBitrate=function(f){",
+      "        var t=this;",
+      "        if(!f){var c=rd(t);",
+      "          if(c){G.hits++;G.bps=c;",
+      "            try{t.lastDetectedBitrate=c;t.lastDetectedBitrateTime=(new Date).getTime();}catch(_){}",
+      "            return Promise.resolve(c);}",
+      "          G.miss++;}",
+      "        return orig.apply(t,arguments).then(function(v){wr(t,v);return v;});",
+      "      };",
+      "      G.armed=1;}catch(_){}",
+      "    }",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}",
+      "  })();}catch(_){}",
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
@@ -3530,6 +3720,54 @@
       "cwStart(cw0,wr0)" +
       "}catch(_){G.err++}},500)" +
       "}" +
+      "}catch(_){G.err++}}" +
+      // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
+      // if upstream fixes the key derivation): opt-in pinned pageHash for
+      // /HomeScreen/Sections, default OFF via
+      // localStorage['jellyfin.shell.hssPin']='1'. Patches window fetch/XHR
+      // to append PageHash=<uuid>&Page=1&NumResultsPerPage=1000 to any GET
+      // whose path ends /HomeScreen/Sections, so the request takes the
+      // plugin's caching branch instead of the Guid.NewGuid() always-miss
+      // path (measured on prod: median 2,943 ms fresh key -> 4 ms pinned,
+      // n=12/arm, zero overlap — docs/hss-sections-cache-diagnosis.md).
+      // SERVER-HEALTH lever only: the endpoint does not gate firstCard
+      // (rho=0.145, n=17). The key is FNV-1a(userId + ":" + bucket) formatted
+      // as a Guid — DETERMINISTIC so every load in a bucket presents the same
+      // key, PER-USER because the plugin's cache reads are not user-scoped
+      // (two users presenting one value would share a section list),
+      // TIME-BUCKETED (default 3600 s; 'jellyfin.shell.hssPinBucketSecs'
+      // accepts 60..86400) because nothing ever evicts entries — the bucket
+      // bounds the frozen section list, the pinned shuffle order, and the
+      // one leaked ~4 KB entry per (user,bucket). A URL already carrying a
+      // PageHash (the plugin's own pagination mode) is never touched;
+      // non-string fetch inputs pass through unpinned (= today's path).
+      // Installed BEFORE the JELA-51/685 apiWarm patches in this same body
+      // run, so the warm's Sections XHR is pinned too (its first hit seeds
+      // the entry the SPA's pinned request then finds) while apiWarm records
+      // pre-rewrite URLs and its store keys keep matching. One install per
+      // WINDOW (survives the document.write handoff); counters:
+      // window.__shellPH {on,n,b,u}.
+      'if(flg("jellyfin.shell.hssPin")&&!W.__shellPH){try{' +
+      'var ph=W.__shellPH={on:1,n:0,b:0,u:""};' +
+      'var phB=3600;try{var pb0=parseInt(localStorage.getItem("jellyfin.shell.hssPinBucketSecs")||"",10);if(pb0>=60&&pb0<=86400)phB=pb0}catch(_){}' +
+      "var phH=function(s,h){for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h};" +
+      'var phX=function(n){return("0000000"+n.toString(16)).slice(-8)};' +
+      'var phKey=function(){try{var c1=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s1=c1&&c1.Servers&&c1.Servers[0],u1=s1&&s1.UserId;if(!u1)return"";' +
+      'var bk=Math.floor(+new Date()/(phB*1000)),sd=String(u1)+":"+bk;' +
+      'var ha=phH(sd+"#0",2166136261),hb=phH(sd+"#1",2166136261),hc=phH(sd+"#2",2166136261),hd=phH(sd+"#3",2166136261);' +
+      'ph.b=bk;ph.u=phX(ha)+"-"+phX(hb).slice(0,4)+"-"+phX(hb).slice(4)+"-"+phX(hc).slice(0,4)+"-"+phX(hc).slice(4)+phX(hd);return ph.u}catch(_){return""}};' +
+      'var phRw=function(u){try{u=String(u||"");var pq=u.indexOf("?"),pp=pq<0?u:u.slice(0,pq);' +
+      "if(!/\\/HomeScreen\\/Sections$/.test(pp))return u;" +
+      "if(/[?&][Pp]age[Hh]ash=/.test(u))return u;" +
+      "var k=phKey();if(!k)return u;ph.n++;" +
+      'return u+(pq<0?"?":"&")+"PageHash="+k+"&Page=1&NumResultsPerPage=1000"}catch(_){return u}};' +
+      'if(typeof W.fetch==="function"){try{var pF=W.fetch;W.fetch=function(pu,po){try{' +
+      'var pm=po&&po.method?String(po.method).toUpperCase():"GET";' +
+      'if(pm==="GET"&&typeof pu==="string")pu=phRw(pu)' +
+      "}catch(_){G.err++}" +
+      "return pF.call(W,pu,po)}}catch(_){G.err++}}" +
+      "try{var PX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PX&&PX.open){var pO2=PX.open;" +
+      'PX.open=function(pm2,pu2){var pa=arguments,pn=arguments.length;try{if(String(pm2||"").toUpperCase()==="GET"){var pr2=phRw(String(pu2||""));if(pr2!==String(pu2||"")){pa=[pm2,pr2];for(var pj2=2;pj2<pn;pj2++)pa.push(arguments[pj2])}}}catch(_){G.err++}return pO2.apply(this,pa)}}}catch(_){G.err++}' +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
