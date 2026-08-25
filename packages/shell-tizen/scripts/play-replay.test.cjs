@@ -19,16 +19,14 @@
  * Extracts the SHIPPED instantHomeBody() and drives it through the same
  * stubbed window the other instantHomeBody tests use, plus a controllable
  * fetch, a Response stub and a click dispatcher, pinning:
- *   - RECORD always / SERVE only while armed: an unarmed repeat GET of a
- *     recorded item still goes to the network, so the store is inert outside
- *     a play window
- *   - a .btnPlay click arms it, and the next item GET is served from the
- *     store with ZERO network calls (AC1) — likewise data-action="resume"
- *   - belt and braces: observing a GET of .../Intros arms it too, so AC1 does
- *     not depend on upstream's button markup
- *   - at most ONE item serve and ONE intros serve per arm; a second ask is
- *     somebody else and reaches the network
- *   - the arm window EXPIRES
+ *   - RECORD only the item the user is standing on (the id must be in
+ *     location.hash at REQUEST time), and SERVE each entry exactly ONCE, to
+ *     whoever asks next — which is playAfterBitrateDetect by construction.
+ *     The second ask reaches the network, so this cannot become a cache.
+ *   - AC1: the play hop is served from the store with ZERO network calls
+ *   - a play click RE-OPENS the budget (an enhancement, not a prerequisite:
+ *     the rig proved a capture-phase click listener never fires on this
+ *     engine, on document or on window), and an unrelated click does not
  *   - the off-critical-path /Intros prefetch: scheduled on recording an item,
  *     replays the item GET's own init (auth headers/credentials/mode) so the
  *     key matches what upstream will ask for, is capped per window, is
@@ -111,6 +109,8 @@ for (const k of [
   "jellyfin.shell.playReplayArmMs",
   "jellyfin.shell.playReplayIntrosMs",
   "jellyfin.shell.playReplayIntrosMax",
+  "jellyfin.shell.playReplayMinAgeMs",
+  "jellyfin.shell.playReplayFlushAll",
 ]) {
   assert(body.indexOf(k) !== -1, "tunable " + k + " present");
 }
@@ -228,7 +228,6 @@ function makeEnv(opts) {
   }
 
   const documentElement = makeNode("HTML");
-  const listeners = [];
   const document = {
     documentElement,
     createElement: (t) => makeNode(String(t).toUpperCase()),
@@ -239,12 +238,18 @@ function makeEnv(opts) {
     },
   };
 
+  // The detail route puts the item id in the hash before it fetches the
+  // body; the replay store gates on that, so tests must stand somewhere.
+  const location = { hash: "#!/details?id=" + ID };
+  const listeners = [];
   const window = {
     innerWidth: 1920,
     innerHeight: 1080,
     pageYOffset: 0,
     __shellT0: 0,
-    addEventListener() {},
+    addEventListener(type, fn, capture) {
+      listeners.push({ type, fn, capture, on: "window" });
+    },
   };
   window.__shellPhase = function () {};
   const xhrOpens = [];
@@ -297,6 +302,8 @@ function makeEnv(opts) {
   const env = {
     window,
     document,
+    location,
+    listeners,
     net,
     store,
     xhrOpens,
@@ -343,8 +350,8 @@ function makeEnv(opts) {
         else target = n;
         prev = n;
       }
-      for (const l of listeners)
-        if (l.type === "click") l.fn({ target, type: "click" });
+      const ev = { target, type: "click" };
+      for (const l of listeners) if (l.type === "click") l.fn(ev);
       return env.drain();
     },
     run() {
@@ -370,7 +377,7 @@ function makeEnv(opts) {
         setTimeoutStub,
         clearStub,
         FakeDate,
-        { hash: "" },
+        location,
         () => ({ fontSize: "28px", borderTopLeftRadius: "6px" }),
         opts.noResponse ? undefined : Response,
       );
@@ -393,12 +400,25 @@ function check(name, fn) {
     );
 }
 
-// Record one item body, leaving the store primed and the network drained.
-async function primed(opts) {
+// Record one item body WITHOUT settling: the entry exists but is still
+// inside the min-age floor, i.e. the state during the detail route's own
+// concurrent burst.
+async function recorded(opts) {
   const env = makeEnv(opts).run();
   env.window.fetch(URL_ITEM, AUTH);
   await env.serveOnly(ITEM_BODY);
   assert.strictEqual(env.window.__shellPA.rec, 1, "item recorded");
+  return env;
+}
+
+// The real state at play time: the detail page has loaded, its /Intros
+// prefetch has landed, and both entries are past the min-age floor.
+async function primed(opts) {
+  const env = await recorded(opts);
+  await env.advance(1500); // the intros prefetch fires
+  await env.serveOnly(INTROS_BODY);
+  await env.advance(2000); // both entries clear the min-age floor
+  assert.strictEqual(env.window.__shellPA.pfh, 1, "intros prefetch stored");
   return env;
 }
 
@@ -413,19 +433,34 @@ async function main() {
     assert.strictEqual(PA.t, 300000, "default TTL 300 s");
     assert.strictEqual(PA.w, 6000, "default arm window 6 s");
     assert.strictEqual(PA.d, 1500, "default intros prefetch delay 1.5 s");
-    assert.strictEqual(PA.m, 6, "default intros prefetch cap 6");
+    assert.strictEqual(PA.m, 12, "default intros prefetch cap 12");
+    assert.strictEqual(PA.a, 2000, "default min age 2 s");
   });
 
-  // ---- 2. record always, serve only while armed -----------------------------
-  await check("an UNARMED repeat GET still reaches the network", async () => {
+  // ---- 2. one replay per entry, then the network ---------------------------
+  // The budget is what makes this work without click detection: the entry can
+  // only be the item the user is standing on, and the next reader of it is
+  // playAfterBitrateDetect.
+  await check("the FIRST repeat GET is served with NO network", async () => {
     const env = await primed();
+    const before = env.net.length;
+    const r = await env.window.fetch(URL_ITEM, AUTH);
+    assert.strictEqual(env.net.length, before, "no network call");
+    assert.strictEqual(env.window.__shellPA.srv, 1, "served from the store");
+    assert.strictEqual(await r.text(), ITEM_BODY, "the recorded body");
+  });
+
+  await check("the SECOND repeat GET reaches the network", async () => {
+    const env = await primed();
+    await env.window.fetch(URL_ITEM, AUTH);
+    const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
-    assert.strictEqual(env.net.length, 2, "second GET hit the network");
-    assert.strictEqual(env.window.__shellPA.srv, 0, "nothing served");
+    assert.strictEqual(env.net.length, before + 1, "budget spent");
+    assert.strictEqual(env.window.__shellPA.srv, 1, "still one serve");
   });
 
-  // ---- 3. AC1: a play click removes the item hop ---------------------------
+  // ---- 3. AC1: the play hop is served --------------------------------------
   await check("a .btnPlay click serves the item with NO network", async () => {
     const env = await primed();
     await env.click([{ cls: "detailButton-icon" }, { cls: "btnPlay raised" }]);
@@ -450,80 +485,78 @@ async function main() {
     assert.strictEqual(env.window.__shellPA.srv, 1, "served");
   });
 
-  await check("an unrelated click does not arm it", async () => {
+  await check("an unrelated click does not re-open the budget", async () => {
     const env = await primed();
+    await env.window.fetch(URL_ITEM, AUTH); // spends the budget
     await env.click([{ cls: "btnHome" }, { cls: "headerButton" }]);
     assert.strictEqual(env.window.__shellPA.arm, 0, "not armed");
+    assert.strictEqual(env.window.__shellPA.cl, 1, "but the click WAS seen");
+    const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
-    assert.strictEqual(env.net.length, 2, "went to the network");
+    assert.strictEqual(env.net.length, before + 1, "went to the network");
   });
 
-  // ---- 4. belt and braces: the chain arms itself ---------------------------
-  await check("observing a GET of .../Intros arms the window", async () => {
+  // ---- 4. the /Intros hop is served on its own budget ----------------------
+  // Whether /Intros leads the chain (cinema mode), is absent (the resume
+  // path), or trails it, each entry carries its own single replay.
+  await check("the item and its intros each carry one replay", async () => {
     const env = await primed();
-    env.window.fetch(URL_INTROS, AUTH);
-    await env.drain();
-    assert.strictEqual(env.window.__shellPA.arm, 1, "armed by the intros GET");
-    await env.serveOnly(INTROS_BODY);
     const before = env.net.length;
+    await env.window.fetch(URL_INTROS, AUTH);
     await env.window.fetch(URL_ITEM, AUTH);
-    assert.strictEqual(env.net.length, before, "item served, no network");
+    assert.strictEqual(env.net.length, before, "both served, no network");
+    assert.strictEqual(env.window.__shellPA.sri, 1, "intros served");
     assert.strictEqual(env.window.__shellPA.srv, 1, "item served");
   });
 
-  // ---- 5. one serve per arm ------------------------------------------------
-  await check("at most ONE item serve per arm", async () => {
+  await check("an /Intros GET does NOT re-open the item's budget", async () => {
     const env = await primed();
-    await env.click([{ cls: "btnPlay" }]);
-    await env.window.fetch(URL_ITEM, AUTH);
-    assert.strictEqual(env.window.__shellPA.srv, 1, "first served");
+    await env.window.fetch(URL_ITEM, AUTH); // spends the item's budget
+    await env.window.fetch(URL_INTROS, AUTH); // spends the intros' own
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
-    assert.strictEqual(env.net.length, before + 1, "second went to network");
-    assert.strictEqual(env.window.__shellPA.srv, 1, "still one serve");
+    assert.strictEqual(env.net.length, before + 1, "still spent");
   });
 
-  await check("a re-arm re-opens the single serve", async () => {
-    const env = await primed();
-    await env.click([{ cls: "btnPlay" }]);
-    await env.window.fetch(URL_ITEM, AUTH);
-    await env.click([{ cls: "btnPlay" }]);
-    const before = env.net.length;
-    await env.window.fetch(URL_ITEM, AUTH);
-    assert.strictEqual(env.net.length, before, "served again after re-arm");
-    assert.strictEqual(env.window.__shellPA.srv, 2, "two serves, two arms");
-  });
+  // ---- 5. a play click re-opens the budget ---------------------------------
+  await check(
+    "a play click re-opens the budget for a second play",
+    async () => {
+      const env = await primed();
+      await env.window.fetch(URL_ITEM, AUTH);
+      assert.strictEqual(env.window.__shellPA.srv, 1, "first served");
+      await env.click([{ cls: "btnPlay" }]);
+      const before = env.net.length;
+      await env.window.fetch(URL_ITEM, AUTH);
+      assert.strictEqual(
+        env.net.length,
+        before,
+        "served again after the click",
+      );
+      assert.strictEqual(env.window.__shellPA.srv, 2, "two serves");
+    },
+  );
 
-  // ---- 6. the arm window expires -------------------------------------------
-  await check("the arm window EXPIRES", async () => {
-    const env = await primed();
-    await env.click([{ cls: "btnPlay" }]);
-    await env.advance(6001);
+  // ---- 6. playReplayArmMs governs only the re-open -------------------------
+  await check("playReplayArmMs='0' disables only the re-open", async () => {
+    const env = await primed({
+      store: { "jellyfin.shell.playReplayArmMs": "0" },
+    });
     const before = env.net.length;
+    await env.window.fetch(URL_ITEM, AUTH);
+    assert.strictEqual(env.net.length, before, "first replay still served");
+    await env.click([{ cls: "btnPlay" }]);
+    assert.strictEqual(env.window.__shellPA.arm, 0, "never re-opens");
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
-    assert.strictEqual(env.net.length, before + 1, "network after expiry");
-    assert.strictEqual(env.window.__shellPA.srv, 0, "nothing served");
-  });
-
-  await check("a re-arm cannot be closed early by the older timer", async () => {
-    const env = await primed();
-    await env.click([{ cls: "btnPlay" }]);
-    await env.advance(4000);
-    await env.click([{ cls: "btnPlay" }]);
-    // The FIRST arm's timer fires here; the second window must survive it.
-    await env.advance(2001);
-    const before = env.net.length;
-    await env.window.fetch(URL_ITEM, AUTH);
-    assert.strictEqual(env.net.length, before, "still armed, still served");
-    assert.strictEqual(env.window.__shellPA.srv, 1, "served");
+    assert.strictEqual(env.net.length, before + 1, "no second replay");
   });
 
   // ---- 7. the off-critical-path /Intros prefetch ---------------------------
   await check("recording an item prefetches its /Intros later", async () => {
-    const env = await primed();
+    const env = await recorded();
     assert.strictEqual(env.window.__shellPA.pf, 1, "one prefetch scheduled");
     assert.strictEqual(env.net.length, 1, "not issued yet");
     await env.advance(1500);
@@ -543,9 +576,6 @@ async function main() {
 
   await check("the prefetched /Intros is served at play time", async () => {
     const env = await primed();
-    await env.advance(1500);
-    await env.serveOnly(INTROS_BODY);
-    await env.click([{ cls: "btnPlay" }]);
     const before = env.net.length;
     const r = await env.window.fetch(URL_INTROS, AUTH);
     assert.strictEqual(env.net.length, before, "no network for intros");
@@ -574,8 +604,9 @@ async function main() {
       store: { "jellyfin.shell.playReplayIntrosMax": "2" },
     }).run();
     for (let i = 0; i < 4; i++) {
-      const u = BASE + "0123456789abcdef0123456789abcde" + i;
-      env.window.fetch(u, AUTH);
+      const id = "0123456789abcdef0123456789abcde" + i;
+      env.location.hash = "#!/details?id=" + id;
+      env.window.fetch(BASE + id, AUTH);
       await env.serveOnly(ITEM_BODY);
     }
     assert.strictEqual(env.window.__shellPA.rec, 4, "all four recorded");
@@ -583,7 +614,7 @@ async function main() {
   });
 
   await check("a failed prefetch is counted, not thrown", async () => {
-    const env = await primed();
+    const env = await recorded();
     await env.advance(1500);
     const pending = env.net.filter((c) => !c._done);
     pending[0]._done = true;
@@ -617,9 +648,10 @@ async function main() {
   });
 
   await check("a dashed-GUID id is recorded", async () => {
+    const gid = "01234567-89ab-cdef-0123-456789abcdef";
     const env = makeEnv().run();
-    const u = "http://srv/Users/u1/Items/01234567-89ab-cdef-0123-456789abcdef";
-    env.window.fetch(u, AUTH);
+    env.location.hash = "#!/details?id=" + gid;
+    env.window.fetch("http://srv/Users/u1/Items/" + gid, AUTH);
     await env.serveOnly(ITEM_BODY);
     assert.strictEqual(env.window.__shellPA.rec, 1, "recorded");
   });
@@ -640,12 +672,12 @@ async function main() {
       const p = env.window.fetch(URL_ITEM, AUTH);
       await env.serveOnly("", { status });
       await p;
+      await env.advance(2000);
       assert.strictEqual(
         env.window.__shellPA.rec,
         0,
         status + " must not be recorded",
       );
-      await env.click([{ cls: "btnPlay" }]);
       const before = env.net.length;
       env.window.fetch(URL_ITEM, AUTH);
       await env.drain();
@@ -683,7 +715,6 @@ async function main() {
     });
     await env.drain();
     assert.strictEqual(env.window.__shellPA.fl, 1, "flushed");
-    await env.click([{ cls: "btnPlay" }]);
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
@@ -700,7 +731,38 @@ async function main() {
       1,
       "the original open still ran through",
     );
-    await env.click([{ cls: "btnPlay" }]);
+    const before = env.net.length;
+    env.window.fetch(URL_ITEM, AUTH);
+    await env.drain();
+    assert.strictEqual(env.net.length, before + 1, "nothing left to serve");
+  });
+
+  await check("a foreign plugin POST does NOT flush the store", async () => {
+    // The rig caught POST /JellyfinEnhanced/user-settings/{u}/settings.json
+    // landing mid-dwell and emptying the store on every single run.
+    const env = await primed();
+    env.window.fetch("http://srv/JellyfinEnhanced/user-settings/u1/x.json", {
+      method: "POST",
+      body: "{}",
+    });
+    await env.drain();
+    assert.strictEqual(env.window.__shellPA.fl, 0, "not flushed");
+    assert.strictEqual(env.window.__shellPA.fs, 1, "counted as skipped");
+    const before = env.net.length;
+    await env.window.fetch(URL_ITEM, AUTH);
+    assert.strictEqual(env.net.length, before, "entry survived, still served");
+  });
+
+  await check("playReplayFlushAll='1' restores the blanket flush", async () => {
+    const env = await primed({
+      store: { "jellyfin.shell.playReplayFlushAll": "1" },
+    });
+    env.window.fetch("http://srv/JellyfinEnhanced/user-settings/u1/x.json", {
+      method: "POST",
+      body: "{}",
+    });
+    await env.drain();
+    assert(env.window.__shellPA.fl > 0, "flushed");
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
@@ -718,7 +780,6 @@ async function main() {
   await check("a recorded entry EXPIRES after the TTL", async () => {
     const env = await primed();
     await env.advance(300001);
-    await env.click([{ cls: "btnPlay" }]);
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
@@ -729,9 +790,8 @@ async function main() {
   // ---- 11. every caller gets its own readable body -------------------------
   await check("each served body is independently readable", async () => {
     const env = await primed();
-    await env.click([{ cls: "btnPlay" }]);
     const a = await env.window.fetch(URL_ITEM, AUTH);
-    await env.click([{ cls: "btnPlay" }]);
+    await env.click([{ cls: "btnPlay" }]); // re-opens the budget
     const b = await env.window.fetch(URL_ITEM, AUTH);
     assert.notStrictEqual(a, b, "distinct Response objects");
     assert.strictEqual(await a.text(), ITEM_BODY, "first body readable");
@@ -745,7 +805,7 @@ async function main() {
       headers: { "content-type": "application/json; charset=utf-8" },
     });
     await p;
-    await env.click([{ cls: "btnPlay" }]);
+    await env.advance(2000);
     const r = await env.window.fetch(URL_ITEM, AUTH);
     assert.strictEqual(
       r.headers.get("content-type"),
@@ -759,7 +819,7 @@ async function main() {
     const env = makeEnv().run();
     env.window.fetch(URL_ITEM, { headers: {}, mode: "no-cors" });
     await env.serveOnly(ITEM_BODY, { status: 200 });
-    await env.click([{ cls: "btnPlay" }]);
+    await env.advance(2000);
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
@@ -774,23 +834,26 @@ async function main() {
       mode: "cors",
     });
     await env.serveOnly(ITEM_BODY);
-    await env.click([{ cls: "btnPlay" }]);
+    await env.advance(2000);
     const before = env.net.length;
     await env.window.fetch(URL_ITEM, { headers: {} });
     assert.strictEqual(env.net.length, before, "served — same normalised key");
   });
 
   // ---- 13. kill-switch and tunables ----------------------------------------
-  await check("playReplayDisabled='1' stands the whole thing down", async () => {
-    const env = makeEnv({
-      store: { "jellyfin.shell.playReplayDisabled": "1" },
-    }).run();
-    assert(!env.window.__shellPA, "no state");
-    env.window.fetch(URL_ITEM, AUTH);
-    env.window.fetch(URL_ITEM, AUTH);
-    await env.drain();
-    assert.strictEqual(env.net.length, 2, "both reached the network");
-  });
+  await check(
+    "playReplayDisabled='1' stands the whole thing down",
+    async () => {
+      const env = makeEnv({
+        store: { "jellyfin.shell.playReplayDisabled": "1" },
+      }).run();
+      assert(!env.window.__shellPA, "no state");
+      env.window.fetch(URL_ITEM, AUTH);
+      env.window.fetch(URL_ITEM, AUTH);
+      await env.drain();
+      assert.strictEqual(env.net.length, 2, "both reached the network");
+    },
+  );
 
   await check("playReplayTtlMs='0' disables recording", async () => {
     const env = makeEnv({
@@ -799,19 +862,6 @@ async function main() {
     env.window.fetch(URL_ITEM, AUTH);
     await env.serveOnly(ITEM_BODY);
     assert.strictEqual(env.window.__shellPA.rec, 0, "nothing recorded");
-    await env.click([{ cls: "btnPlay" }]);
-    const before = env.net.length;
-    env.window.fetch(URL_ITEM, AUTH);
-    await env.drain();
-    assert.strictEqual(env.net.length, before + 1, "network");
-  });
-
-  await check("playReplayArmMs='0' disables serving", async () => {
-    const env = await primed({
-      store: { "jellyfin.shell.playReplayArmMs": "0" },
-    });
-    await env.click([{ cls: "btnPlay" }]);
-    assert.strictEqual(env.window.__shellPA.arm, 0, "never arms");
     const before = env.net.length;
     env.window.fetch(URL_ITEM, AUTH);
     await env.drain();
@@ -831,7 +881,7 @@ async function main() {
     assert.strictEqual(PA.t, 300000, "TTL default kept");
     assert.strictEqual(PA.w, 6000, "arm default kept");
     assert.strictEqual(PA.d, 1500, "intros delay default kept");
-    assert.strictEqual(PA.m, 6, "intros cap default kept");
+    assert.strictEqual(PA.m, 12, "intros cap default kept");
   });
 
   await check("in-range tunables are honoured", async () => {
@@ -849,6 +899,138 @@ async function main() {
     assert.strictEqual(PA.d, 0, "intros delay honoured");
     assert.strictEqual(PA.m, 1, "intros cap honoured");
   });
+
+  // ---- 13a. the min-age floor (rig-found) ---------------------------------
+  // The detail route issues its item GET four times inside ~250 ms. Without a
+  // floor those calls spend the single replay budget among themselves and
+  // whether the play click 18 s later finds one left comes down to parity.
+  // The floor hands that burst back to the JELA-752 coalescer.
+  await check("a repeat INSIDE the min-age floor is not served", async () => {
+    const env = await recorded();
+    const before = env.net.length;
+    env.window.fetch(URL_ITEM, AUTH);
+    await env.drain();
+    assert.strictEqual(env.net.length, before + 1, "went to the network");
+    assert.strictEqual(env.window.__shellPA.srv, 0, "nothing served");
+  });
+
+  await check("the detail burst never spends the play budget", async () => {
+    const env = makeEnv().run();
+    for (let i = 0; i < 4; i++) env.window.fetch(URL_ITEM, AUTH);
+    await env.drain();
+    for (const c of env.net.filter((x) => !x._done)) {
+      c._done = true;
+      c.resolve(new env.Response(ITEM_BODY, {}));
+    }
+    await env.drain();
+    assert.strictEqual(env.window.__shellPA.srv, 0, "burst served nothing");
+    await env.advance(2000);
+    const before = env.net.length;
+    await env.window.fetch(URL_ITEM, AUTH); // the play hop
+    assert.strictEqual(env.net.length, before, "play hop served");
+    assert.strictEqual(env.window.__shellPA.srv, 1, "exactly one serve");
+  });
+
+  await check("playReplayMinAgeMs is clamped and honoured", async () => {
+    assert.strictEqual(
+      makeEnv({ store: { "jellyfin.shell.playReplayMinAgeMs": "99999" } }).run()
+        .window.__shellPA.a,
+      2000,
+      "out-of-range keeps the default",
+    );
+    assert.strictEqual(
+      makeEnv({ store: { "jellyfin.shell.playReplayMinAgeMs": "500" } }).run()
+        .window.__shellPA.a,
+      500,
+      "in-range honoured",
+    );
+  });
+
+  // ---- 13b. the route gate (rig-found) ------------------------------------
+  // The first rig run recorded NINE item bodies — four of them home-row cards
+  // fetched during boot — and prefetched intros for every one, which wasted
+  // four boot requests AND evicted the detail item before the play click could
+  // use it (srv:0). Only the item the user is standing on may be recorded.
+  await check("an item that is not the current route is skipped", async () => {
+    const env = makeEnv().run();
+    const other = "ffffffffffffffffffffffffffffffff";
+    env.window.fetch(BASE + other, AUTH);
+    await env.serveOnly(ITEM_BODY);
+    const PA = env.window.__shellPA;
+    assert.strictEqual(PA.rec, 0, "not recorded");
+    assert.strictEqual(PA.pf, 0, "and no intros prefetched for it");
+    assert.strictEqual(PA.skip, 1, "counted as skipped");
+  });
+
+  await check(
+    "a home card fetched before any detail route is skipped",
+    async () => {
+      const env = makeEnv().run();
+      env.location.hash = "#!/home";
+      env.window.fetch(URL_ITEM, AUTH);
+      await env.serveOnly(ITEM_BODY);
+      assert.strictEqual(env.window.__shellPA.rec, 0, "boot card not recorded");
+      assert.strictEqual(env.window.__shellPA.pf, 0, "no boot prefetch");
+    },
+  );
+
+  await check(
+    "the route is tested at REQUEST time, not response time",
+    async () => {
+      const env = makeEnv().run();
+      env.window.fetch(URL_ITEM, AUTH);
+      // The user navigates away while the body is still in flight.
+      env.location.hash = "#!/home";
+      await env.serveOnly(ITEM_BODY);
+      assert.strictEqual(env.window.__shellPA.rec, 1, "still recorded");
+    },
+  );
+
+  // ---- 13c. one prefetch per item (rig-found) ------------------------------
+  // The detail route issues its item GET several times over; without a
+  // scheduled-set every one of them queues its own /Intros and they all find
+  // the store still empty when they fire. The first rig run issued two.
+  await check(
+    "repeat item GETs schedule exactly ONE intros prefetch",
+    async () => {
+      const env = makeEnv().run();
+      for (let i = 0; i < 4; i++) env.window.fetch(URL_ITEM, AUTH);
+      await env.drain();
+      for (const c of env.net.filter((x) => !x._done)) {
+        c._done = true;
+        c.resolve(new env.Response(ITEM_BODY, {}));
+      }
+      await env.drain();
+      assert.strictEqual(env.window.__shellPA.rec, 4, "all four recorded");
+      assert.strictEqual(env.window.__shellPA.pf, 1, "but ONE prefetch");
+      await env.advance(1500);
+      const intros = env.net.filter((c) => c.url === URL_INTROS);
+      assert.strictEqual(intros.length, 1, "one /Intros on the wire");
+    },
+  );
+
+  // ---- 13d. the click listener must survive document.write (rig-found) -----
+  // The shell hands off with document.write(), which implicitly calls
+  // document.open() and drops every document listener. The first rig run came
+  // back ev:0 for exactly that reason.
+  await check("the click listener is bound to WINDOW", async () => {
+    const env = makeEnv().run();
+    const onWindow = env.listeners.filter(
+      (l) => l.type === "click" && l.on === "window",
+    );
+    assert.strictEqual(onWindow.length, 1, "registered on window");
+    assert.strictEqual(onWindow[0].capture, true, "capture phase");
+  });
+
+  await check(
+    "window+document registrations do not double-count a click",
+    async () => {
+      const env = await primed();
+      await env.click([{ cls: "btnPlay" }]);
+      assert.strictEqual(env.window.__shellPA.ev, 1, "counted once");
+      assert.strictEqual(env.window.__shellPA.arm, 1, "armed once");
+    },
+  );
 
   // ---- 14. install discipline ----------------------------------------------
   await check("re-run body never double-wraps fetch", async () => {
@@ -874,8 +1056,8 @@ async function main() {
     assert(env.window.__shellFC, "coalescer installed");
     env.window.fetch(URL_ITEM, AUTH);
     await env.serveOnly(ITEM_BODY);
+    await env.advance(2000); // clear the min-age floor (fires the prefetch)
     const leadBefore = env.window.__shellFC.lead;
-    await env.click([{ cls: "btnPlay" }]);
     await env.window.fetch(URL_ITEM, AUTH);
     assert.strictEqual(env.window.__shellPA.srv, 1, "replay store served it");
     assert.strictEqual(

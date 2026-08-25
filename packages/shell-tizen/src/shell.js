@@ -4061,26 +4061,46 @@
       // Shape: a small ARMED replay store, installed OUTSIDE the coalescer so
       // it gets first refusal on the two URLs it owns.
       //
-      //  1. RECORD, always. A 2xx GET of /Users/*/Items/{id} (32-hex or
-      //     dashed GUID id, no query — that is exactly the getItem shape, and
-      //     the id test is what keeps /Users/*/Items/Latest|Resume|Root out)
-      //     or of that item's /Intros is snapshotted to text and kept, at
-      //     most 8 entries, each expiring after playReplayTtlMs (default
-      //     300 s). Recording alone changes no behaviour.
+      //  1. RECORD the item the user is STANDING ON. A 2xx GET of
+      //     /Users/*/Items/{id} (32-hex or dashed GUID id, no query — that is
+      //     exactly the getItem shape, and the id test is what keeps
+      //     /Users/*/Items/Latest|Resume|Root out) or of that item's /Intros
+      //     is snapshotted to text and kept, at most 8 entries, each expiring
+      //     after playReplayTtlMs (default 300 s). Recording alone changes no
+      //     behaviour. Gated on the id appearing in location.hash at REQUEST
+      //     time, because the first rig run showed why breadth is not free:
+      //     it recorded NINE item bodies — four of them home-row cards fetched
+      //     during boot — which both wasted four boot requests on their
+      //     intros prefetches and evicted the detail item from the store
+      //     before the play click could use it (srv:0). The detail route puts
+      //     the id in the hash before it fetches the body, so the hash test
+      //     keeps the store at the one item that matters.
       //
-      //  2. SERVE, only while ARMED. The store is consulted only inside an
-      //     arm window (default 6 s) opened by a play click, and at most ONCE
-      //     per arm for the item and once for the intros — the play chain
-      //     asks for each exactly once, so a second ask is somebody else and
-      //     goes to the network. Outside the window the store is inert.
+      //  2. SERVE each entry exactly ONCE, to whoever asks next, and only
+      //     after it has been settled for playReplayMinAgeMs (default 2 s).
+      //     That is the play chain by construction: the route gate means the
+      //     entry can only be the item the user is standing on, the min-age
+      //     floor hands the detail route's own concurrent burst back to
+      //     JELA-752 where it belongs, and the next reader after that is
+      //     playAfterBitrateDetect ~18 s later. The second ask gets the
+      //     network, so this can never become a general cache.
       //
-      //  3. ARM on the click AND on the chain itself. A capture-phase click
-      //     listener matches .btnPlay/.btnResume/.btnReplay/.btnShuffle or
-      //     data-action=play|resume|resumemixed|instantmix|shuffle. Belt and
-      //     braces, observing a GET of .../Intros IS the play chain starting,
-      //     so that arms too and then serves itself — which is what keeps
-      //     AC1 (no item GET between click and PlaybackInfo) from depending
-      //     on upstream's button markup.
+      //  3. RE-OPEN the budget on a play click, as an enhancement only. A
+      //     capture-phase listener (window AND document) for
+      //     .btnPlay/.btnResume/.btnReplay/.btnShuffle or
+      //     data-action=play|resume|resumemixed|instantmix|shuffle clears
+      //     every live entry's replay budget, so a SECOND play in the same
+      //     dwell is served too.
+      //
+      //     This is deliberately not load-bearing. The design originally
+      //     served only inside a window opened by such a click; the rig came
+      //     back arm:0 ev:0 twice over — on this engine a capture-phase click
+      //     listener never fires, neither on document (wiped by the
+      //     document.write handoff) nor on window. Nor can the chain's own
+      //     /Intros GET stand in for it: it leads the chain on the cinema-mode
+      //     path but is absent entirely on the resume path, and one rig run
+      //     saw it only AFTER PlaybackInfo, as part of the failure ladder.
+      //     Hence the budget in 2, which depends on neither.
       //
       //  4. PREFETCH the intros off the critical path. Hop 1 is guarded by
       //     upstream's enableCinemaMode(); it fired in 3/4 samples, returned
@@ -4090,12 +4110,14 @@
       //     library config we do not own — recording an item body schedules
       //     the REAL /Intros GET for that same item playReplayIntrosMs later
       //     (default 1.5 s, so it never competes with the detail render),
-      //     capped at playReplayIntrosMax (6) per window. At play time the
-      //     answer is a genuine server response for the exact URL asked, at
-      //     most one dwell old. It replays the observed item GET's own init
-      //     object, so credentials/mode/auth headers match by construction
-      //     and the key it stores under is the one upstream will ask for; a
-      //     GET with no headers to replay is skipped rather than guessed at.
+      //     capped at playReplayIntrosMax (12) per window. With the hash gate
+      //     above that is exactly ONE request per detail page opened, and it
+      //     buys back a whole serial RTT at play time. At play time the answer
+      //     is a genuine server response for the exact URL asked, at most one
+      //     dwell old. It replays the observed item GET's own init object, so
+      //     credentials/mode/auth headers match by construction and the key it
+      //     stores under is the one upstream will ask for; a GET with no
+      //     headers to replay is skipped rather than guessed at.
       //
       // Staleness is bounded the same three ways as JELA-752: only 2xx is
       // held, entries expire, and ANY mutation over fetch OR XHR flushes the
@@ -4107,20 +4129,53 @@
       //
       // Field-tunable without a shell release, all with the same clamp-or-
       // keep-the-default parse: jellyfin.shell.playReplayTtlMs (0..1800000;
-      // 0 disables recording), playReplayArmMs (0..30000; 0 disables serving),
-      // playReplayIntrosMs (0..60000), playReplayIntrosMax (0..32).
+      // 0 disables recording, and so serving), playReplayMinAgeMs (0..30000),
+      // playReplayArmMs (0..30000; 0 disables only the click re-open, leaving
+      // one replay per entry), playReplayIntrosMs (0..60000),
+      // playReplayIntrosMax (0..64). playReplayFlushAll='1' restores the
+      // blanket JELA-752 mutation flush.
       // Kill-switch: localStorage['jellyfin.shell.playReplayDisabled']='1'.
       // Counters: window.__shellPA
-      // {on,t,w,d,m,arm,ev,rec,ric,srv,sri,pf,pfh,pfe,fl,err}.
+      // {on,t,w,d,m,a,cl,arm,ev,rec,ric,skip,srv,sri,pf,pfh,pfe,fl,fs,err};
+      // skip counts GETs of our shape that were off-route and so left
+      // untouched, fs counts mutations that did NOT flush, and cl counts every
+      // click the listener saw at all (cl:0 with a play that plainly happened
+      // is the signature of the wiped-listener trap).
       'if(!flg("jellyfin.shell.playReplayDisabled")&&!W.__shellPA&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
       'var paT=300000;try{var pa1=localStorage.getItem("jellyfin.shell.playReplayTtlMs");if(pa1!==null&&pa1!==""){pa1=parseInt(pa1,10);if(pa1>=0&&pa1<=1800000)paT=pa1}}catch(_){}' +
       'var paW=6000;try{var pa2=localStorage.getItem("jellyfin.shell.playReplayArmMs");if(pa2!==null&&pa2!==""){pa2=parseInt(pa2,10);if(pa2>=0&&pa2<=30000)paW=pa2}}catch(_){}' +
       'var paD=1500;try{var pa3=localStorage.getItem("jellyfin.shell.playReplayIntrosMs");if(pa3!==null&&pa3!==""){pa3=parseInt(pa3,10);if(pa3>=0&&pa3<=60000)paD=pa3}}catch(_){}' +
-      'var paM=6;try{var pa4=localStorage.getItem("jellyfin.shell.playReplayIntrosMax");if(pa4!==null&&pa4!==""){pa4=parseInt(pa4,10);if(pa4>=0&&pa4<=32)paM=pa4}}catch(_){}' +
-      "var PA=W.__shellPA={on:1,t:paT,w:paW,d:paD,m:paM,arm:0,ev:0,rec:0,ric:0,srv:0,sri:0,pf:0,pfh:0,pfe:0,fl:0,err:0};" +
-      "var paQ={},paL=[],paG=0,paA=0,paSm=0,paSi=0;" +
-      // Any mutation drops the whole store — see the staleness note above.
-      "var paFl=function(){try{paQ={};paL=[];PA.fl++}catch(_){PA.err++}};" +
+      'var paM=12;try{var pa4=localStorage.getItem("jellyfin.shell.playReplayIntrosMax");if(pa4!==null&&pa4!==""){pa4=parseInt(pa4,10);if(pa4>=0&&pa4<=64)paM=pa4}}catch(_){}' +
+      // Minimum age before an entry may be replayed. This is the line between
+      // this change and JELA-752 above, and it is load-bearing: the detail
+      // route issues its item GET FOUR times inside ~250 ms, and without a
+      // floor those calls spend the single replay budget among themselves
+      // (call 2 served, call 3 re-records, call 4 served...) so whether the
+      // play click 18 s later finds a budget left comes down to parity. The
+      // coalescer owns the concurrent burst — that is what its 400 ms window
+      // is for — and this owns the long-gap re-read. They no longer overlap.
+      'var paA=2000;try{var pa5=localStorage.getItem("jellyfin.shell.playReplayMinAgeMs");if(pa5!==null&&pa5!==""){pa5=parseInt(pa5,10);if(pa5>=0&&pa5<=30000)paA=pa5}}catch(_){}' +
+      "var PA=W.__shellPA={on:1,t:paT,w:paW,d:paD,m:paM,a:paA,cl:0,arm:0,ev:0,rec:0,ric:0,skip:0,srv:0,sri:0,pf:0,pfh:0,pfe:0,fl:0,fs:0,err:0};" +
+      'var paQ={},paL=[],paP={},paCi="";' +
+      // A mutation that can touch an ITEM drops the whole store — see the
+      // staleness note above. paP goes with it, so a post-mutation re-record
+      // may prefetch again.
+      //
+      // Narrower than JELA-752's flush-on-anything, because the two guard
+      // different spans. Over a 400 ms join window "any mutation" is free;
+      // over an 18 s dwell it is fatal — the rig showed a third-party
+      // POST /JellyfinEnhanced/user-settings/{u}/settings.json landing
+      // mid-dwell and emptying the store every time, so the play chain always
+      // missed. So: flush on the paths that can change an item body or its
+      // UserData, and count the rest as skipped. Unknown paths flush, because
+      // a false flush costs one round trip and a missed one serves stale
+      // bytes. jellyfin.shell.playReplayFlushAll='1' restores the blanket
+      // JELA-752 behaviour if this list ever proves too narrow in the field.
+      'var paFa=flg("jellyfin.shell.playReplayFlushAll");' +
+      'var paFx=["/Items","/PlayedItems","/FavoriteItems","/UserItems","/Sessions/Playing","/Users/"];' +
+      'var paFm=function(pw){try{if(paFa)return 1;pw=String(pw||"");var pq3=pw.indexOf("?");if(pq3>=0)pw=pw.slice(0,pq3);' +
+      "var pi3;for(pi3=0;pi3<paFx.length;pi3++)if(pw.indexOf(paFx[pi3])>=0)return 1;return 0}catch(_){return 1}};" +
+      "var paFl=function(pw){try{if(!paFm(pw)){PA.fs++;return}paQ={};paL=[];paP={};PA.fl++}catch(_){PA.err++}};" +
       // Jellyfin item ids are Guids: 32 hex ("N" format, what the API emits)
       // or the dashed form. Requiring one is what separates a real getItem
       // URL from the named /Users/*/Items/<verb> endpoints.
@@ -4128,11 +4183,24 @@
       // 0 = not ours, 1 = the full item body, 2 = that item's intros. Any
       // query string disqualifies: getItem/getIntros send none, and the
       // /Items/{id}?userId= alias is a different projection (JELA-742).
-      'var paCl=function(pu2){var ph2=pu2.indexOf("#");if(ph2>=0)pu2=pu2.slice(0,ph2);' +
+      // Also parks the matched id in paCi for the route test below — read
+      // immediately by the one caller, which is the only call in flight.
+      'var paCl=function(pu2){paCi="";var ph2=pu2.indexOf("#");if(ph2>=0)pu2=pu2.slice(0,ph2);' +
       'if(pu2.indexOf("?")>=0)return 0;var sg=pu2.split("/"),nn=sg.length;' +
-      'if(nn>=5&&sg[nn-2]==="Items"&&sg[nn-4]==="Users"&&paId.test(sg[nn-1]))return 1;' +
-      'if(nn>=6&&sg[nn-1]==="Intros"&&sg[nn-3]==="Items"&&sg[nn-5]==="Users"&&paId.test(sg[nn-2]))return 2;' +
+      'if(nn>=5&&sg[nn-2]==="Items"&&sg[nn-4]==="Users"&&paId.test(sg[nn-1])){paCi=sg[nn-1];return 1}' +
+      'if(nn>=6&&sg[nn-1]==="Intros"&&sg[nn-3]==="Items"&&sg[nn-5]==="Users"&&paId.test(sg[nn-2])){paCi=sg[nn-2];return 2}' +
       "return 0};" +
+      // Only the item the user is STANDING ON is worth keeping. The first rig
+      // run recorded 9 item bodies — four of them home-row cards fetched
+      // during boot — and prefetched intros for all of them, which both wasted
+      // four boot requests and evicted the detail item from the store before
+      // the play click could use it (srv:0 with an 8-slot cap). The detail
+      // route puts the id in the hash (#!/details?id=<id>) before it fetches
+      // the body, so testing the hash at REQUEST time keeps the store at the
+      // one item that matters and makes the prefetch exactly one request per
+      // detail page opened. No hash match => record nothing, prefetch nothing,
+      // i.e. today's behaviour.
+      'var paHs=function(pid){try{return pid&&String(location.hash||"").indexOf(pid)>=0?1:0}catch(_){return 0}};' +
       "var paSn=function(pr){return pr.text().then(function(pt){var ph={};" +
       'try{pr.headers.forEach(function(pv,pn){ph[pn]=pv})}catch(_){try{var pct=pr.headers.get("content-type");if(pct)ph["content-type"]=pct}catch(__){}}' +
       'return{s:pr.status,x:pr.statusText||"",h:ph,b:pt}})};' +
@@ -4141,55 +4209,87 @@
       // Insertion-ordered, capped at 8, every entry self-expiring. The identity
       // check is what makes paFl() safe: a timer whose entry has already been
       // flushed or replaced must not evict whoever owns the key now.
-      "var paPut=function(pk,pd){try{if(!paQ[pk])paL.push(pk);paQ[pk]=pd;" +
+      //
+      // pd.u is the replay budget, and it is what makes this work AT ALL on
+      // the real engine. The design started out serving only inside a window
+      // opened by a play click; the rig then came back arm:0 ev:0 twice over —
+      // a capture-phase click listener never fires here, on document (wiped by
+      // the document.write handoff) OR on window. So an entry is instead
+      // replayable exactly ONCE, to whoever asks next. That is the play chain
+      // by construction: the route gate means the entry can only be the item
+      // the user is standing on, JELA-752 already collapses the detail route's
+      // own burst to one GET, and the very next reader of that URL is
+      // playAfterBitrateDetect. A click, when we do see one, re-opens the
+      // budget (paArm) so a second play in the same dwell is served too.
+      "var paPut=function(pk,pd){try{pd.u=1;if(!paQ[pk])paL.push(pk);paQ[pk]=pd;" +
+      "setTimeout(function(){try{if(paQ[pk]===pd)pd.u=0}catch(_){PA.err++}},paA);" +
       "while(paL.length>8){var pv2=paL.shift();if(pv2!==pk)delete paQ[pv2]}" +
       "setTimeout(function(){try{if(paQ[pk]===pd)delete paQ[pk]}catch(_){PA.err++}},paT)}catch(_){PA.err++}};" +
-      // One arm at a time; a re-arm bumps the generation so the older timer
-      // cannot close the newer window early.
-      "var paArm=function(){try{if(!paW)return;PA.arm++;paA=1;paSm=0;paSi=0;var pg=++paG;" +
-      "setTimeout(function(){try{if(paG===pg)paA=0}catch(_){PA.err++}},paW)}catch(_){PA.err++}};" +
+      // Re-open every live entry for one more replay. This is now an
+      // ENHANCEMENT, not a prerequisite — see the "serve once per entry" note
+      // in paPut above — so a play click that we fail to see costs the second
+      // play of a dwell, never the first.
+      "var paArm=function(){try{if(!paW)return;PA.arm++;var pi4;" +
+      "for(pi4=0;pi4<paL.length;pi4++){var pn4=paQ[paL[pi4]];if(pn4)pn4.u=0}}catch(_){PA.err++}};" +
       // Off-critical-path /Intros prefetch for an item we just recorded. Uses
       // the item GET's OWN init (auth headers, credentials, mode) so the key
       // it stores under is exactly the one upstream will ask for, and issues
       // it through paF — the inner fetch — so it is never recorded twice nor
       // mistaken for the play chain arming.
+      // paP is what stops a DOUBLE prefetch: the detail route issues its item
+      // GET several times over, so without a scheduled-set every one of them
+      // queues its own /Intros and they all find paQ[ik] still empty when they
+      // fire (the first rig run issued two).
       "var paPre=function(pu2,po2,pk){try{if(PA.pf>=paM)return;if(!(po2&&po2.headers))return;" +
-      'var iu=pu2+"/Intros",ik=pk.slice(0,pk.length-pu2.length)+iu;if(paQ[ik])return;PA.pf++;' +
+      'var iu=pu2+"/Intros",ik=pk.slice(0,pk.length-pu2.length)+iu;if(paQ[ik]||paP[ik])return;paP[ik]=1;PA.pf++;' +
       "setTimeout(function(){try{if(paQ[ik])return;" +
       "paF.call(W,iu,po2).then(paSn).then(function(pd){if(pd.s>=200&&pd.s<300){paPut(ik,pd);PA.pfh++}else PA.pfe++},function(){PA.pfe++})" +
       "}catch(_){PA.err++;PA.pfe++}},paD)}catch(_){PA.err++}};" +
       "var paF=W.fetch;W.fetch=function(pu,po){try{" +
       'var pm=po&&po.method?String(po.method).toUpperCase():"GET";' +
-      'if(pm!=="GET"&&pm!=="HEAD"){paFl()}' +
+      'if(pm!=="GET"&&pm!=="HEAD"){paFl(typeof pu==="string"?pu:(pu&&pu.url))}' +
       'else if(pm==="GET"&&typeof pu==="string"&&!(po&&(po.body||po.signal))){' +
       "var pc=paCl(pu);" +
       // (method, credentials, mode, full URL), normalised to the fetch
       // defaults exactly as the coalescer above does.
       'if(pc){var pk="GET "+(po&&po.credentials?String(po.credentials):"same-origin")+" "+(po&&po.mode?String(po.mode):"cors")+" "+pu;' +
-      "if(pc===2)paArm();" +
-      "if(paA&&paW){var pe=paQ[pk];" +
-      "if(pe&&(pc===1?!paSm:!paSi)){var pz=paMk(pe);if(pc===1){paSm=1;PA.srv++}else{paSi=1;PA.sri++}return Promise.resolve(pz)}}" +
-      "if(paT)return paF.call(W,pu,po).then(function(pr){return paSn(pr).then(function(pd){" +
+      // Route test at REQUEST time — the hash can change while the body is in
+      // flight, and the question we are asking is "is this the page the user
+      // is on", not "was it still that page when the bytes landed".
+      "var phz=paHs(paCi);" +
+      // One replay per entry, to whoever asks next — pd.u in paPut above.
+      "var pe=paQ[pk];" +
+      "if(pe&&!pe.u){var pz=paMk(pe);pe.u=1;if(pc===1)PA.srv++;else PA.sri++;return Promise.resolve(pz)}" +
+      "if(paT&&phz)return paF.call(W,pu,po).then(function(pr){return paSn(pr).then(function(pd){" +
       "if(pd.s>=200&&pd.s<300){paPut(pk,pd);if(pc===1){PA.rec++;paPre(pu,po,pk)}else PA.ric++}" +
-      "return paMk(pd)})})}}" +
+      "return paMk(pd)})});" +
+      "if(paT)PA.skip++}}" +
       "}catch(_){PA.err++}" +
       "return paF.apply(W,arguments)};" +
       // XHR is hooked ONLY for the mutation flush, same as JELA-752.
       "try{var PXA=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PXA&&PXA.open){var paO=PXA.open;" +
-      'PXA.open=function(pxm){try{var pxv=String(pxm||"").toUpperCase();if(pxv!=="GET"&&pxv!=="HEAD")paFl()}catch(_){PA.err++}' +
+      'PXA.open=function(pxm,pxu){try{var pxv=String(pxm||"").toUpperCase();if(pxv!=="GET"&&pxv!=="HEAD")paFl(pxu)}catch(_){PA.err++}' +
       "return paO.apply(this,arguments)}}}catch(_){PA.err++}" +
-      // Capture phase, so a stopPropagation() anywhere in upstream's own
-      // handlers cannot hide the click from us. className is read as a string
-      // only (an SVG element hands back an SVGAnimatedString) and the walk is
-      // bounded — a miss just means no arm, i.e. today's chain.
-      'try{if(document&&document.addEventListener){var paBt=" btnPlay btnResume btnReplay btnShuffle ";' +
-      'var paAt=" play resume resumemixed instantmix shuffle ";' +
-      'document.addEventListener("click",function(pv){try{var nd=pv&&pv.target,dp=0;' +
+      // Bound to WINDOW, not document. The shell hands off to jellyfin-web with
+      // document.write(), which implicitly calls document.open() and drops
+      // every listener registered on the document — the first rig run came
+      // back ev:0 for exactly that reason, and only the /Intros arm above
+      // saved it. Window listeners survive the handoff on M63 (the engine this
+      // ships to; cf. the JEL-66 note that Chrome 68+ is the one that wipes
+      // them), and a click reaches window last, so capture phase costs
+      // nothing extra. document is kept as a second registration for engines
+      // where the reverse holds, deduped on event identity so the two
+      // registrations cannot both count (and re-open) one click.
+      'try{var paBt=" btnPlay btnResume btnReplay btnShuffle ";' +
+      'var paAt=" play resume resumemixed instantmix shuffle ",paLe=null;' +
+      "var paCk=function(pv){try{if(pv&&pv===paLe)return;paLe=pv;PA.cl++;var nd=pv&&pv.target,dp=0;" +
       'while(nd&&dp<8){var ca=nd.getAttribute?String(nd.getAttribute("data-action")||""):"";' +
       'if(ca&&paAt.indexOf(" "+ca+" ")>=0){PA.ev++;paArm();return}' +
       'var cn=typeof nd.className==="string"?nd.className:"";' +
       'if(cn){var cs=cn.split(/\\s+/),ci;for(ci=0;ci<cs.length;ci++)if(cs[ci]&&paBt.indexOf(" "+cs[ci]+" ")>=0){PA.ev++;paArm();return}}' +
-      "nd=nd.parentNode;dp++}}catch(_){PA.err++}},true)}}catch(_){PA.err++}" +
+      "nd=nd.parentNode;dp++}}catch(_){PA.err++}};" +
+      'if(W.addEventListener)W.addEventListener("click",paCk,true);' +
+      'if(document&&document.addEventListener)document.addEventListener("click",paCk,true)}catch(_){PA.err++}' +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
