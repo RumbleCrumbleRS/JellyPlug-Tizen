@@ -1322,6 +1322,75 @@
       "    var pg=window.__shellPaintGate;",
       "    if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}",
       "  })();}catch(_){}",
+      // JELA-684 (JELA-679/P3): hold the playback bitrate probe until after
+      // first paint.
+      //
+      // jellyfin-apiclient schedules a fire-and-forget bandwidth probe 6 s
+      // after ANY setAuthenticationInfo()/onNetworkChange()/authenticate call:
+      //   function g(e){p(e),e.accessToken()&&!1!==e.enableAutomaticBitrateDetection
+      //                 &&(e.detectTimeout=setTimeout(y.bind(e),6e3))}
+      //   function y(){this.detectTimeout=null,this.accessToken()&&this.detectBitrate()}
+      // On a saved-server cold boot that lands at t~7.7 s — squarely inside the
+      // pre-firstCard window (firstCard ~15 s on the virtual M63 target) — and
+      // detectBitrate escalates 500 KB -> 1 MB -> 3 MB, which the server rounds
+      // up to 512 KiB + 1 MiB + 4 MiB = 5.5 MiB of bulk transfer competing with
+      // the home-screen query storm for the same link.
+      //
+      // (JELA-680's waterfall showed 6 requests / 8.6 MB and read that as the
+      // escalation running twice. It does not: each probe is a CORS preflight
+      // OPTIONS + the GET, and Chromium 63 records the preflight as its own
+      // Resource Timing entry. One escalation, 3 GETs, 5.5 MiB actual.)
+      //
+      // Nothing on the home screen consumes the result. It exists to seed
+      // apiClient.lastDetectedBitrate so that the first playback (minutes away)
+      // skips the escalation, and playback re-detects on its own if the cache
+      // is cold or stale. So this holds rather than kills: suppress until the
+      // paint gate opens, then re-arm the vendor's own timer so the cache is
+      // still warm before anyone can press play.
+      //
+      // The hold is an accessor, not `=false`: the connection manager
+      // re-assigns enableAutomaticBitrateDetection from its options on every
+      // (re)auth and THEN calls the scheduler, so a plain write gets clobbered
+      // in the window between onApi and login. Any already-scheduled
+      // detectTimeout is cleared on install, and the guard re-runs every 500 ms
+      // until paint so a replaced window.ApiClient is covered too.
+      //
+      // Flag-dark: opt in with localStorage["jellyfin.shell.deferBitrateTest"]="1".
+      // Post-paint delay is tunable via "jellyfin.shell.deferBitrateTestMs"
+      // (default 4000).
+      // Diag: window.__shellBT = {on,inst,cleared,sets,armed,fired,tHold,tArm}.
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
+      "    var D=4000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    var S=window.__shellBT={on:1,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0};",
+      "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
+      "    function hold(){",
+      "      var a=cur();",
+      "      if(!a||a.__shellBTHeld)return;",
+      "      a.__shellBTHeld=1;S.inst++;",
+      "      try{if(a.detectTimeout){clearTimeout(a.detectTimeout);a.detectTimeout=null;S.cleared++;}}catch(_){}",
+      '      try{Object.defineProperty(a,"enableAutomaticBitrateDetection",{configurable:true,enumerable:true,get:function(){return false;},set:function(){S.sets++;}});}',
+      "      catch(_){try{a.enableAutomaticBitrateDetection=false;}catch(__){}}",
+      "      if(!S.tHold)S.tHold=Date.now();",
+      "    }",
+      "    var iv=null;",
+      "    function release(){",
+      "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
+      "      S.tArm=Date.now();",
+      "      var a=cur();if(!a)return;",
+      // Restore the vendor's own shape — a plain writable property plus a
+      // detectTimeout the player can still cancel via p(e) — rather than
+      // calling detectBitrate() straight, so nothing downstream is surprised.
+      "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
+      "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
+      "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
+      "    }",
+      "    function arm(){hold();try{iv=setInterval(hold,500);}catch(_){}}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
+      "    else{arm();setTimeout(release,20000);}",
+      "  })();}catch(_){}",
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
