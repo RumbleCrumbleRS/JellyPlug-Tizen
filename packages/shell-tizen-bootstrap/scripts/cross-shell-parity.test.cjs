@@ -197,8 +197,8 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet adds CSS:/FP: HUD rows and inlines the drop-miss __ensureBabel gate per call site (__dp/pre pattern); retail routes both dynamic call sites through the shared __txResolve helper (same drop-miss lazy-babel semantics since JELA-183, different shape)",
-    retail: "66e048e1f827f3c0",
-    boot: "16ada51c4c888729",
+    retail: "0a0996075ce94204",
+    boot: "25f9144faa8d2879",
   },
   {
     name: "buildDiagSeedScript",
