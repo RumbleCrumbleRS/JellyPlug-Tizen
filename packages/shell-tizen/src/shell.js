@@ -4001,6 +4001,151 @@
       "pump()" +
       "}" +
       "}}catch(_){G.err++}}" +
+      // JELA-742 (opt-in, default OFF via
+      // localStorage['jellyfin.shell.aliasCoalesce']='1'; kill-switch
+      // 'jellyfin.shell.aliasCoalesceDisabled' reserved for the default-ON
+      // flip): collapse the two ALIAS PAIRS the home fetches twice per boot.
+      //
+      // The defect (JELA-741 captures w1/w2/w3, all three boots identical):
+      // the media bar fetches every slide item from BOTH /Items/{id} and
+      // /Users/{u}/Items/{id}, ~300-740 ms apart, and repeats the pair on the
+      // ~15.5 s rotation for as long as the home is on screen. Each carries
+      // its own CORS preflight, so one slide costs 4 requests. The boot pair
+      // lands at ~3,042 ms on a home whose last card change is ~5,663 ms —
+      // inside the fill window, where [[boot-concurrency-queueing]] says
+      // request COUNT, not bytes, sets latency. Same shape for the views
+      // pair: /UserViews?userId={u} and /Users/{u}/Views, 6,612 B each.
+      //
+      // Why serving one from the other is sound. Measured against the live
+      // server with the USER token the SPA actually holds (not a server API
+      // key — a bare /Items/{id} 400s without a user context, which is why
+      // the endpoint takes its user from the token):
+      //   /Items/{id}          22,962 / 22,806 / 65,798 B
+      //   /Users/{u}/Items/{id} 22,962 / 22,806 / 65,798 B   md5-identical
+      // and the CDP capture agrees — DECODED length matches on all 5 pairs of
+      // w3 (the small `encoded` deltas are header size, not body). The views
+      // pair differs in exactly one field, ChildCount, and that field is
+      // non-deterministic SERVER-SIDE: two consecutive calls to the SAME
+      // endpoint return different counts (measured n=3: Movies 6/5/3 on
+      // /UserViews alone), so coalescing loses no information that was not
+      // already noise.
+      //
+      // Scope is deliberately narrow — a key is derived ONLY for the four
+      // exact path shapes above, and only when the user id in the path/query
+      // matches the stored credential's. The residual query string (minus
+      // `userId` and the `_` cache-buster) is part of the key, so a caller
+      // that passes Fields=/other params never coalesces with one that does
+      // not — differing params mean differing bodies, and a non-matching key
+      // is simply today's path. Anything unrecognised returns "" and goes to
+      // the network untouched: worst case = today's boot.
+      //
+      // Entries are ONE-SHOT (a read deletes the slot, as apiWarm does) with a
+      // 10 s TTL — 13x the widest gap observed between siblings (740 ms) and
+      // comfortably under the 15.5 s rotation, so a slide's pair collapses but
+      // nothing survives to the next slide. That bounds staleness exposure to
+      // at most one served response per id. A token change flushes the store,
+      // so another user's data is never served. Bodies over 256 KiB are not
+      // stored (observed max 65,798 B) and the store is capped at 8 slots,
+      // FIFO — an entry whose sibling never arrives cannot accumulate.
+      //
+      // A sibling that asks while the first is still IN FLIGHT parks on it and
+      // is fed by the same response rather than issuing a second request; if
+      // that request errors, the parked caller replays on the network.
+      //
+      // Installed LAST in this body, so these patches wrap OUTSIDE the
+      // JELA-703 hssPin and JELA-51/685 apiWarm patches: this one sees the
+      // call first (to serve it) and still records the body whether it was
+      // answered by apiWarm's store or by the network. apiWarm's own prefetch
+      // XHRs (__awI) are skipped so the two mechanisms stay independent.
+      // One install per WINDOW (survives the document.write handoff).
+      // Counters: window.__shellACo {on,rec,hit,miss,ev,err}.
+      'if(flg("jellyfin.shell.aliasCoalesce")&&!flg("jellyfin.shell.aliasCoalesceDisabled")&&!W.__shellACo){try{' +
+      'var cC=null;try{var cc0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),cs0=cc0&&cc0.Servers&&cc0.Servers[0];if(cs0&&cs0.AccessToken&&cs0.UserId)cC={t:cs0.AccessToken,u:String(cs0.UserId).toLowerCase(),a:String(cs0.ManualAddress||cs0.LocalAddress||"")}}catch(_){}' +
+      'var cB="";try{cB=String(srv()||(cC&&cC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
+      "if(cC&&/^https?:\\/\\//.test(cB)){" +
+      "var co=W.__shellACo={on:1,rec:0,hit:0,miss:0,ev:0,err:0};" +
+      'var cTTL=10000;try{var ct0=parseInt(localStorage.getItem("jellyfin.shell.aliasCoalesceTtlMs")||"",10);if(ct0>=1000&&ct0<=60000)cTTL=ct0}catch(_){}' +
+      "var cSto={},cOrd=[],cMAX=8,cCAP=262144;" +
+      'var cBL=[cB];try{var cb2=String(cC.a||"").replace(/\\/+$/,"");if(cb2&&cb2!==cB)cBL.push(cb2)}catch(_){}' +
+      // cKey: URL -> alias key, or "" for "do not touch". Server-relative,
+      // user-checked, residual query sorted into the key.
+      'var cKey=function(u){try{u=String(u||"");' +
+      'for(var bi=0;bi<cBL.length;bi++){if(u.indexOf(cBL[bi]+"/")===0){u=u.slice(cBL[bi].length);break}}' +
+      'if(u.charAt(0)!=="/"||u.charAt(1)==="/")return"";' +
+      'var qi=u.indexOf("?"),pp=qi<0?u:u.slice(0,qi),qs=qi<0?"":u.slice(qi+1);' +
+      'var ps=qs?qs.split("&"):[],res=[],uid="",pi;' +
+      "for(pi=0;pi<ps.length;pi++){var nm=ps[pi].split(\"=\")[0];if(nm==='_')continue;" +
+      'if(nm.toLowerCase()==="userid"){try{uid=decodeURIComponent(ps[pi].slice(ps[pi].indexOf("=")+1)||"").toLowerCase()}catch(_){uid="?"}continue}' +
+      "res.push(ps[pi])}" +
+      'res.sort();var rq=res.join("&");' +
+      "var m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"I:"+m[2].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(uid&&uid!==cC.u)return"";return"I:"+m[1].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Views$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"V:?"+rq}' +
+      'if(pp==="/UserViews")return uid===cC.u?"V:?"+rq:"";' +
+      'return""}catch(_){co.err++;return""}};' +
+      'var cTok=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===cC.t)}catch(_){return!1}};' +
+      // cGet consumes: the slot is deleted, the caller keeps the ref (an
+      // in-flight entry still feeds its parked waiter through that ref).
+      "var cGet=function(k){if(!k)return null;var e=cSto[k];if(!e)return null;" +
+      "if(!cTok()){cSto={};cOrd=[];return null}" +
+      "if(e.st===2||+new Date()>e.x){delete cSto[k];return null}" +
+      "delete cSto[k];co.hit++;return e};" +
+      "var cNew=function(k){if(!k||cSto[k])return null;" +
+      'var e={st:0,s:0,t:"",cb:[],x:+new Date()+cTTL};cSto[k]=e;cOrd.push(k);co.miss++;' +
+      "while(cOrd.length>cMAX){var k0=cOrd.shift();if(cSto[k0]){delete cSto[k0];co.ev++}}return e};" +
+      "var cDone=function(e,ok,st,tx){try{if(!e||e.st!==0)return;" +
+      "if(ok&&tx&&tx.length<=cCAP){e.st=1;e.s=st||200;e.t=String(tx);e.x=+new Date()+cTTL;co.rec++}else e.st=2;" +
+      "var cbs=e.cb;e.cb=[];for(var i=0;i<cbs.length;i++){try{cbs[i]()}catch(_){co.err++}}}catch(_){co.err++}};" +
+      // fetch: serve a completed entry as a synthesized Response, park on an
+      // in-flight one, else record the real response off a clone().
+      'var cMk=null;try{if(typeof Response==="function")cMk=function(e){return new Response(e.s===204?null:e.t,{status:e.s||200,headers:{"Content-Type":"application/json"}})}}catch(_){}' +
+      'if(typeof W.fetch==="function"&&cMk){try{var cF=W.fetch;W.fetch=function(cu,cop){try{' +
+      'if(!(cop&&cop.method)||String(cop.method).toUpperCase()==="GET"){' +
+      'var ck=cKey(typeof cu==="string"?cu:String((cu&&cu.url)||""));' +
+      "if(ck){var ce=cGet(ck);" +
+      "if(ce){if(ce.st===1)return Promise.resolve(cMk(ce));" +
+      "var cF2=cF,car=arguments;return new Promise(function(rs){ce.cb.push(function(){" +
+      "if(ce.st===1){try{rs(cMk(ce));return}catch(_){}}rs(cF2.apply(W,car))})})}" +
+      "var cn=cNew(ck);if(cn){var cp=cF.apply(W,arguments);" +
+      "try{cp.then(function(r){try{" +
+      "if(r&&r.status>=200&&r.status<300)r.clone().text().then(function(tx){cDone(cn,1,r.status,tx)},function(){cDone(cn,0)});" +
+      "else cDone(cn,0)}catch(_){cDone(cn,0)}},function(){cDone(cn,0)})}catch(_){cDone(cn,0)}" +
+      "return cp}}}" +
+      "}catch(_){co.err++}" +
+      "return cF.apply(W,arguments)}}catch(_){co.err++}}" +
+      // XHR delivery: own-property shadows over the prototype accessors, then
+      // the three completion events (same shape as the apiWarm serve above).
+      "var cD=function(x,e){try{" +
+      "var df=function(n,v){try{Object.defineProperty(x,n,{configurable:!0,value:v})}catch(_){try{x[n]=v}catch(__){}}};" +
+      'df("readyState",4);df("status",e.s||200);df("statusText","OK");' +
+      'var rt="";try{rt=String(x.responseType||"")}catch(_){}' +
+      'if(rt===""||rt==="text")df("responseText",e.t);' +
+      'if(rt==="json"){var pj=null;try{pj=JSON.parse(e.t)}catch(_){}df("response",pj)}else df("response",e.t);' +
+      'df("getAllResponseHeaders",function(){return"content-type: application/json\\r\\n"});' +
+      'df("getResponseHeader",function(h){return String(h||"").toLowerCase()==="content-type"?"application/json":null});' +
+      'var evs=["readystatechange","load","loadend"];for(var ei=0;ei<evs.length;ei++){var fd=0;' +
+      'try{if(typeof Event==="function"&&x.dispatchEvent){x.dispatchEvent(new Event(evs[ei]));fd=1}}catch(_){}' +
+      'if(!fd){try{var h5=x["on"+evs[ei]];if(typeof h5==="function")h5.call(x,{type:evs[ei],target:x})}catch(_){co.err++}}}' +
+      "}catch(_){co.err++}};" +
+      "try{var CXP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(CXP&&CXP.open&&CXP.send){" +
+      "var cO=CXP.open,cS=CXP.send,cAb=CXP.abort;" +
+      'CXP.open=function(cm2,cu2){try{this.__acM=String(cm2||"").toUpperCase();this.__acU=String(cu2||"")}catch(_){}return cO.apply(this,arguments)};' +
+      "if(cAb)CXP.abort=function(){try{this.__acA=1}catch(_){}return cAb.apply(this,arguments)};" +
+      'CXP.send=function(){var cx=this;try{if(!cx.__awI&&cx.__acM==="GET"){var ck2=cKey(cx.__acU);' +
+      "if(ck2){var ce2=cGet(ck2);" +
+      "if(ce2){var cgo=function(){try{if(cx.__acA)return;if(ce2.st===1)cD(cx,ce2);else cS.call(cx)}catch(_){co.err++}};" +
+      "if(ce2.st===1)setTimeout(cgo,0);else ce2.cb.push(cgo);return}" +
+      "var cn2=cNew(ck2);" +
+      'if(cn2)cx.addEventListener("loadend",function(){try{' +
+      'var ok=cx.status>=200&&cx.status<300,tx="";' +
+      'if(ok){var rt2="";try{rt2=String(cx.responseType||"")}catch(_){}' +
+      'if(rt2===""||rt2==="text"){try{tx=String(cx.responseText||"")}catch(_){ok=0}}else ok=0}' +
+      "cDone(cn2,ok?1:0,cx.status,tx)}catch(_){cDone(cn2,0)}})}}}catch(_){co.err++}" +
+      "return cS.apply(cx,arguments)}}}catch(_){co.err++}" +
+      "}}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );
   }
