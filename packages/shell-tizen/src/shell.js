@@ -4169,11 +4169,13 @@
       // missed. So: flush on the paths that can change an item body or its
       // UserData, and count the rest as skipped. Unknown paths flush, because
       // a false flush costs one round trip and a missed one serves stale
-      // bytes. jellyfin.shell.playReplayFlushAll='1' restores the blanket
+      // bytes — so a mutation we cannot read a URL for (a Request object,
+      // say) flushes too. jellyfin.shell.playReplayFlushAll='1' restores the blanket
       // JELA-752 behaviour if this list ever proves too narrow in the field.
       'var paFa=flg("jellyfin.shell.playReplayFlushAll");' +
       'var paFx=["/Items","/PlayedItems","/FavoriteItems","/UserItems","/Sessions/Playing","/Users/"];' +
-      'var paFm=function(pw){try{if(paFa)return 1;pw=String(pw||"");var pq3=pw.indexOf("?");if(pq3>=0)pw=pw.slice(0,pq3);' +
+      'var paFm=function(pw){try{if(paFa)return 1;pw=String(pw||"");if(!pw)return 1;' +
+      'var pq3=pw.indexOf("?");if(pq3>=0)pw=pw.slice(0,pq3);' +
       "var pi3;for(pi3=0;pi3<paFx.length;pi3++)if(pw.indexOf(paFx[pi3])>=0)return 1;return 0}catch(_){return 1}};" +
       "var paFl=function(pw){try{if(!paFm(pw)){PA.fs++;return}paQ={};paL=[];paP={};PA.fl++}catch(_){PA.err++}};" +
       // Jellyfin item ids are Guids: 32 hex ("N" format, what the API emits)

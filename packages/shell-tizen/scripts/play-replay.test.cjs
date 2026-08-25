@@ -769,6 +769,16 @@ async function main() {
     assert.strictEqual(env.net.length, before + 1, "nothing left to serve");
   });
 
+  await check("a mutation with no readable URL still flushes", async () => {
+    // Unknown must flush: a false flush costs one round trip, a missed one
+    // serves stale bytes.
+    const env = await primed();
+    env.window.fetch({ url: undefined }, { method: "POST" });
+    await env.drain();
+    assert.strictEqual(env.window.__shellPA.fl, 1, "flushed");
+    assert.strictEqual(env.window.__shellPA.fs, 0, "not skipped");
+  });
+
   await check("a GET over XHR does NOT flush", async () => {
     const env = await primed();
     const x = new env.window.XMLHttpRequest();
