@@ -1075,10 +1075,28 @@
       // so invalidating there would wipe the store on every boot and buy
       // nothing. A same-address link change is covered by the TTL instead.
       //
-      // Playback is untouched. The playback path calls detectBitrate(!0) —
-      // forced — which passes straight through to a real detection, so a
-      // Direct Play / transcode decision is made on a freshly measured value
-      // exactly as before. Only the unforced boot probe is served from store.
+      // Playback IS served from this store — CORRECTION, the opposite was
+      // claimed here and in PR #157 until JELA-684's follow-up re-checked it
+      // against the bundle the 10.11.11 server actually serves (main bundle,
+      // apiclient bundle, all 927 lazy chunks and every injected plugin
+      // script). detectBitrate has exactly two web-client call sites:
+      //   - playbackManager's pre-play max-bitrate step (play() chain, for
+      //     Video/Audio on a non-local item with automatic bitrate detection
+      //     enabled): detectBitrate() — UNFORCED, so it reads this store;
+      //   - the quality dialog (setMaxStreamingBitrate):
+      //     detectBitrate(!0) — forced, real detection, bypasses the store;
+      // plus the apiclient's own unforced boot probe (y() above).
+      //
+      // So with the flag on, a Direct Play / transcode decision can run on a
+      // persisted measurement up to TTL old. That is DELIBERATE — decided on
+      // the record, not by accident: vendor-stock already fed playback a
+      // boot-time value (the unforced play call hit the vendor's 1 h
+      // instance cache whenever play followed the boot probe within the same
+      // page), the store is keyed to the server identity, a panel's link is
+      // far more stable than a browser tab's, and the quality dialog still
+      // forces a fresh measurement as the user-facing remedy. Do NOT "fix"
+      // playback by forcing it: that would run the full download ladder at
+      // every play start — a cost even stock never paid.
       //
       // Composes with JELA-684 (deferBitrateTest), which holds the same probe
       // until after paint: with both on, boot 1 detects post-paint and
@@ -1087,8 +1105,10 @@
       // prototype method, so neither sees the other.
       //
       // TTL defaults to 24 h, not the vendor's 1 h: a panel's link is far more
-      // stable than a browser tab's, and a stale value only costs one
-      // suboptimal initial bitrate guess that playback re-measures anyway.
+      // stable than a browser tab's, and a stale value costs at most a
+      // suboptimal bitrate ceiling until the TTL lapses or the user opens
+      // the quality dialog, which forces a fresh detection (playback does
+      // NOT re-measure — see the call-site inventory above).
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
@@ -3072,6 +3092,54 @@
       "cwStart(cw0,wr0)" +
       "}catch(_){G.err++}},500)" +
       "}" +
+      "}catch(_){G.err++}}" +
+      // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
+      // if upstream fixes the key derivation): opt-in pinned pageHash for
+      // /HomeScreen/Sections, default OFF via
+      // localStorage['jellyfin.shell.hssPin']='1'. Patches window fetch/XHR
+      // to append PageHash=<uuid>&Page=1&NumResultsPerPage=1000 to any GET
+      // whose path ends /HomeScreen/Sections, so the request takes the
+      // plugin's caching branch instead of the Guid.NewGuid() always-miss
+      // path (measured on prod: median 2,943 ms fresh key -> 4 ms pinned,
+      // n=12/arm, zero overlap — docs/hss-sections-cache-diagnosis.md).
+      // SERVER-HEALTH lever only: the endpoint does not gate firstCard
+      // (rho=0.145, n=17). The key is FNV-1a(userId + ":" + bucket) formatted
+      // as a Guid — DETERMINISTIC so every load in a bucket presents the same
+      // key, PER-USER because the plugin's cache reads are not user-scoped
+      // (two users presenting one value would share a section list),
+      // TIME-BUCKETED (default 3600 s; 'jellyfin.shell.hssPinBucketSecs'
+      // accepts 60..86400) because nothing ever evicts entries — the bucket
+      // bounds the frozen section list, the pinned shuffle order, and the
+      // one leaked ~4 KB entry per (user,bucket). A URL already carrying a
+      // PageHash (the plugin's own pagination mode) is never touched;
+      // non-string fetch inputs pass through unpinned (= today's path).
+      // Installed BEFORE the JELA-51/685 apiWarm patches in this same body
+      // run, so the warm's Sections XHR is pinned too (its first hit seeds
+      // the entry the SPA's pinned request then finds) while apiWarm records
+      // pre-rewrite URLs and its store keys keep matching. One install per
+      // WINDOW (survives the document.write handoff); counters:
+      // window.__shellPH {on,n,b,u}.
+      'if(flg("jellyfin.shell.hssPin")&&!W.__shellPH){try{' +
+      'var ph=W.__shellPH={on:1,n:0,b:0,u:""};' +
+      'var phB=3600;try{var pb0=parseInt(localStorage.getItem("jellyfin.shell.hssPinBucketSecs")||"",10);if(pb0>=60&&pb0<=86400)phB=pb0}catch(_){}' +
+      "var phH=function(s,h){for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h};" +
+      'var phX=function(n){return("0000000"+n.toString(16)).slice(-8)};' +
+      'var phKey=function(){try{var c1=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s1=c1&&c1.Servers&&c1.Servers[0],u1=s1&&s1.UserId;if(!u1)return"";' +
+      'var bk=Math.floor(+new Date()/(phB*1000)),sd=String(u1)+":"+bk;' +
+      'var ha=phH(sd+"#0",2166136261),hb=phH(sd+"#1",2166136261),hc=phH(sd+"#2",2166136261),hd=phH(sd+"#3",2166136261);' +
+      'ph.b=bk;ph.u=phX(ha)+"-"+phX(hb).slice(0,4)+"-"+phX(hb).slice(4)+"-"+phX(hc).slice(0,4)+"-"+phX(hc).slice(4)+phX(hd);return ph.u}catch(_){return""}};' +
+      'var phRw=function(u){try{u=String(u||"");var pq=u.indexOf("?"),pp=pq<0?u:u.slice(0,pq);' +
+      "if(!/\\/HomeScreen\\/Sections$/.test(pp))return u;" +
+      "if(/[?&][Pp]age[Hh]ash=/.test(u))return u;" +
+      "var k=phKey();if(!k)return u;ph.n++;" +
+      'return u+(pq<0?"?":"&")+"PageHash="+k+"&Page=1&NumResultsPerPage=1000"}catch(_){return u}};' +
+      'if(typeof W.fetch==="function"){try{var pF=W.fetch;W.fetch=function(pu,po){try{' +
+      'var pm=po&&po.method?String(po.method).toUpperCase():"GET";' +
+      'if(pm==="GET"&&typeof pu==="string")pu=phRw(pu)' +
+      "}catch(_){G.err++}" +
+      "return pF.call(W,pu,po)}}catch(_){G.err++}}" +
+      "try{var PX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PX&&PX.open){var pO2=PX.open;" +
+      'PX.open=function(pm2,pu2){var pa=arguments,pn=arguments.length;try{if(String(pm2||"").toUpperCase()==="GET"){var pr2=phRw(String(pu2||""));if(pr2!==String(pu2||"")){pa=[pm2,pr2];for(var pj2=2;pj2<pn;pj2++)pa.push(arguments[pj2])}}}catch(_){G.err++}return pO2.apply(this,pa)}}}catch(_){G.err++}' +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
