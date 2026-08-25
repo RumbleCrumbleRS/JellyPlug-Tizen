@@ -5417,6 +5417,29 @@
       }
     });
   }
+  // JELA-710: repoint the Media Bar plugin's jsdelivr slideshowpure.css
+  // <link> (whose first line @imports Archivo Narrow from
+  // fonts.googleapis.com, render-blocking, UA-sniffed to TTF on Tizen) at
+  // the plugin's self-hosted patched copy under /shell/fonts/. Runs after
+  // the index cache read so cached markup stays pristine; string-level so
+  // both write paths are covered. Kill switch:
+  // localStorage["jellyfin.shell.selfFontsDisabled"]="1".
+  function rewriteFontThirdPartyCss(html, serverUrl) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.selfFontsDisabled") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      return String(html).replace(
+        /https:\/\/cdn\.jsdelivr\.net\/[^"' ]*slideshowpure[^"' ]*\.css/g,
+        String(serverUrl).replace(/\/+$/, "") +
+          "/shell/fonts/mediabar-slideshowpure.css",
+      );
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
@@ -5595,7 +5618,7 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = results[0],
+        var html = rewriteFontThirdPartyCss(results[0], serverUrl),
           upstreamCfg = results[1],
           fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
         if (fast) {

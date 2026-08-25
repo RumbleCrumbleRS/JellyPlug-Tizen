@@ -7140,6 +7140,42 @@
     } catch (_) {}
     return true;
   }
+  // JELA-710: Google Fonts UA-sniffs the Tizen UA to TrueType (771 KiB of
+  // font bytes per boot for an M63 engine that has read WOFF2 since Chrome
+  // 36), and the chain starts in markup we document.write: the Media Bar
+  // plugin pins slideshowpure.css on cdn.jsdelivr.net in the server's
+  // /web/index.html, and that stylesheet's first line @imports Archivo
+  // Narrow from fonts.googleapis.com — render-blocking, across serial
+  // third-party origins. The server plugin self-hosts a patched copy (local
+  // woff2 @font-face in place of the @import) under /shell/fonts/, so point
+  // the <link> there before either write path parses the markup.
+  //
+  // String-level on purpose: it has to cover both the JEL-1832 string fast
+  // path and the DOMParser path, and it runs AFTER the localStorage index
+  // cache is read, so the cached markup stays pristine upstream bytes.
+  // The Inter/Sora half of the boot's font pull lives in the JS-Injector
+  // theme-css entry and is repointed there (jsi-jp710-patch.mjs), not here.
+  //
+  // Kill switch: localStorage["jellyfin.shell.selfFontsDisabled"]="1"
+  // restores the stock jsdelivr/Google chain — also the escape hatch if the
+  // plugin serving this shell somehow predates /shell/fonts/ (that mismatch
+  // otherwise costs the media-bar skin its stylesheet, not the boot).
+  function rewriteFontThirdPartyCss(html, serverUrl) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.selfFontsDisabled") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      return String(html).replace(
+        /https:\/\/cdn\.jsdelivr\.net\/[^"' ]*slideshowpure[^"' ]*\.css/g,
+        String(serverUrl).replace(/\/+$/, "") +
+          "/shell/fonts/mediabar-slideshowpure.css",
+      );
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     // JELA-67: opt-in Lite canvas home — when it boots from the LS byte
     // cache, the SPA below never loads this boot (OK/Back hands off).
@@ -7370,7 +7406,7 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = results[0];
+        var html = rewriteFontThirdPartyCss(results[0], serverUrl);
         var upstreamCfg = results[1];
         // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
         // (~200-500 ms on Chromium 56) when caches are primed.

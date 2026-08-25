@@ -98,7 +98,8 @@ assert.ok(
   "the gzip body must be gated on BOTH its existence and an explicit client opt-in",
 );
 assert.ok(
-  /\}\s*\n\s*return Tagged\(bytes, sha256\);/.test(ctrl),
+  // JELA-710 added the contentType arg (fonts/css routes reuse the helper).
+  /\}\s*\n\s*return Tagged\(bytes, sha256, contentType\);/.test(ctrl),
   "ContentAddressed must still have an unconditional raw-bytes return — M63 TVs must never be handed bytes they cannot inflate",
 );
 
@@ -156,7 +157,7 @@ assert.ok(
   "Vary must include Origin — otherwise M63 hands a no-cors <script> cache entry to a CORS fetch() of the same ?v= url and the fetch fails permanently under immutable",
 );
 assert.ok(
-  /Tagged\(gzip, sha256 \+ "-gzip"\)/.test(ctrl),
+  /Tagged\(gzip, sha256 \+ "-gzip", contentType\)/.test(ctrl),
   "the compressed representation needs its own ETag, distinct from the identity one — an entity tag identifies a representation, not a resource",
 );
 assert.ok(

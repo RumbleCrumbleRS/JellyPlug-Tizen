@@ -46,6 +46,8 @@ public class ShellDropService
         _babelGzip = LazyGzip(BabelBytes);
         _liteGzip = LazyGzip(LiteBytes);
 
+        FontAssets = LoadFontAssets();
+
         var shellVersion = ExtractShellVersion(Encoding.UTF8.GetString(ShellBytes));
 
         // liteSha256 is ADDITIVE like the JELA-58 fingerprint fields: old
@@ -170,6 +172,63 @@ public class ShellDropService
             ["jellyfin.lite.native"] = config.LiteNativeDefaultOn ? "1" : "0",
             ["jellyfin.lite.subs"] = config.LiteSubsDefaultOn ? "1" : "0",
         };
+    }
+
+    /// <summary>
+    /// JELA-710: one served /shell/fonts/ body. WOFF2 bodies carry no gzip —
+    /// WOFF2 is Brotli inside, and gzip-over-woff2 comes back larger, which
+    /// <see cref="Gzip"/> already collapses to null; the two CSS bodies do
+    /// compress and get the usual lazy treatment.
+    /// </summary>
+    public sealed class FontAsset
+    {
+        public FontAsset(byte[] bytes, string sha256, string contentType, Lazy<byte[]?> gzip)
+        {
+            Bytes = bytes;
+            Sha256 = sha256;
+            ContentType = contentType;
+            _gzip = gzip;
+        }
+
+        private readonly Lazy<byte[]?> _gzip;
+
+        public byte[] Bytes { get; }
+
+        public string Sha256 { get; }
+
+        public string ContentType { get; }
+
+        public byte[]? GzipBytes => _gzip.Value;
+    }
+
+    /// <summary>
+    /// JELA-710: the self-hosted webfont drop, keyed by served file name
+    /// (e.g. "inter-v20-400-latin.woff2", "inter-sora.css"). Contents come
+    /// from the embedded Resources/fonts/ directory; regenerate it with
+    /// scripts/fetch-webfonts.py.
+    /// </summary>
+    public IReadOnlyDictionary<string, FontAsset> FontAssets { get; }
+
+    private static Dictionary<string, FontAsset> LoadFontAssets()
+    {
+        const string prefix = "JellyPlugShell.Resources.fonts.";
+        var assets = new Dictionary<string, FontAsset>(StringComparer.Ordinal);
+        foreach (var resource in Assembly.GetExecutingAssembly().GetManifestResourceNames())
+        {
+            if (!resource.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var name = resource[prefix.Length..];
+            var bytes = ReadResource(resource);
+            var contentType = name.EndsWith(".css", StringComparison.Ordinal)
+                ? "text/css; charset=utf-8"
+                : "font/woff2";
+            assets[name] = new FontAsset(bytes, Sha256Hex(bytes), contentType, LazyGzip(bytes));
+        }
+
+        return assets;
     }
 
     /// <summary>The official @babel/standalone UMD source used for server-side transforms.</summary>

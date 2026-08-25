@@ -138,8 +138,10 @@ assert.ok(
   "the tag must be passed as File(..., entityTag:) — that is what makes MVC answer 304",
 );
 assert.ok(
-  /return Tagged\(gzip, sha256 \+ "-gzip"\);/.test(body) &&
-    /return Tagged\(bytes, sha256\);/.test(body),
+  // JELA-710 threads the asset's content type through (fonts/css are not
+  // application/javascript); the sha-derived tags are unchanged.
+  /return Tagged\(gzip, sha256 \+ "-gzip", contentType\);/.test(body) &&
+    /return Tagged\(bytes, sha256, contentType\);/.test(body),
   "ContentAddressed must return through Tagged on BOTH the gzip and identity paths, each under this asset's sha256",
 );
 assert.ok(
