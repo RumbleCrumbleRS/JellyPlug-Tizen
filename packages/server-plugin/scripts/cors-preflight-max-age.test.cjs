@@ -83,7 +83,9 @@ assert.ok(
   "preflight gate must require Access-Control-Request-Method — a bare OPTIONS is not a preflight",
 );
 assert.ok(
-  /!StringValues\.IsNullOrEmpty\(headers\.AccessControlAllowOrigin\)/.test(filter),
+  /!StringValues\.IsNullOrEmpty\(headers\.AccessControlAllowOrigin\)/.test(
+    filter,
+  ),
   "must require an Access-Control-Allow-Origin on the response — never decorate a CORS refusal",
 );
 assert.ok(

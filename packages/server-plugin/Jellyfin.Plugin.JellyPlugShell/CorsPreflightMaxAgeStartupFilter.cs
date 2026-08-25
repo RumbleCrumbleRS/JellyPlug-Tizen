@@ -7,19 +7,31 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 
 /// <summary>
 /// JELA-709: append <c>Access-Control-Max-Age</c> to every CORS preflight the
-/// server approves, so a TV pays one preflight per (origin, method, headers)
-/// per cache window instead of one per request.
+/// server approves, so a TV that re-fetches the same URL pays one preflight
+/// per cache window instead of one per fetch.
 ///
-/// Why this matters: the WGT bootstrap's origin is never the API's origin, so
-/// every Jellyfin API call the app makes is cross-origin, and every one
-/// carries <c>X-Emby-Authorization</c> — not a CORS-safelisted header, so
-/// every call is preflight + real request, two serialized round trips. The
-/// server answers those preflights with no max-age, and the Fetch spec's
-/// fallback is FIVE SECONDS, which on a multi-minute TV boot means the same
-/// endpoint is preflighted again and again: 98 of 555 requests (17.7%) in the
-/// JELA-706 cold-boot waterfall were preflights. At household-Wi-Fi RTT that
-/// is seconds of pure serialized latency that shows up as neither bytes nor
-/// server CPU — invisible to every byte- and request-count sweep before it.
+/// Why any of this exists: the WGT bootstrap's origin is never the API's
+/// origin, so every Jellyfin API call the app makes is cross-origin, and every
+/// one carries <c>X-Emby-Authorization</c> — not a CORS-safelisted header, so
+/// every call is preflight + real request, two serialized round trips. Roughly
+/// 100 of a boot's requests are preflights (17.7% cold, 31.3% warm).
+///
+/// MEASURE FIRST — this header collapses far less of that than the ticket
+/// assumed, and the reason is the cache key. A CORS-preflight cache entry is
+/// keyed on the FULL URL, query string included (Fetch: "url is request's
+/// current URL"), not on (origin, method, header-set). Probed directly on the
+/// M63 engine: fetching <c>/api/items?q=1</c> twice costs one preflight, but
+/// <c>?q=2</c>, and the same path with no query, each cost another — with and
+/// without a max-age alike. So only a repeat of a byte-identical URL is ever
+/// collapsible. Across six JELA-736 boot captures, 90–95 of the ~100
+/// preflights are distinct URLs; the collapsible remainder is 5–8 per boot.
+/// The header's own mechanism does work — same URL across a 20 s gap is one
+/// preflight with max-age=600 and two without — the population it can help is
+/// just small. Budget this at 5–8 saved round trips per boot (a few hundred ms
+/// at household-Wi-Fi RTT), plus whatever repeats a browsing session adds. The
+/// lever that would actually remove the other ~92 is not a response header at
+/// all: it is not sending a non-safelisted request header, or not being
+/// cross-origin.
 ///
 /// Why an <see cref="IStartupFilter"/> and not a response header on our
 /// controller: a preflight OPTIONS never reaches ANY controller — Jellyfin's
