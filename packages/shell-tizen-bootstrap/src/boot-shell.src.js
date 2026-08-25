@@ -440,7 +440,7 @@
           total = 0;
         for (i = 0; i < keys.length; i++)
           total += (items[keys[i]] && items[keys[i]].size) || 0;
-        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0; ) {
+        for (; total > STYLESHEET_TOTAL_MAX && keys.length > 0;) {
           var biggestKey = null,
             biggestSize = 0;
           for (i = 0; i < keys.length; i++) {
@@ -3169,10 +3169,11 @@
       // network request. Every caller — the leader included — gets its OWN
       // Response synthesized from the leader's snapshotted status/headers/
       // body, so a body is never consumed twice and no caller can drain
-      // another's. NOTHING is cached: the slot is released the moment the
-      // leader's body is read, so a later GET always re-fetches and there is
-      // no staleness window to reason about. A leader that rejects replays
-      // each waiter on the real network (worst case = today's behaviour).
+      // another's. Nothing was cached in the JELA-724 shape: the slot was
+      // released the moment the leader's body was read, so a later GET always
+      // re-fetched. JELA-752 adds a bounded replay window on top of that —
+      // see change 4 below. A leader that rejects replays each waiter on the
+      // real network (worst case = today's behaviour).
       //
       // Allowlisted rather than global on purpose. The leader's body is
       // snapshotted to text, so a global list would buffer arbitrary
@@ -3184,8 +3185,10 @@
       // Field-tunable without a shell release:
       // localStorage['jellyfin.shell.fetchCoalescePaths'] appends
       // comma-separated paths (each must start with "/", 32 max).
+      // localStorage['jellyfin.shell.fetchCoalesceWindowMs'] sets the JELA-752
+      // replay window in ms (0..2000; 0 = in-flight only, the JELA-724 shape).
       // Kill-switch: localStorage['jellyfin.shell.fetchCoalesceDisabled']='1'.
-      // Counters: window.__shellFC {on,n,lead,join,serve,rep,err}.
+      // Counters: window.__shellFC {on,n,w,lead,join,win,serve,rep,hdr,fl,err}.
       // Installed BEFORE the api-warm patch below, so the warm store still
       // gets first refusal and only its fallthrough reaches the coalescer.
       // JELA-752: the SAME machinery, widened to the item-detail route.
@@ -3228,6 +3231,28 @@
       //     so those never share a slot. Anything we cannot parse counts as
       //     unsafe and passes through.
       //
+      //  4. A bounded REPLAY WINDOW, because a pure in-flight join is
+      //     self-limiting. Measured: with the join on, the /Users/{u}/Items/{id}
+      //     responses get FASTER (152 -> 70 ms), so the surviving calls stop
+      //     overlapping at all (spans 0-70 / 78-139 / 217-274 ms) and the later
+      //     two can no longer be joined — a faster leader releases its slot
+      //     sooner, which is exactly why "concurrent today" does not mean
+      //     "collapsible to 1". A/B arm=on n=9 opens stalled at 4 extras per
+      //     movie open against an AC2 target of <=2. So the leader's snapshot
+      //     is now HELD in its slot for a short window after it settles
+      //     (default 400 ms; the whole duplicate burst spans ~274 ms) and
+      //     replayed to any later identical GET.
+      //
+      //     The staleness this buys is bounded three ways: only 2xx snapshots
+      //     are held (an opaque no-cors response has status 0 and is dropped
+      //     at once), the window is <= 2 s and is disabled entirely by setting
+      //     localStorage['jellyfin.shell.fetchCoalesceWindowMs']='0' (which
+      //     restores the exact JELA-724 behaviour), and ANY mutation flushes
+      //     the whole map — a non-GET/HEAD request over fetch OR over XHR, so
+      //     a "mark watched" POST followed by a re-read of /Users/*/Items/*
+      //     cannot be served the pre-mutation body. XHR is hooked here only
+      //     for that flush; joining XHR itself is out of scope.
+      //
       // Not fixed here, deliberately: /Items/{id}/ThemeMedia is issued twice
       // per open over XMLHttpRequest, not fetch (confirmed by an in-page
       // transport probe), so a fetch-level join cannot see it. It is the single
@@ -3235,7 +3260,15 @@
       'if(!flg("jellyfin.shell.fetchCoalesceDisabled")&&!W.__shellFC&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
       'var FCL=["/PluginPages/User","/Users/*/Items/*","/Users/*/Items","/Items/*/Similar","/JellyfinEnhanced/tag-cache/*","/JellyfinEnhanced/user-settings/*/settings.json","/JellyfinEnhanced/tmdb/*/*/reviews","/JellyfinEnhanced/jellyseerr/user-status","/Shows/*/Seasons","/Shows/NextUp","/LiveTv/Programs"];' +
       'try{var fcx=String(localStorage.getItem("jellyfin.shell.fetchCoalescePaths")||"").replace(/\\s+/g,"").split(","),fci;for(fci=0;fci<fcx.length;fci++)if(fcx[fci].charAt(0)==="/"&&FCL.length<32)FCL.push(fcx[fci])}catch(_){}' +
-      "var FC=W.__shellFC={on:1,n:FCL.length,lead:0,join:0,serve:0,rep:0,hdr:0,err:0},fcQ={};" +
+      // JELA-752 replay window, ms. Anything unparseable or out of range keeps
+      // the default; "0" restores the JELA-724 in-flight-only behaviour.
+      'var fcW=400;try{var fcwv=localStorage.getItem("jellyfin.shell.fetchCoalesceWindowMs");' +
+      'if(fcwv!==null&&fcwv!==""){fcwv=parseInt(fcwv,10);if(fcwv>=0&&fcwv<=2000)fcW=fcwv}}catch(_){}' +
+      "var FC=W.__shellFC={on:1,n:FCL.length,w:fcW,lead:0,join:0,win:0,serve:0,rep:0,hdr:0,fl:0,err:0},fcQ={},fcS={};" +
+      // Any mutation drops every held snapshot — see change 4 above. In-flight
+      // leaders are dropped from the map too; they still settle, and fcRel's
+      // identity check keeps them from evicting a slot they no longer own.
+      "var fcFl=function(){try{fcQ={};fcS={};FC.fl++}catch(_){FC.err++}};" +
       // Precompute the matcher once: plain entries keep the JELA-724 suffix
       // test, "*" entries become a segment array matched against the path tail.
       'var FCP=[],fcb,fcp,fca;for(fcb=0;fcb<FCL.length;fcb++){fcp=FCL[fcb];if(fcp.indexOf("*")<0){FCP.push({w:0,p:fcp})}else{fca=fcp.split("/");if(fca[0]==="")fca=fca.slice(1);FCP.push({w:1,a:fca})}}' +
@@ -3259,20 +3292,38 @@
       'return{s:fr.status,x:fr.statusText||"",h:fhs,b:ft}})};' +
       "var fcMk=function(fd){var fst=fd.s||200;" +
       "return new Response(fst===204||fst===205||fst===304?null:fd.b,{status:fst,statusText:fd.x,headers:fd.h})};" +
+      // Slot release. Only a 2xx snapshot is held, and only for fcW ms; every
+      // other outcome frees the slot at once, exactly as JELA-724 did. The
+      // fcQ[fkx]!==fex guard is what makes fcFl() safe: once a flush (or an
+      // earlier expiry) has replaced the map, this leader owns nothing and
+      // must not evict whoever does.
+      "var fcRel=function(fkx,fex,fd){try{if(fcQ[fkx]!==fex)return;" +
+      "if(!fcW||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
+      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fcW)}" +
+      "catch(_){FC.err++;try{delete fcQ[fkx]}catch(__){}}};" +
       "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
-      'if(typeof fu==="string"&&!(fo&&(fo.body||fo.signal))&&(fo&&fo.method?String(fo.method).toUpperCase():"GET")==="GET"){' +
+      'var fcm=fo&&fo.method?String(fo.method).toUpperCase():"GET";' +
+      'if(fcm!=="GET"&&fcm!=="HEAD"){fcFl()}' +
+      'else if(fcm==="GET"&&typeof fu==="string"&&!(fo&&(fo.body||fo.signal))){' +
       "var fk=fcK(fu);" +
       'if(fk&&fcUns(fo)){FC.hdr++;fk=""}' +
       // (method, credentials, mode, full URL) — unset credentials/mode
       // normalise to the fetch defaults so they join their explicit twins.
       'if(fk)fk="GET "+(fo&&fo.credentials?String(fo.credentials):"same-origin")+" "+(fo&&fo.mode?String(fo.mode):"cors")+" "+fk;' +
       "if(fk){var fe=fcQ[fk];" +
-      "if(fe){FC.join++;return fe.then(function(fd){FC.serve++;return fcMk(fd)},function(){FC.rep++;return fcF.call(W,fu,fo)})}" +
+      "if(fe){if(fcS[fk])FC.win++;else FC.join++;" +
+      "return fe.then(function(fd){FC.serve++;return fcMk(fd)},function(){FC.rep++;return fcF.call(W,fu,fo)})}" +
       "FC.lead++;" +
-      "fe=fcQ[fk]=fcF.call(W,fu,fo).then(fcSnap).then(function(fd){delete fcQ[fk];return fd},function(fer){delete fcQ[fk];throw fer});" +
+      "fe=fcQ[fk]=fcF.call(W,fu,fo).then(fcSnap).then(function(fd){fcRel(fk,fe,fd);return fd},function(fer){if(fcQ[fk]===fe)delete fcQ[fk];throw fer});" +
       "return fe.then(function(fd){FC.serve++;return fcMk(fd)})}}" +
       "}catch(_){FC.err++}" +
-      "return fcF.apply(W,arguments)}" +
+      "return fcF.apply(W,arguments)};" +
+      // XHR is hooked ONLY so a non-GET over XHR flushes the held snapshots —
+      // the legacy apiclient does not send every mutation over fetch. Joining
+      // XHR GETs is deliberately out of scope (see ThemeMedia below).
+      "try{var FPX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(FPX&&FPX.open){var fxO=FPX.open;" +
+      'FPX.open=function(fxm){try{var fxv=String(fxm||"").toUpperCase();if(fxv!=="GET"&&fxv!=="HEAD")fcFl()}catch(_){FC.err++}' +
+      "return fxO.apply(this,arguments)}}}catch(_){FC.err++}" +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'

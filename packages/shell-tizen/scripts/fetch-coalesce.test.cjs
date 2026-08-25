@@ -14,8 +14,15 @@
  *   - default ON: N concurrent identical allowlisted GETs -> ONE network
  *     call; every caller (leader included) gets its OWN Response whose body
  *     is independently readable, with the leader's status/headers preserved
- *   - NOT a cache: the slot is released when the leader's body is read, so a
- *     later GET goes to the network again (no staleness window)
+ *   - JELA-752 replay window: the leader's snapshot is held for a bounded
+ *     window after it settles (default 400 ms), because a pure in-flight join
+ *     is self-limiting — joining makes the leader faster, so the follow-on
+ *     calls stop overlapping and can no longer be joined. Pinned: the replay
+ *     itself, the window's EXPIRY, that only 2xx is held (503 and opaque
+ *     status-0 are not), the 0..2000 clamp, that windowMs='0' restores the
+ *     exact JELA-724 in-flight-only shape, that ANY mutation over fetch OR
+ *     XHR flushes every held snapshot, and that a flush mid-flight cannot
+ *     make a now-ownerless leader evict its successor's slot
  *   - scope: non-allowlisted paths, POSTs, bodies, AbortSignals and Request
  *     objects are never coalesced and reach the network untouched
  *   - a leader that rejects replays every waiter on the real network
@@ -260,6 +267,18 @@ function makeEnv(opts) {
         p = p.then(() => new Promise((r) => setImmediate(r)));
       return p;
     },
+    // JELA-752: fire every one-shot timer due within `ms`, so the replay
+    // window's EXPIRY is asserted rather than waited on.
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of Array.from(timers)) {
+        if (!t.repeat && t.next <= now) {
+          timers.delete(id);
+          t.cb();
+        }
+      }
+      return env.drain();
+    },
     run() {
       new Function(
         "window",
@@ -363,11 +382,14 @@ async function main() {
     },
   );
 
-  // ---- 2. in-flight only: NOT a cache -------------------------------------
+  // ---- 2. windowMs='0' restores the JELA-724 in-flight-only shape ---------
   await check(
-    "released after the leader settles (no staleness window)",
+    "windowMs=0: released the moment the leader settles (no staleness window)",
     async () => {
-      const env = makeEnv().run();
+      const env = makeEnv({
+        store: { "jellyfin.shell.fetchCoalesceWindowMs": "0" },
+      }).run();
+      assert.strictEqual(env.window.__shellFC.w, 0, "window read off as 0");
       const a = env.window.fetch(URL_PP);
       await env.serve(env.net[0], PAYLOAD);
       await a;
@@ -379,6 +401,148 @@ async function main() {
         "counted as a new leader",
       );
       assert.strictEqual(env.window.__shellFC.join, 0, "no join");
+      assert.strictEqual(env.window.__shellFC.win, 0, "no replay");
+    },
+  );
+
+  // ---- 2b. JELA-752 replay window ----------------------------------------
+  // A pure in-flight join is self-limiting: the join makes the leader FASTER,
+  // so the follow-on calls stop overlapping and can no longer be joined. The
+  // window is what collapses the measured /Users/{u}/Items/{id} x4.
+  await check(
+    "default window: a GET after the leader settles is replayed, not refetched",
+    async () => {
+      const env = makeEnv().run();
+      assert.strictEqual(env.window.__shellFC.w, 400, "default window is 400");
+      const a = env.window.fetch(URL_PP);
+      await env.serve(env.net[0], PAYLOAD, { status: 201 });
+      assert.strictEqual(await (await a).text(), PAYLOAD, "leader body intact");
+
+      const b = env.window.fetch(URL_PP);
+      await env.drain();
+      assert.strictEqual(env.net.length, 1, "no second network call");
+      const rb = await b;
+      assert.strictEqual(rb.status, 201, "replayed status preserved");
+      assert.strictEqual(await rb.text(), PAYLOAD, "replayed body readable");
+      assert.strictEqual(env.window.__shellFC.win, 1, "counted as a replay");
+      assert.strictEqual(env.window.__shellFC.join, 0, "not an in-flight join");
+      assert.strictEqual(env.window.__shellFC.lead, 1, "still one leader");
+    },
+  );
+
+  await check("the window EXPIRES and the next GET re-fetches", async () => {
+    const env = makeEnv().run();
+    const a = env.window.fetch(URL_PP);
+    await env.serve(env.net[0], PAYLOAD);
+    await a;
+    await env.advance(399);
+    env.window.fetch(URL_PP);
+    await env.drain();
+    assert.strictEqual(env.net.length, 1, "still held at 399 ms");
+    await env.advance(2);
+    env.window.fetch(URL_PP);
+    await env.drain();
+    assert.strictEqual(env.net.length, 2, "re-fetched after 400 ms");
+    assert.strictEqual(env.window.__shellFC.lead, 2, "a new leader");
+  });
+
+  await check("a non-2xx snapshot is never held", async () => {
+    const env = makeEnv().run();
+    const a = env.window.fetch(URL_PP);
+    await env.serve(env.net[0], "nope", { status: 503 });
+    await a;
+    env.window.fetch(URL_PP);
+    await env.drain();
+    assert.strictEqual(env.net.length, 2, "503 re-fetched immediately");
+    assert.strictEqual(env.window.__shellFC.win, 0, "nothing replayed");
+  });
+
+  await check("an opaque (status 0) response is never held", async () => {
+    const env = makeEnv().run();
+    const a = env.window.fetch(URL_PP, { mode: "no-cors" });
+    await env.serve(env.net[0], "", { status: 0 });
+    await a;
+    env.window.fetch(URL_PP, { mode: "no-cors" });
+    await env.drain();
+    assert.strictEqual(env.net.length, 2, "opaque re-fetched immediately");
+  });
+
+  await check(
+    "windowMs is clamped: out-of-range and junk keep the default",
+    async () => {
+      for (const v of ["-1", "2001", "abc", ""]) {
+        const env = makeEnv({
+          store: { "jellyfin.shell.fetchCoalesceWindowMs": v },
+        }).run();
+        assert.strictEqual(
+          env.window.__shellFC.w,
+          400,
+          "kept default for " + JSON.stringify(v),
+        );
+      }
+      const env = makeEnv({
+        store: { "jellyfin.shell.fetchCoalesceWindowMs": "1500" },
+      }).run();
+      assert.strictEqual(env.window.__shellFC.w, 1500, "in-range value taken");
+    },
+  );
+
+  // ---- 2c. a mutation invalidates every held snapshot ---------------------
+  // This is what bounds the staleness the window buys: a "mark watched" POST
+  // followed by a re-read of the same item must NOT be served the pre-mutation
+  // body. Both transports flush, because the legacy apiclient does not send
+  // every mutation over fetch.
+  await check("a POST over fetch flushes the held snapshots", async () => {
+    const env = makeEnv().run();
+    const a = env.window.fetch(URL_PP);
+    await env.serve(env.net[0], PAYLOAD);
+    await a;
+    env.window.fetch("http://srv/Items/x/PlayedItems", {
+      method: "POST",
+      body: "{}",
+    });
+    assert.strictEqual(env.window.__shellFC.fl, 1, "flush counted");
+    assert.strictEqual(env.net.length, 2, "the POST itself reached the net");
+    env.window.fetch(URL_PP);
+    await env.drain();
+    assert.strictEqual(env.net.length, 3, "post-mutation GET re-fetched");
+    assert.strictEqual(env.window.__shellFC.win, 0, "nothing replayed");
+  });
+
+  await check("a POST over XHR flushes the held snapshots", async () => {
+    const env = makeEnv().run();
+    const a = env.window.fetch(URL_PP);
+    await env.serve(env.net[0], PAYLOAD);
+    await a;
+    const x = new env.window.XMLHttpRequest();
+    x.open("POST", "http://srv/Items/x/PlayedItems");
+    assert.strictEqual(env.window.__shellFC.fl, 1, "flush counted");
+    env.window.fetch(URL_PP);
+    await env.drain();
+    assert.strictEqual(env.net.length, 2, "post-mutation GET re-fetched");
+    const y = new env.window.XMLHttpRequest();
+    y.open("GET", "http://srv/anything");
+    assert.strictEqual(env.window.__shellFC.fl, 1, "a GET over XHR is inert");
+  });
+
+  await check(
+    "a flush mid-flight cannot make the leader evict its successor",
+    async () => {
+      const env = makeEnv().run();
+      const a = env.window.fetch(URL_PP); // leader 1, still in flight
+      env.window.fetch("http://srv/x", { method: "DELETE" }); // flush
+      const b = env.window.fetch(URL_PP); // leader 2 (map was cleared)
+      assert.strictEqual(env.net.length, 3, "GET, DELETE, GET");
+      await env.serve(env.net[0], PAYLOAD); // leader 1 settles LAST-owner-less
+      await a;
+      // Leader 2 still owns the slot, so a third GET must join/replay it,
+      // never open a fourth connection.
+      await env.serve(env.net[2], PAYLOAD);
+      await b;
+      env.window.fetch(URL_PP);
+      await env.drain();
+      assert.strictEqual(env.net.length, 3, "leader 2's slot survived");
+      assert.strictEqual(env.window.__shellFC.err, 0, "no errors");
     },
   );
 
