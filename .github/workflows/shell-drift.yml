@@ -1,0 +1,133 @@
+# Scheduled drift guard: alert when the live /shell/ sha stops matching main
+# (JELA-697, split out of JELA-687 item 4).
+#
+# Why: production once sat two shell releases behind main (1.0.88 live vs
+# 1.0.90) for an unknown length of time, and every perf number taken in that
+# window was measured against a shell nobody was developing against. The
+# comparison itself already exists — tooling/ci/verify-shell-deploy.sh — this
+# workflow just runs it on a schedule and turns a mismatch into a visible
+# GitHub issue instead of a silent fact.
+#
+# Design constraints (from JELA-697):
+#   - SCHEDULED, NOT A PR GATE. The server being briefly unreachable must
+#     never turn unrelated PRs red, so this is schedule/dispatch-only and an
+#     unreachable server is a green run with a warning — only a *confirmed*
+#     sha mismatch fails the run and files/updates the drift issue.
+#   - The live server URL is a personal endpoint that must never be committed
+#     (JEL-139 guard). It enters only via the JELLYFIN_URL repo secret, and
+#     issue bodies carry shas/versions only, never the URL. Note the manifest
+#     endpoint is unauthenticated: JELLYFIN_URL is the ONLY secret needed —
+#     no API key.
+#   - Inert until configured: if the JELLYFIN_URL secret is absent (the repo
+#     currently has no secrets), every run is a green no-op with a notice.
+#     Merging this workflow therefore commits nobody to the secrets decision.
+#
+# Alert lifecycle: on drift, open a `shell-drift`-labeled issue (or comment on
+# the existing open one — one issue per drift episode, no spam); on match,
+# auto-close any open drift issue. The failed scheduled run additionally
+# notifies via GitHub's normal workflow-failure email.
+
+name: shell-drift
+
+on:
+  schedule:
+    # Daily. Off-minute per scheduling hygiene; bounds "nobody noticed" to ~1 day.
+    - cron: "43 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: shell-drift
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: live /shell/ sha vs main
+    runs-on: ubuntu-latest
+    env:
+      JELLYFIN_URL: ${{ secrets.JELLYFIN_URL }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Gate on JELLYFIN_URL secret
+        id: gate
+        run: |
+          if [ -z "$JELLYFIN_URL" ]; then
+            echo "::notice::JELLYFIN_URL secret not configured — drift guard is inert (see JELA-697 header of this workflow)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe live manifest and compare against main
+        id: probe
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          # Reachability pre-check, separate from the comparison: a flaky or
+          # sleeping server must read as "skipped", never as "drift".
+          if ! curl -fsS --retry 3 --retry-delay 15 --max-time 20 \
+              "${JELLYFIN_URL%/}/shell/manifest.json" -o /tmp/live-manifest.json; then
+            echo "::warning::server unreachable — drift check skipped this run (scheduled guard, not a gate)."
+            echo "status=unreachable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Manifest fields are remote-controlled: charset-filter them before
+          # they touch GITHUB_OUTPUT (no output-injection, no template quirks).
+          echo "live_sha=$(jq -r '.sha256 // "?"' /tmp/live-manifest.json | tr -cd 'a-fA-F0-9?' | head -c 64)" >> "$GITHUB_OUTPUT"
+          echo "live_version=$(jq -r '.version // "?"' /tmp/live-manifest.json | tr -cd 'a-zA-Z0-9._?-' | head -c 40)" >> "$GITHUB_OUTPUT"
+          echo "expected_sha=$(sha256sum packages/shell-tizen/src/shell.min.js | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # The comparison of record — same script the deploy runbook uses.
+          if tooling/ci/verify-shell-deploy.sh "$JELLYFIN_URL"; then
+            echo "status=match" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=drift" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the drift issue
+        if: steps.probe.outputs.status == 'drift'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.probe.outputs.expected_sha }}
+          LIVE_SHA: ${{ steps.probe.outputs.live_sha }}
+          LIVE_VERSION: ${{ steps.probe.outputs.live_version }}
+        run: |
+          set -euo pipefail
+          gh label create shell-drift --force --color D93F0B \
+            --description "live /shell/ sha != main (JELA-697 scheduled guard)"
+          body=$(cat <<EOF
+          The scheduled drift guard found the live \`/shell/\` deploy out of sync with \`main\`.
+
+          | | sha256 |
+          | --- | --- |
+          | intended (\`main\` @ ${GITHUB_SHA}) | \`${EXPECTED_SHA}\` |
+          | live (version ${LIVE_VERSION}) | \`${LIVE_SHA}\` |
+
+          Every perf number taken while this is open is measured against a shell nobody is developing against (the JELA-687 failure mode). Fix: publish/deploy per \`docs/deploy-runbook.md\`, then this guard auto-closes the issue on the next matching run.
+
+          Probe run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          )
+          existing=$(gh issue list --state open --label shell-drift --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "::error::shell drift persists — updated issue #$existing"
+          else
+            new_url=$(gh issue create --title "shell drift: live /shell/ does not match main" \
+              --label shell-drift --body "$body")
+            echo "::error::shell drift detected — opened $new_url"
+          fi
+          exit 1
+
+      - name: Auto-close drift issue on match
+        if: steps.probe.outputs.status == 'match'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --state open --label shell-drift --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Live /shell/ sha matches \`main\` again (guard run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) — auto-closing."
+          done
