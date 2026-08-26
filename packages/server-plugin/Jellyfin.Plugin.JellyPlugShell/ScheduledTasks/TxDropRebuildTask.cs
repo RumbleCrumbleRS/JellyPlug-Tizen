@@ -131,6 +131,7 @@ public class TxDropRebuildTask : IScheduledTask
         progress.Report(35);
         var timeout = TimeSpan.FromSeconds(Math.Max(30, config.TransformTimeoutSeconds));
         var result = await _builder.RebuildAsync(sources, timeout, cancellationToken).ConfigureAwait(false);
+        _drop.ResetTxGzipCache(); // JELA-708: the rebuild may have (re)written bodies the per-hash gzip cache still holds
         _logger.LogInformation("tx-drop rebuild finished: {Entries} manifest entries from {Sources} sources", result.EntryCount, sources.Count);
 
         // JELA-186: the static bodies above inject further module scripts at
@@ -147,6 +148,7 @@ public class TxDropRebuildTask : IScheduledTask
             {
                 progress.Report(75);
                 var dynResult = await _builder.RebuildAsync(discovered, timeout, cancellationToken).ConfigureAwait(false);
+                _drop.ResetTxGzipCache();
                 _logger.LogInformation(
                     "tx-drop dynamic scan: {Discovered} module bodies discovered; manifest now {Entries} entries",
                     discovered.Count,
