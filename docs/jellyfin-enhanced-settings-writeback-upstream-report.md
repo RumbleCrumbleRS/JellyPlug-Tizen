@@ -1,8 +1,8 @@
 # Upstream report — `n00bcodr/Jellyfin-Enhanced`
 
-**Status: DRAFT (JELA-766) — not yet filed.** On acceptance, file on
-`n00bcodr/Jellyfin-Enhanced` via `gh api repos/n00bcodr/Jellyfin-Enhanced/issues`
-from RumbleCrumbleRS, then flip this header to FILED with the link (same route as
+**Status: FILED (JELA-766) —
+[n00bcodr/Jellyfin-Enhanced#781](https://github.com/n00bcodr/Jellyfin-Enhanced/issues/781),
+filed 2026-08-26.** Body below is verbatim what was filed (same route as
 `docs/imageloader-worker-upstream-report.md`, JELA-701, and the two JELA-734
 drafts).
 
