@@ -160,4 +160,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// an upstream release that changes what the section means.
     /// </summary>
     public bool DisableLatestShowsFastPath { get; set; }
+
+    /// JELA-709 kill switch: stop appending Access-Control-Max-Age to
+    /// approved CORS preflight responses. Default false (header on): the
+    /// header only lets a browser reuse a preflight verdict it already got,
+    /// for at most 600 s, and the filter never overwrites a max-age some
+    /// other layer set. Read per-response — flipping it needs no restart.
+    /// </summary>
+    public bool DisableCorsPreflightMaxAge { get; set; }
 }
