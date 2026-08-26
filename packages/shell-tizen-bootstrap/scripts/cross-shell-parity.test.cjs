@@ -197,12 +197,16 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet adds CSS:/FP: HUD rows and inlines the drop-miss __ensureBabel gate per call site (__dp/pre pattern); retail routes both dynamic call sites through the shared __txResolve helper (same drop-miss lazy-babel semantics since JELA-183, different shape)",
-    // JELA-753: re-pinned — both shells' seeds gained the home-resume
-    // controller cache on top of the JELA-707 paint-gated JellyfinEnhanced
-    // re-injector (identical blocks; the hashes still differ for the
-    // pre-existing reasons above).
-    retail: "cc83a210f12c6ba8",
-    boot: "435ba5799a146102",
+    // JELA-707: re-pinned — both shells' seeds gained the paint-gated
+    // JellyfinEnhanced re-injector (identical block; the hashes still
+    // differ for the pre-existing reasons above).
+    // JELA-748: re-pinned again — both shells gained __qeB (the swallowed-
+    // localStorage-write counter behind the beacon's tx.qe) and route
+    // __txSet's exhausted quota path through it.
+    // JELA-753: re-pinned again — both shells' seeds gained the home-resume
+    // controller cache (identical block).
+    retail: "0ccf27a8b058abfd",
+    boot: "0adcef19afeb89d0",
   },
   {
     name: "buildDiagSeedScript",
