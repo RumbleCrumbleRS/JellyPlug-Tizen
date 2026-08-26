@@ -60,8 +60,11 @@
  *   PATCH_PICKS   (top-picks)
  *   PATCH_MYLIST  (my-list)
  *   PATCH_GENRES  (genre-rows)     arm that module's apply with the store.
- *   PATCH_TOP10   (top10-badges)   defined, tested, and HELD BACK — see the
- *                                  comment on PATCHES for the measured reason.
+ *   PATCH_TOP10   (top10-badges)   arm a wrapper that warms the module's own
+ *                                  fetch latch (`Me()`) pre-DOM, then calls
+ *                                  the apply — bare `X()` cannot fetch until
+ *                                  the container exists. See the comment on
+ *                                  PATCH_TOP10 (JELA-747).
  *
  * ---------------------------------------------------------------------------
  * Why the mount cannot break, and why a row cannot go missing
@@ -160,9 +163,10 @@ export const ROW_PREFETCH_SRC =
   'function on(){try{return!!(s.localStorage&&s.localStorage.getItem(F)==="1")}catch(e){return!1}}' +
   "function uid(){try{var a=s.ApiClient;" +
   'return a&&a.getCurrentUserId?String(a.getCurrentUserId()||""):""}catch(e){return""}}' +
-  "function run(u){for(var i=0;i<R.length;i++){var r=R[i];" +
+  "function run(u){var h=\"\";try{h=String(s.location.hash||\"\")}catch(e0){}" +
+  "for(var i=0;i<R.length;i++){var r=R[i];" +
   "if(r.uid===u)continue;" +
-  "r.uid=u;fired++;" +
+  "r.uid=u;r.h=h;fired++;" +
   "var p=null;try{p=r.fn(u)}catch(e){p=null}" +
   'if(p&&typeof p.then=="function")try{p.then(null,function(){})}catch(e2){}}}' +
   "function pump(){H=null;if(!on())return;" +
@@ -177,7 +181,7 @@ export const ROW_PREFETCH_SRC =
   "if(H===null&&tr<=MX)try{H=(s.setTimeout||setTimeout)(pump,0)}catch(e){}" +
   "return!0}" +
   "function stats(){var o={flag:on(),fired:fired,polls:tr,mods:[]};" +
-  "for(var i=0;i<R.length;i++)o.mods.push({key:R[i].key,uid:R[i].uid});" +
+  "for(var i=0;i<R.length;i++)o.mods.push({key:R[i].key,uid:R[i].uid,h:R[i].h||null});" +
   "return o}" +
   "return{on:on,arm:arm,stats:stats}})()";
 
@@ -274,6 +278,23 @@ export const PATCH_MYLIST = {
   ],
 };
 
+/*
+ * top10-badges cannot be armed on its apply alone. `X()` reaches its fetch
+ * only through `we()`, and `we()` requires `Q()` to answer a section — which
+ * needs the home container in the DOM. So arming bare `X()` pre-render is a
+ * no-op: the fetch still waits for the debounce cascade (JELA-747 traced
+ * this; the +6,312 ms read on JELA-745's single pair has no code path behind
+ * it — that pass ran under loadavg 1.85→10.15 and top10's arm was inert).
+ *
+ * The fetch latch itself is NOT DOM-keyed: `Me()` keys `pe` on
+ * dayStamp:userId (`j(S())` is a day stamp off the clock — JELA-745 misread
+ * it as a DOM lookup). So the arm can warm `Me()` directly: the anchor sits
+ * inside `de()`'s closure, `Me` and the route guard `L` are in scope, and the
+ * later DOM-present `we()` re-enters the SAME in-flight `T` (same key) and
+ * mounts from it. `jpEmpty`/`jp473` cannot latch off this warm call — both
+ * are only ever set inside `we()`'s own then/catch, which the warm does not
+ * attach.
+ */
 export const PATCH_TOP10 = {
   entry: /top10-badges/i,
   edits: [
@@ -282,7 +303,14 @@ export const PATCH_TOP10 = {
       from: 'function Se(){R||V()}if(r.onMutation)r.onMutation(Se,"top10-badges")',
       to:
         "function Se(){R||V()}" +
-        armSrc("g", "top10-badges", "X") +
+        "/*jp745*/function jp745W(){" +
+        "var e=g.location;" +
+        "if(!(e&&!L(e.hash))){" +
+        "var p=Me();" +
+        'p&&typeof p.then=="function"&&p.then(null,function(){})' +
+        "}" +
+        "X()}/*jp745*/" +
+        armSrc("g", "top10-badges", "jp745W") +
         'if(r.onMutation)r.onMutation(Se,"top10-badges")',
     },
   ],
@@ -305,29 +333,17 @@ export const PATCH_GENRES = {
 };
 
 /*
- * PATCH_TOP10 is defined and unit-tested above but is deliberately NOT applied.
- *
- * On a matched warm rig pair (same snapshot, same patched channel, flag the
- * only difference — 282 cards and 18 rows in both arms) arming top10-badges
- * moved its query the WRONG way:
- *
- *   module           flag off   flag on     delta
- *   my-list             3,021     1,577    -1,444
- *   watch-it-again      3,190     1,735    -1,455
- *   top-picks           3,197     1,738    -1,459
- *   genre-rows          5,822     5,532      -290
- *   top10-badges        5,693    12,005    +6,312   <-- worse
- *
- * The mechanism is visible in the snippet: top10's fetch latch is keyed on
- * `pe = j(S()) + ":" + (m()||"")`, where `S()` is a DOM lookup for the source
- * row. Every other module in scope keys its latch on the user id alone. Called
- * before the home has rendered, `S()` answers null, so the early call latches
- * under a key that the real, DOM-present call does not match — and top10 also
- * carries `jpEmpty` / `jp473` "empty result" latches that a premature call can
- * arm. That is a state hazard, not a timing miss, so it is held out rather
- * than shipped dark and hoped for.
- *
- * Investigating that latch (and why genre-rows barely moves) is a follow-up.
+ * JELA-745 held PATCH_TOP10 back on a +6,312 ms read from a single matched
+ * pair (my-list −1,444, watch-it-again −1,455, top-picks −1,459, genre-rows
+ * −290, top10 5,693→12,005). JELA-747 re-derived that arm against the live
+ * body: the v1 arm (bare `X()`) was provably inert pre-render — `we()` gates
+ * the fetch on `Q()`, which needs both the home container and the user id —
+ * so no code path produces +6.3 s, and that pass ran under loadavg
+ * 1.85→10.15 with five sibling boots. The latch-mismatch story is also
+ * false: `S()` is the clock, `j(S())` a day stamp, and `pe` is keyed
+ * dayStamp:userId like every other module. v2 (above) warms `Me()` directly,
+ * which is what the other four arms effectively do. Confirm on a quiet-box
+ * pair (loadavg < 2) before flipping the prod flag.
  */
 export const PATCHES = [
   PATCH_STORE,
@@ -335,10 +351,11 @@ export const PATCHES = [
   PATCH_PICKS,
   PATCH_MYLIST,
   PATCH_GENRES,
+  PATCH_TOP10,
 ];
 
-/** Held out of PATCHES; see the comment above. Exported so the guard can pin it. */
-export const HELD_BACK = [PATCH_TOP10];
+/** Nothing held back since JELA-747; kept so guards can assert emptiness. */
+export const HELD_BACK = [];
 
 /** Apply one patch's edits. Throws unless every anchor matches exactly once. */
 export function applyPatch(body, patch) {

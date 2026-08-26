@@ -38,8 +38,9 @@
  *      spinning, and no request is made.
  *  10) USER SWITCH: the shipped user-change reset still refetches.
  *  11) IDEMPOTENT: a duplicate arm is refused; a module cannot double-fetch.
- *  11b) HELD BACK: top10-badges is defined and pinned but NOT applied — a
- *      matched warm rig pair measured its query moving 5,693 -> 12,005 ms.
+ *  11b) TOP10 V2: top10's arm warms the module's own uid-keyed fetch latch
+ *      pre-DOM (bare `X()` is inert pre-render — its fetch gates on the
+ *      container), and the debounced apply mounts from that latch.
  *  12) COMPOSES: jp738 and jp745 apply to tizen-compat in EITHER order.
  */
 "use strict";
@@ -113,6 +114,7 @@ const MODULES = [
     guard: "R",
     deb: "V",
     loadCall: true,
+    src: top10Src,
     anchor:
       'function Se(){R||V()}if(r.onMutation)r.onMutation(Se,"top10-badges")',
   },
@@ -160,6 +162,42 @@ function moduleSrc(m, tail) {
     `L.then(function(items){if(${m.win}.__container)st.mounted=items.length})` +
     `}` +
     (m.loadCall ? `${m.apply}();` : "") +
+    tail +
+    `})(GLOBAL)`
+  );
+}
+
+/**
+ * top10-badges needs its own stand-in: unlike the other four, its apply `X()`
+ * CANNOT fetch pre-render — the fetch is reached through `we()`, which gates
+ * on the container (`Q()` in the live body). Its latch `Me()` is keyed
+ * dayStamp:userId, exactly as shipped, and the v2 patch warms `Me()` behind
+ * the same route guard `L`. A generic fetch-on-uid stand-in here is how the
+ * v1 arm passed unit tests while being inert on the rig — this one keeps the
+ * gate.
+ */
+function top10Src(m, tail) {
+  return (
+    `(function(g){"use strict";` +
+    `var r=g.__ns;` +
+    `var R=!1,T=null,pe=null;` +
+    `var st={key:${JSON.stringify(m.key)},applied:0,fetched:0,fetchedAt:[],mounted:-1};` +
+    `g.__stats=st;` +
+    `function L(h){return g.__home}` + // route guard, fail-open shape
+    `function mm(){var a=g.ApiClient;var u=a?a.getCurrentUserId():"";return u||""}` +
+    `function Me(){` +
+    `var k="d:"+mm();` +
+    `if(T&&pe!==k&&(T=null),T)return T;` +
+    `var a=g.ApiClient;if(!a||!mm())return null;` +
+    `pe=k;T=a.getItems(mm());st.fetched++;st.fetchedAt.push(g.__now());` +
+    `return T}` +
+    `function we(){` +
+    `if(!g.__container)return;` + // Q()'s container gate, as shipped
+    `var p=Me();` +
+    `p&&p.then(function(items){st.mounted=items.length})}` +
+    `function X(){st.applied++;var e=g.location;if(e&&!L(e.hash))return;we()}` +
+    `function V(){g.setTimeout(function(){X()},300)}` +
+    `X();` +
     tail +
     `})(GLOBAL)`
   );
@@ -232,6 +270,7 @@ function boot(mod, opts) {
     setTimeout: (fn, ms) => clock.setTimeout(fn, ms),
     clearTimeout: (id) => clock.clearTimeout(id),
     __now: () => clock.now(),
+    location: { hash: "" },
     get __home() {
       return o.home !== false;
     },
@@ -273,9 +312,8 @@ function boot(mod, opts) {
   for (const m of wanted) {
     const tail =
       o.patched === false ? m.anchor : mod.applyPatch(m.anchor, mod[m.patch]);
-    new vm.Script(moduleSrc(m, tail), { filename: `${m.key}.js` }).runInContext(
-      ctx,
-    );
+    const src = m.src ? m.src(m, tail) : moduleSrc(m, tail);
+    new vm.Script(src, { filename: `${m.key}.js` }).runInContext(ctx);
     stats[m.key] = GLOBAL.__stats;
   }
 
@@ -408,6 +446,8 @@ test("3) flag-dark: nothing registers, no timer, shipped timing survives", async
   assert.strictEqual(h.calls.length, 0, "flag-dark must not prefetch");
 
   // The shipped path still works, unchanged: one hop, one query per module.
+  // (top10's shipped fetch needs the container — its apply gates on Q().)
+  h.showContainer();
   await h.hop();
   assert.strictEqual(
     h.calls.length,
@@ -519,6 +559,7 @@ test("7) AC1 in miniature: all five issue in ONE round", async (mod) => {
   dark.setUid("u1");
   await dark.clock.advance(1200, flush);
   assert.strictEqual(dark.calls.length, 0, "unpatched: no query without a hop");
+  dark.showContainer();
   await dark.hop();
   assert.strictEqual(dark.calls.length, 5, "unpatched: the hop is the trigger");
 });
@@ -585,21 +626,19 @@ test("11) idempotent: a duplicate arm is refused", async (mod) => {
   assert.strictEqual(h.calls.length, 1, "still exactly one query");
 });
 
-test("11b) top10-badges is defined but HELD BACK from the applied set", async (mod) => {
-  // Measured regression, not a style choice: arming top10 moved its query from
-  // 5,693 ms to 12,005 ms on a matched warm pair. Its fetch latch is keyed on
-  // a DOM lookup (`j(S())`), unlike every other module in scope, so a
-  // pre-render call latches under a key the real call never matches.
+test("11b) top10 v2: the arm warms the uid-keyed latch pre-DOM", async (mod) => {
+  // JELA-747: the v1 arm (bare `X()`) was inert pre-render — the fetch sits
+  // behind `we()`'s container gate — and the +6,312 ms that held it back came
+  // from one load-poisoned pair, not from any code path. v2 warms `Me()`
+  // directly (its key is dayStamp:userId, not a DOM lookup), so top10 is back
+  // in the applied set.
   assert.ok(
-    mod.PATCHES.indexOf(mod.PATCH_TOP10) < 0,
-    "PATCH_TOP10 must not be in the applied set",
+    mod.PATCHES.indexOf(mod.PATCH_TOP10) >= 0,
+    "PATCH_TOP10 must be in the applied set",
   );
-  assert.ok(
-    mod.HELD_BACK.indexOf(mod.PATCH_TOP10) >= 0,
-    "PATCH_TOP10 must be declared held back, not silently dropped",
-  );
-  assert.strictEqual(mod.PATCHES.length, 5, "store + four row modules");
-  // patchConfig must therefore leave top10-badges byte-identical.
+  assert.strictEqual(mod.HELD_BACK.length, 0, "nothing held back");
+  assert.strictEqual(mod.PATCHES.length, 6, "store + five row modules");
+  // patchConfig must rewrite top10-badges now.
   const top10 = MODULES.filter((m) => m.key === "top10-badges")[0];
   const cfg = {
     CustomJavaScripts: [
@@ -615,11 +654,23 @@ test("11b) top10-badges is defined but HELD BACK from the applied set", async (m
   const after = cfg.CustomJavaScripts.filter(
     (e) => e.Name === "top10-badges",
   )[0];
-  assert.strictEqual(
-    after.Script,
-    top10.anchor,
-    "top10-badges must come out of patchConfig unchanged",
+  assert.ok(
+    after.Script.indexOf("function jp745W()") >= 0,
+    "the v2 wrapper must be present",
   );
+
+  // The v2 mechanism, in isolation: the warm fetch goes out at uid-time with
+  // NO container in the DOM, and the debounced apply later mounts from the
+  // SAME latch without a second request.
+  const h = boot(mod, { only: ["top10-badges"] });
+  h.login(1000);
+  await h.clock.advance(1100, flush);
+  assert.strictEqual(h.calls.length, 1, "warm fetch at uid-time, pre-DOM");
+  assert.strictEqual(h.stats["top10-badges"].mounted, -1, "nothing mounted");
+  h.showContainer();
+  await h.hop();
+  assert.strictEqual(h.stats["top10-badges"].mounted, 2, "mounted from latch");
+  assert.strictEqual(h.calls.length, 1, "no second request");
 });
 
 test("12) composes: jp738 and jp745 apply in either order", async (mod) => {
