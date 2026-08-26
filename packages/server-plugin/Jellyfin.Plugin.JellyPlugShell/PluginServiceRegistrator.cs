@@ -24,5 +24,10 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // production). Same hook, and for the same reason — the route belongs to a
         // third-party plugin, so there is nothing to substitute into.
         serviceCollection.AddTransient<IStartupFilter, LatestShowsFastPathStartupFilter>();
+
+        // JELA-709: IStartupFilter is resolved as an IEnumerable — every
+        // registration runs — so unlike a service substitution this survives
+        // registering BEFORE Jellyfin's own web wiring. See the filter's docs.
+        serviceCollection.AddTransient<IStartupFilter, CorsPreflightMaxAgeStartupFilter>();
     }
 }

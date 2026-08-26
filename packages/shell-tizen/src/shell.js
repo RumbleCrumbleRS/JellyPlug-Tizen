@@ -1391,6 +1391,44 @@
       "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
+      // JELA-707: paint-gated re-injector for the JellyfinEnhanced script
+      // tag(s) that stripJeScriptsForDefer held out of the written markup
+      // (URLs parked on window.__shellJeDefer — Window survives the
+      // document.write handoff). Waits for __shellPaintGate.onPaint (which
+      // always eventually fires: paint/timeout/giveup), then a tunable
+      // settle delay ("jellyfin.shell.deferJeMs", default 3000 — firstCard
+      // is already behind us at onPaint; the delay keeps JE's fan-out off
+      // the row-fill window that follows it), then appends the original
+      // <script src> tags. append-then-set-src is JE's own load shape, so
+      // the JEL-407 src-setter interceptor routes the body through the
+      // same fetch+transpile+cache pipeline as any dynamic plugin script.
+      // async=false keeps multi-tag source order. "&amp;" is decoded
+      // because the URLs were captured as raw attribute text, not DOM.
+      // No-gate fallback injects at 20 s like the JELA-684 hold above.
+      // Diag: window.__shellJeDefer {on,held,urls,rel,inj,tRel,tInj}.
+      "  try{(function(){",
+      "    var J=window.__shellJeDefer;",
+      "    if(!J||!J.urls||!J.urls.length)return;",
+      "    var D=3000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferJeMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    function inj(){",
+      "      if(J.rel)return;",
+      "      J.rel=1;J.tInj=Date.now();",
+      "      for(var i=0;i<J.urls.length;i++){",
+      "        try{",
+      '          var s=document.createElement("script");',
+      "          s.async=false;",
+      '          s.setAttribute("data-shell-je-deferred","1");',
+      "          (document.head||document.documentElement).appendChild(s);",
+      '          s.src=String(J.urls[i]).replace(/&amp;/g,"&");',
+      "          J.inj++;",
+      "        }catch(_){}",
+      "      }",
+      "    }",
+      "    function rel(){if(J.tRel)return;J.tRel=Date.now();setTimeout(inj,D);}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onPaint){pg.onPaint(rel);}else{setTimeout(inj,20000);}",
+      "  })();}catch(_){}",
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
@@ -3734,7 +3772,10 @@
       'var p="";try{p=String(wr.p||"")}catch(_){}' +
       "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
       'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
+      // root-relative /gh/ jsdelivr pin resolved against the server origin
+      // and 404ed on prod — a spurious warm every CWS boot.
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
@@ -7432,6 +7473,107 @@
       return html;
     }
   }
+  // JELA-707 (JELA-699 follow-up): defer the JellyfinEnhanced injection until
+  // after firstCard. JELA-699 ring A on the calibrated JELA-690 harness
+  // measured blocking JE's script injection at firstCard −3,340 ms
+  // [−4,589, −2,338], p=0.0024 (−41.7%) — the JE fan-out (197 requests /
+  // 3.2 MB on the capture that sized it) contends with the boot's own
+  // request burst, and boot latency tracks in-flight REQUEST COUNT
+  // (TTFB 194 ms below 25 concurrent → 2,789 ms at 125-149), so moving the
+  // fan-out off the pre-paint window is the lever. Do NOT remove JE — hold
+  // it: strip its <script src> tag(s) out of the fetched /web/index.html
+  // string before either write path parses the markup (same choke point as
+  // rewriteFontThirdPartyCss above — covers the JEL-1832 string fast path
+  // AND the DOMParser path, and runs after the index cache read so cached
+  // markup stays pristine), park the stripped URLs on
+  // window.__shellJeDefer (Window survives the document.write handoff),
+  // and let the seed's paint-gated re-injector (see buildSeedScript) put
+  // them back once __shellPaintGate.onPaint fires. The re-injected tags
+  // flow through the JEL-406/407 dynamic-script interceptors, so legacy
+  // engines still get the same transpile + JEL-557 cache treatment as the
+  // static walk. Nothing on the boot-to-home path consumes JE: its
+  // features (card tags, jellyseerr rows, shortcuts) decorate the home
+  // AFTER render, and JE's own loader already waits for auth before its
+  // module fan-out — deferring to paint+delay moves that start by seconds,
+  // not the features' existence.
+  //
+  // Flag-dark: opt in with localStorage["jellyfin.shell.deferJe"]="1"
+  // (post-paint delay tunable via "jellyfin.shell.deferJeMs", default 3000).
+  // Diag/counter (perf-protocol rule 4 — the ring's ON arm must prove the
+  // lever fired): window.__shellJeDefer = {on,held,urls,rel,inj,tRel,tInj}.
+  function stripJeScriptsForDefer(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
+    } catch (_) {
+      return html;
+    }
+    var d = (window.__shellJeDefer = {
+      on: 1,
+      held: 0,
+      urls: [],
+      rel: 0,
+      inj: 0,
+      tRel: 0,
+      tInj: 0,
+    });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/jellyfinenhanced|jellyfin-enhanced/i.test(src)) return tag;
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
+  // JELA-716: the Media Bar plugin pins slideshowpure.js on cdn.jsdelivr.net
+  // in the server's /web/index.html, and that copy carries 13 optional-chaining
+  // sites — on engines whose parser predates `?.` (Tizen 5.0 / Chromium 63)
+  // the tag can never execute; the hero there is the vendored es2017 copy in
+  // the JS-Injector channel (JELA-115). The fetch + parse-fail is pure waste
+  // on the boot path, so drop the tag from the html STRING before either
+  // write path parses the markup (same choke point as the two helpers above;
+  // covers the JEL-1832 string fast path AND the DOMParser path, and runs
+  // after the index cache read so cached markup stays pristine). The probe
+  // must PARSE-test, not feature-test: engines that parse `?.` run the CDN
+  // copy and must keep the tag. The stylesheet <link> is NOT stripped — it
+  // is repointed by rewriteFontThirdPartyCss above.
+  //
+  // Kill switch: localStorage["jellyfin.shell.keepCdnMediaBarJs"]="1"
+  // restores the stock tag. Diag: window.__shellMbStrip = {on,held,urls}.
+  function stripDeadMediaBarJs(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.keepCdnMediaBarJs") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      new Function("void 0?" + ".x");
+      return html;
+    } catch (_) {}
+    var d = (window.__shellMbStrip = { on: 1, held: 0, urls: [] });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/cdn\.jsdelivr\.net\/[^"']*slideshowpure[^"']*\.js/i.test(src)) {
+            return tag;
+          }
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     // JELA-67: opt-in Lite canvas home — when it boots from the LS byte
     // cache, the SPA below never loads this boot (OK/Back hands off).
@@ -7662,7 +7804,14 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = rewriteFontThirdPartyCss(results[0], serverUrl);
+        // JELA-707: JE-defer strip runs after the font rewrite, same
+        // string-level contract (both write paths covered, cache pristine).
+        // JELA-716: then drop the parse-dead CDN media-bar tag.
+        var html = stripDeadMediaBarJs(
+          stripJeScriptsForDefer(
+            rewriteFontThirdPartyCss(results[0], serverUrl),
+          ),
+        );
         var upstreamCfg = results[1];
         // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
         // (~200-500 ms on Chromium 56) when caches are primed.

@@ -205,6 +205,73 @@ paired median Δ of **+13 ms** and an unpaired difference-of-medians of
 **+264 ms** — a twentyfold difference on arms that are byte-identical. The
 unpaired estimator is the one that produced +89%.
 
+## When gate B blocks: how to read it (JELA-712)
+
+Gate A and gate C name their own cause — a task, a loadavg. Gate B does not. It
+reports one number, and a raised number has at least four unrelated causes. On
+2026-08-25 gate B blocked for an entire measurement session at a **median of
+13.60 then 14.04 ms against a 5 ms ceiling and a ~1 ms documented floor**, with
+every scheduled task Idle and the harness quiet, and it took a full session of
+log archaeology to say anything about why.
+
+Read the **shape** first, because it discriminates before any digging does:
+
+- **Skewed** (median well under p95) — intermittent contention. Something on
+  the box competes for CPU some of the time. This is what gate A and gate C are
+  for; if they are clear, look for a transcode or a neighbouring container.
+- **Tight** (median ≈ p95) — a _raised floor_, not contention. Every request
+  pays the same extra cost. JELA-712 was 14.04 median against 15.35 p95.
+
+For a tight floor, the gate now prints the unauthenticated reference probe
+alongside the gated one, which splits the remaining causes in two:
+
+- **reference also raised** → box-wide: the reverse proxy, the host, a
+  neighbouring container, or Jellyfin's own process state.
+- **reference normal** → the authenticated pipeline, or `/System/Info` itself.
+
+What JELA-712 eliminated, so nobody re-runs it:
+
+| candidate                       | how it was excluded                                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| busy scheduled task             | gate A clear; task history empty across the window                                                                                          |
+| .NET thread-pool starvation     | zero `thread pool starvation` warnings in the day's log                                                                                     |
+| websocket keepalive fan-out     | `ForceKeepAlive message to 1 inactive WebSockets` — one socket                                                                              |
+| a failing plugin poller         | JellyfinEnhanced's Seerr timeout pre-dates the ~1 ms baseline                                                                               |
+| a new plugin since the baseline | `/Plugins` diff clean                                                                                                                       |
+| host or harness load            | the blocked window was the **quietest** stretch in the log, and the floor read ~1 ms later under loadavg 13 — load correlated the wrong way |
+
+What was left, and what cleared it: **Jellyfin restarted at 05:00:33** (every
+`* Startup` task's `LastExecutionResult.StartTimeUtc`, and `Kestrel is
+listening` in the log), and the floor was back to ~1 ms within minutes. The
+floor had been 14 ms at ~2 h uptime on the previous process. So: if gate B
+shows a tight box-wide floor and everything above is excluded, check the
+server's uptime, and treat a restart as the remedy of last resort rather than
+a mystery.
+
+Two things that are **not** the remedy:
+
+- Raising `JELA692_MAX_SERVER_MS`. Every JELA-679..706 conclusion was taken
+  against the ~1 ms floor that the 5 ms ceiling was chosen for.
+- `--allow-task`. It exempts gate A and does nothing to gate B.
+
+One thing gate B's name got wrong: `x-response-time-ms` is **wall-clock
+handling time, not CPU**. A request that blocks on a lock or on a slow
+downstream call is charged in full, and that is the right thing to gate on —
+but do not read the number as CPU saturation.
+
+Nothing in this repo emits the header. It is added inside the application, not
+by the reverse proxy: when Jellyfin failed on 2026-08-25 and returned bare
+`HTTP 500`s with `server: Kestrel` through the same Caddy hop, the header was
+**absent from every response**, including on paths that route nowhere. A proxy
+header directive would still have been applied. So it is Jellyfin or one of its
+plugins, it runs after routing, and it is measured on the server side of the
+connection — which is all gate B actually needs from it.
+
+Every gate B run now appends to `$JELA692_LOG` (default
+`~/.cache/jela692/gate-b.tsv`), pass or fail. The question you ask when the
+gate blocks is "when did this start, and did it ramp or step?", and that file
+is the only thing that can answer it.
+
 ## Checklist before you publish a perf claim
 
 - [ ] Arms interleaved, order shuffled, seed recorded.
@@ -247,12 +314,34 @@ measurement session. Keep this appendix in sync if the gate changes.
 #
 #   A. Server scheduled tasks   Any non-Idle task on the Jellyfin box. A single
 #                               CPU/IO-heavy task inflates every endpoint on it.
-#   B. Server-side CPU cost     Median `x-response-time-ms` on /System/Info.
-#                               This is the SERVER's own cost for a trivial
-#                               request, so it excludes WAN RTT entirely: ~1 ms
-#                               on a quiet box, tens-to-hundreds under load.
-#                               It catches load this script cannot enumerate —
-#                               transcodes, a neighbouring container, the host.
+#   B. Server-side handling     Median `x-response-time-ms` on /System/Info.
+#                               The header is added server-side, so it excludes
+#                               WAN RTT entirely: ~1 ms on a quiet box,
+#                               tens-to-hundreds under load. It is WALL-CLOCK
+#                               handling, not CPU — a request blocked on a lock
+#                               is charged in full. It catches load this script
+#                               cannot enumerate — transcodes, a neighbouring
+#                               container, the host.
+#
+#                               Gate B also probes an UNAUTHENTICATED trivial
+#                               endpoint as a reference, and reports both. The
+#                               verdict still keys off /System/Info alone — the
+#                               reference exists to say WHERE a raised floor
+#                               lives, which is the one thing JELA-712 needed
+#                               and could not get. Observed quiet-box layer
+#                               costs, 2026-08-25, 9 probes each:
+#
+#                                 /Branding/Configuration  0.22 ms  (reference)
+#                                 /System/Info/Public      0.28 ms
+#                                 /System/Endpoint         0.88 ms  (auth)
+#                                 /System/Info             1.04 ms  (gate B)
+#                                 /web/index.html          4.34 ms  (static)
+#
+#                               So the authenticated pipeline is worth ~0.7 ms
+#                               and /System/Info's body ~0.1 ms. A floor well
+#                               above that on BOTH probes is box-wide; on the
+#                               authenticated probe only, it is the auth
+#                               pipeline or the endpoint itself.
 #   C. Harness container load   /proc/loadavg 1-min against the core count.
 #                               A DIFFERENT box from A and B. The boot harness
 #                               inflates firstCard 4.8x under shared-box load
@@ -269,7 +358,9 @@ measurement session. Keep this appendix in sync if the gate changes.
 #   tooling/perf/preflight.sh [--json] [--samples N] [--allow-task NAME]...
 #
 #   --json              machine-readable verdict on stdout, nothing else
-#   --samples N         /System/Info probes for gate B (default 9, min 3)
+#   --samples N         gate B probe pairs — N on /System/Info and N on the
+#                       unauthenticated reference, interleaved (default 9,
+#                       min 3)
 #   --allow-task NAME   exempt one task by exact name; repeatable. For tasks
 #                       known to be free (a 0-second no-op poller). Every use
 #                       is printed in the verdict so an exemption cannot hide
@@ -280,6 +371,18 @@ measurement session. Keep this appendix in sync if the gate changes.
 #   JELLYFIN_API_KEY       required
 #   JELA692_MAX_SERVER_MS  gate B ceiling, median ms (default 5)
 #   JELA692_MAX_LOADAVG    gate C ceiling, 1-min load (default: core count)
+#   JELA692_LOG            gate B history file, TSV, appended on every run
+#                          (default ~/.cache/jela692/gate-b.tsv; set to
+#                          /dev/null to disable). Every gate B evaluation is
+#                          recorded whether it passes or fails, because the
+#                          question you actually ask when the gate blocks is
+#                          "when did this start, and did it ramp or step?" —
+#                          and in JELA-712 nobody could answer it.
+#
+# DO NOT raise JELA692_MAX_SERVER_MS to clear a block. Every JELA-679..706
+# conclusion was taken against the ~1 ms floor the 5 ms ceiling was chosen
+# for; moving it reopens all of them. If the floor is genuinely the box's new
+# normal, that is a deliberate documented re-baseline, not an env var.
 #
 # The URL and key come from the environment and are never echoed — see
 # tooling/ci/check-no-personal-endpoints.sh for why this repo holds no
@@ -295,7 +398,10 @@ while [[ $# -gt 0 ]]; do
     --json) JSON=1; shift ;;
     --samples) SAMPLES="${2:-}"; shift 2 ;;
     --allow-task) ALLOW+=("${2:-}"); shift 2 ;;
-    -h|--help) sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Print the whole header comment, however long it grows — a fixed line
+    # range silently swallowed Usage and Environment when the header expanded.
+    -h|--help) awk 'NR > 1 { if (/^set -uo pipefail/) exit; print }' "$0" \
+                 | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "preflight: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -359,35 +465,80 @@ fi
 (( ${#ALLOW[@]} )) && say "   exempted by --allow-task: ${ALLOW[*]}"
 
 # ---------------------------------------------------------------- gate B
-# `x-response-time-ms` is the server's own handling cost, so this measures the
-# SERVER and not the link. Median, not mean: a single GC pause or a retried TLS
-# handshake produces a 10x outlier on an otherwise quiet box, and one outlier
-# must not block a measurement session.
+# `x-response-time-ms` is added server-side, so this measures handling and not
+# the link — wall-clock handling, not CPU. Median, not mean: a single GC pause
+# or a retried TLS handshake produces a 10x outlier on an otherwise quiet box,
+# and one outlier must not block a measurement session.
+#
+# Two endpoints, probed INTERLEAVED so a transient hits both arms equally:
+#   ref   /Branding/Configuration  unauthenticated, trivial body — the cheapest
+#                                  real handler on the box
+#   gate  /System/Info             the gated probe, unchanged
+# Only `gate` decides the verdict. `ref` is there so that a raised floor is
+# attributable at the moment it blocks instead of reconstructed from logs a day
+# later (JELA-712 spent a session on exactly that reconstruction).
+REF_PATH="/Branding/Configuration"
 samples=()
+refs=()
 for _ in $(seq "$SAMPLES"); do
   ms="$(curl -sS -D- -o /dev/null -m 30 -H "$AUTH" "$BASE/System/Info" 2>/dev/null \
         | tr -d '\r' | awk 'tolower($1)=="x-response-time-ms:"{print $2}')"
   [[ -n "$ms" ]] && samples+=("$ms")
+  rms="$(curl -sS -D- -o /dev/null -m 30 "$BASE$REF_PATH" 2>/dev/null \
+        | tr -d '\r' | awk 'tolower($1)=="x-response-time-ms:"{print $2}')"
+  [[ -n "$rms" ]] && refs+=("$rms")
 done
 
+stats() {  # median p95 over the numbers on stdin
+  python3 -c '
+import sys
+v = sorted(float(x) for x in sys.stdin if x.strip())
+if not v:
+    print("NA NA"); raise SystemExit
+n = len(v)
+med = v[n//2] if n % 2 else (v[n//2 - 1] + v[n//2]) / 2
+print("%.2f %.2f" % (med, v[min(n - 1, int(round(0.95 * (n - 1))))]))
+'
+}
+
+ref_median=NA
+(( ${#refs[@]} >= 3 )) && read -r ref_median _ <<< "$(printf '%s\n' "${refs[@]}" | stats)"
+
+median=NA; p95=NA
 if (( ${#samples[@]} < 3 )); then
   UNKNOWN=1
   NOTES+=("B: only ${#samples[@]}/$SAMPLES probes returned x-response-time-ms")
-  say "B. server CPU cost .... UNKNOWN (${#samples[@]}/$SAMPLES probes usable)"
+  say "B. server handling .... UNKNOWN (${#samples[@]}/$SAMPLES probes usable)"
 else
-  read -r median p95 <<< "$(printf '%s\n' "${samples[@]}" | python3 -c '
-import sys
-v = sorted(float(x) for x in sys.stdin if x.strip())
-n = len(v)
-med = v[n//2] if n % 2 else (v[n//2 - 1] + v[n//2]) / 2
-print("%.2f %.2f" % (med, v[min(n - 1, int(round(0.95 * (n - 1)))) ]))
-')"
+  read -r median p95 <<< "$(printf '%s\n' "${samples[@]}" | stats)"
   if awk -v m="$median" -v c="$MAX_SERVER_MS" 'BEGIN{exit !(m > c)}'; then
     FAILS+=("/System/Info median ${median} ms > ${MAX_SERVER_MS} ms ceiling")
-    say "B. server CPU cost .... BLOCKED — median ${median} ms (p95 ${p95}) > ${MAX_SERVER_MS} ms"
+    say "B. server handling .... BLOCKED — median ${median} ms (p95 ${p95}) > ${MAX_SERVER_MS} ms"
+    # Attribution, not a second gate: name the layer while the evidence is live.
+    if [[ "$ref_median" == NA ]]; then
+      say "   reference $REF_PATH unreadable — cannot attribute the floor"
+    elif awk -v r="$ref_median" -v c="$MAX_SERVER_MS" 'BEGIN{exit !(r > c)}'; then
+      say "   reference $REF_PATH is ALSO ${ref_median} ms — the floor is box-wide"
+      say "   (proxy, host, neighbouring container, or Jellyfin process state),"
+      say "   not the authenticated pipeline. Restarting Jellyfin has cleared a"
+      say "   box-wide floor before (JELA-712, 2026-08-25)."
+    else
+      say "   reference $REF_PATH is ${ref_median} ms — the floor is NOT box-wide;"
+      say "   it is the authenticated pipeline or /System/Info itself."
+    fi
   else
-    say "B. server CPU cost .... clear (median ${median} ms, p95 ${p95}, n=${#samples[@]})"
+    say "B. server handling .... clear (median ${median} ms, p95 ${p95}, n=${#samples[@]}, ref ${ref_median} ms)"
   fi
+fi
+
+# Append every evaluation, pass or fail. The gate's blind spot in JELA-712 was
+# not the measurement, it was having no history to say when the floor moved.
+GATE_LOG="${JELA692_LOG:-$HOME/.cache/jela692/gate-b.tsv}"
+if [[ "$GATE_LOG" != /dev/null ]]; then
+  mkdir -p "$(dirname "$GATE_LOG")" 2>/dev/null \
+    && { [[ -s "$GATE_LOG" ]] || printf 'utc\tgate_median_ms\tgate_p95_ms\tref_median_ms\tn\tceiling_ms\n' >> "$GATE_LOG"; } \
+    && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+         "$median" "$p95" "$ref_median" "${#samples[@]}" "$MAX_SERVER_MS" >> "$GATE_LOG"
 fi
 
 # ---------------------------------------------------------------- gate C
@@ -413,12 +564,24 @@ else
 fi
 
 if (( JSON )); then
-  VERDICT="$VERDICT" python3 -c '
+  VERDICT="$VERDICT" GATE_MED="$median" GATE_P95="$p95" REF_MED="$ref_median" \
+  GATE_N="${#samples[@]}" CEIL="$MAX_SERVER_MS" python3 -c '
 import json, os, sys
+def num(k):
+    v = os.environ.get(k, "NA")
+    try: return float(v)
+    except ValueError: return None
 print(json.dumps({
     "verdict": os.environ["VERDICT"],
     "blockers": [l for l in sys.argv[1].splitlines() if l],
     "notes":    [l for l in sys.argv[2].splitlines() if l],
+    "gateB": {
+        "median_ms":     num("GATE_MED"),
+        "p95_ms":        num("GATE_P95"),
+        "ref_median_ms": num("REF_MED"),
+        "samples":       int(os.environ["GATE_N"]),
+        "ceiling_ms":    num("CEIL"),
+    },
 }))
 ' "$(printf '%s\n' "${FAILS[@]:-}")" "$(printf '%s\n' "${NOTES[@]:-}")"
 else
