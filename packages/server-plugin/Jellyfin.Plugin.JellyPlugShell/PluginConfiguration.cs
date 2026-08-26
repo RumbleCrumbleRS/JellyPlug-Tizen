@@ -118,4 +118,23 @@ public class PluginConfiguration : BasePluginConfiguration
     /// rides the JELA-152 real-panel gate. Same contract as LiteDefaultOn.
     /// </summary>
     public bool LiteSubsDefaultOn { get; set; }
+
+    /// <summary>
+    /// JELA-731 kill switch: stop answering
+    /// <c>GET /HomeScreen/Section/LatestShows</c> from the one-query fast path and
+    /// let Home Screen Sections' own 30-day window walk serve it again. Default
+    /// false (fast path on). The fast path already steps aside on its own whenever
+    /// it cannot reproduce the upstream row; this is the operator's override for
+    /// the case where it can, but should not — a row that looks wrong on a TV, or
+    /// an upstream release that changes what the section means.
+    /// </summary>
+    public bool DisableLatestShowsFastPath { get; set; }
+
+    /// JELA-709 kill switch: stop appending Access-Control-Max-Age to
+    /// approved CORS preflight responses. Default false (header on): the
+    /// header only lets a browser reuse a preflight verdict it already got,
+    /// for at most 600 s, and the filter never overwrites a max-age some
+    /// other layer set. Read per-response — flipping it needs no restart.
+    /// </summary>
+    public bool DisableCorsPreflightMaxAge { get; set; }
 }

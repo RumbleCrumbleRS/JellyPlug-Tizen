@@ -197,8 +197,13 @@ const INTENTIONAL_DIVERGENCES = [
     name: "buildSeedScript",
     class: "hsb-feature",
     why: "boot's seeded snippet adds CSS:/FP: HUD rows and inlines the drop-miss __ensureBabel gate per call site (__dp/pre pattern); retail routes both dynamic call sites through the shared __txResolve helper (same drop-miss lazy-babel semantics since JELA-183, different shape)",
-    retail: "20396fc5df6a8da2",
-    boot: "b35b003db1ff0d59",
+    // JELA-707: re-pinned — both shells' seeds gained the paint-gated
+    // JellyfinEnhanced re-injector (identical block; the hashes still
+    // differ for the pre-existing reasons above).
+    // JELA-761: re-pinned again — both seeds also gained the UserDataChanged
+    // gate shim (identical block; divergence reasons unchanged).
+    retail: "e88b7ff980f08e2b",
+    boot: "0692137766aa2383",
   },
   {
     name: "buildDiagSeedScript",
@@ -246,8 +251,13 @@ const INTENTIONAL_DIVERGENCES = [
     name: "loadRemoteWebClient",
     class: "hsb-feature",
     why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document, and gates the whole SPA load on maybeBootLite (JELA-67, opt-in Lite canvas home — hosted shell is the fielded target; the baked fallback deliberately omits it like the other retail-only opt-ins).",
-    retail: "9bfed3288cbc9c4c",
-    boot: "dc1d75fef51c2df8",
+    // JELA-707: re-pinned — both shells' load paths now route the fetched
+    // index html through stripJeScriptsForDefer (a shared, auto-guarded
+    // helper) after the JELA-710 font rewrite.
+    // JELA-716: re-pinned — both load paths now also route the html through
+    // stripDeadMediaBarJs (shared, auto-guarded) after the JE-defer strip.
+    retail: "4e85661be234164c",
+    boot: "ca0eed4d39976fb6",
   },
   {
     name: "bootstrap",
