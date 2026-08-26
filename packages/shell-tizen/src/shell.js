@@ -1750,8 +1750,11 @@
       // of replaying a stale body. Behaviourally identical to the widget-
       // side txKey above (JEL-26 lockstep).
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      // JELA-748 (AC2): seed-side twin of txWriteLost — a swallowed
+      // localStorage write bumps the shared window counter reported as tx.qe.
+      "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
-      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
+      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1775,7 +1778,7 @@
       // to the static-side cachedTranspile (see TX_PFX).
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
       // jellyfin-web jQuery bundle (`<script src>`) finishes evaluating on
@@ -4471,7 +4474,19 @@
       // snippet channel (~1.2 MB) — 1 inlined from cache (zero fetch), 0
       // re-fetched, -1 channel absent/disabled. These make "measure fetch cost
       // separately" answerable per fielded boot without an sdb session.
+      // JELA-748 (AC2): priming state. ls = chars in use (key+value summed;
+      // -1 if the census threw), lk = key count, qe = swallowed localStorage
+      // writes this boot. ch/cm say "this boot ran un-primed"; ls/lk/qe say
+      // WHY — a store that is full or has stopped accepting writes reads
+      // identically to a working one otherwise. The census is O(store) and
+      // copies every value, so it runs ONCE, here, on the opt-in beacon path
+      // only (default OFF) and always after the home/card mark — never on a
+      // boot's critical path.
+      "function lsz(){try{var L=localStorage,n=L.length,t=0;for(var i=0;i<n;i++){var k=L.key(i);t+=k.length+(L.getItem(k)||'').length}return[t,n]}catch(_){return[-1,-1]}}" +
       "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,ch:W.__shellTxCacheHits||0,cm:W.__shellTxCacheMisses||0,jc:W.__shellJsiChannelCache==='hit'?1:(W.__shellJsiChannelCache==='miss'?0:-1),drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
+      // Census AFTER oid(), so the id key it may have just minted is counted,
+      // and in its own try so a census failure can never cost us the payload.
+      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0}catch(_){}" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
@@ -4861,6 +4876,17 @@
   // restores the fetch-every-boot behaviour.
   var TX_QUERY_TTL_MS = 864e5;
   var TX_REF_PFX = "@@shellref:";
+  // JELA-748 (AC2): count localStorage writes that were SWALLOWED. Every
+  // tx-cache writer soft-fails into catch(_){} so a boot never breaks on a
+  // full store — but that also makes "the store stopped accepting writes"
+  // indistinguishable from "the store is working" in the fleet beacon, where
+  // only ch/cm are visible. Bump at the point the write is finally lost, and
+  // report as tx.qe. Widget side and seed side share the window counter.
+  function txWriteLost() {
+    try {
+      window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
+    } catch (_) {}
+  }
   var PLUGIN_FETCH_CACHE_DISABLED_KEY =
     "jellyfin.shell.pluginFetchCacheDisabled";
   function pluginFetchCacheDisabled() {
@@ -4932,7 +4958,8 @@
           localStorage.setItem(TX_PFX + "ts:" + k, String(Date.now()));
       }
     } catch (_) {
-      /* quota — soft fail */
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
     }
   }
   // JEL-554 (v34): record first 10 missed URLs to expose static/dynamic
@@ -4996,7 +5023,8 @@
     try {
       localStorage.setItem(TX_PFX + txKey(url), body);
     } catch (_) {
-      /* quota — soft fail */
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
     }
   }
 
