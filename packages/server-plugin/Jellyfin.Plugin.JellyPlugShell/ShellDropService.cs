@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Reflection;
@@ -45,6 +46,8 @@ public class ShellDropService
         _babelGzip = LazyGzip(BabelBytes);
         _liteGzip = LazyGzip(LiteBytes);
 
+        FontAssets = LoadFontAssets();
+
         var shellVersion = ExtractShellVersion(Encoding.UTF8.GetString(ShellBytes));
 
         // liteSha256 is ADDITIVE like the JELA-58 fingerprint fields: old
@@ -75,6 +78,14 @@ public class ShellDropService
     private readonly Lazy<byte[]?> _shellGzip;
     private readonly Lazy<byte[]?> _babelGzip;
     private readonly Lazy<byte[]?> _liteGzip;
+
+    // JELA-708: per-hash gzip of the on-disk tx/{hash}.js bodies. Unlike the
+    // three embedded assets above these are not held in memory, so the cache
+    // is keyed and bounded rather than one Lazy per asset.
+    private readonly ConcurrentDictionary<string, Lazy<byte[]?>> _txGzip = new(StringComparer.Ordinal);
+
+    private readonly object _txManifestGzipLock = new();
+    private (long Length, DateTime LastWriteUtc, byte[]? Gzip) _txManifestGzip = (-1, default, null);
 
     public byte[] ShellBytes { get; }
 
@@ -163,6 +174,63 @@ public class ShellDropService
         };
     }
 
+    /// <summary>
+    /// JELA-710: one served /shell/fonts/ body. WOFF2 bodies carry no gzip —
+    /// WOFF2 is Brotli inside, and gzip-over-woff2 comes back larger, which
+    /// <see cref="Gzip"/> already collapses to null; the two CSS bodies do
+    /// compress and get the usual lazy treatment.
+    /// </summary>
+    public sealed class FontAsset
+    {
+        public FontAsset(byte[] bytes, string sha256, string contentType, Lazy<byte[]?> gzip)
+        {
+            Bytes = bytes;
+            Sha256 = sha256;
+            ContentType = contentType;
+            _gzip = gzip;
+        }
+
+        private readonly Lazy<byte[]?> _gzip;
+
+        public byte[] Bytes { get; }
+
+        public string Sha256 { get; }
+
+        public string ContentType { get; }
+
+        public byte[]? GzipBytes => _gzip.Value;
+    }
+
+    /// <summary>
+    /// JELA-710: the self-hosted webfont drop, keyed by served file name
+    /// (e.g. "inter-v20-400-latin.woff2", "inter-sora.css"). Contents come
+    /// from the embedded Resources/fonts/ directory; regenerate it with
+    /// scripts/fetch-webfonts.py.
+    /// </summary>
+    public IReadOnlyDictionary<string, FontAsset> FontAssets { get; }
+
+    private static Dictionary<string, FontAsset> LoadFontAssets()
+    {
+        const string prefix = "JellyPlugShell.Resources.fonts.";
+        var assets = new Dictionary<string, FontAsset>(StringComparer.Ordinal);
+        foreach (var resource in Assembly.GetExecutingAssembly().GetManifestResourceNames())
+        {
+            if (!resource.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var name = resource[prefix.Length..];
+            var bytes = ReadResource(resource);
+            var contentType = name.EndsWith(".css", StringComparison.Ordinal)
+                ? "text/css; charset=utf-8"
+                : "font/woff2";
+            assets[name] = new FontAsset(bytes, Sha256Hex(bytes), contentType, LazyGzip(bytes));
+        }
+
+        return assets;
+    }
+
     /// <summary>The official @babel/standalone UMD source used for server-side transforms.</summary>
     public string BabelTransformSource { get; }
 
@@ -171,6 +239,106 @@ public class ShellDropService
     public string TxDir { get; }
 
     public string TxManifestPath { get; }
+
+    /// <summary>
+    /// JELA-708: bound for <see cref="_txGzip"/>. A cold boot pulls ~69 tx
+    /// bodies (~200 KiB gzipped total) and the merged corpus grows slowly, so
+    /// the cap exists only to keep a pathological drop from growing the cache
+    /// without limit — not as an eviction policy worth bookkeeping for.
+    /// </summary>
+    private const int TxGzipCacheCap = 512;
+
+    /// <summary>
+    /// JELA-708: gzip of one published tx/{hash}.js body, or null when the
+    /// file is unreadable or compression does not pay — null means "serve the
+    /// raw file", never "fail the request", same contract as the asset gzips
+    /// above. Cached per hash: the hash is the fnv1a of the SOURCE text and a
+    /// published body is never rewritten within a drop, so an entry cannot go
+    /// stale between rebuilds; <see cref="ResetTxGzipCache"/> covers the one
+    /// path that can change bytes under a hash (a deleted body re-lowered by
+    /// a newer Babel). Past the cap the cache is dropped wholesale and
+    /// repopulates on demand. The caller must pre-validate
+    /// <paramref name="hash"/> (ShellController's HashRe) — it is joined into
+    /// a path here.
+    /// </summary>
+    public byte[]? TxGzipBytes(string hash)
+    {
+        if (_txGzip.Count >= TxGzipCacheCap && !_txGzip.ContainsKey(hash))
+        {
+            _txGzip.Clear();
+        }
+
+        return _txGzip.GetOrAdd(
+            hash,
+            h => new Lazy<byte[]?>(() => GzipTxFile(h), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
+
+    /// <summary>
+    /// JELA-708: gzip of the current tx-manifest.json, or null (serve raw).
+    /// The manifest is rewritten by every rebuild, so the cache validates
+    /// against the file's length + mtime on each call instead of trusting a
+    /// hash — the publish is an atomic rename, so a mismatched stamp costs one
+    /// recompute, never a torn read.
+    /// </summary>
+    public byte[]? TxManifestGzipBytes()
+    {
+        try
+        {
+            var info = new FileInfo(TxManifestPath);
+            if (!info.Exists)
+            {
+                return null;
+            }
+
+            var length = info.Length;
+            var stamp = info.LastWriteTimeUtc;
+            lock (_txManifestGzipLock)
+            {
+                if (_txManifestGzip.Length == length && _txManifestGzip.LastWriteUtc == stamp)
+                {
+                    return _txManifestGzip.Gzip;
+                }
+            }
+
+            var gzip = Gzip(File.ReadAllBytes(TxManifestPath));
+            lock (_txManifestGzipLock)
+            {
+                _txManifestGzip = (length, stamp, gzip);
+            }
+
+            return gzip;
+        }
+        catch (Exception)
+        {
+            return null; // fall back to the raw file; /shell/ must stay serveable
+        }
+    }
+
+    /// <summary>
+    /// JELA-708: called by TxDropRebuildTask after a rebuild published new
+    /// bodies. Content-addressing makes this belt-and-braces for tx/ (see
+    /// <see cref="TxGzipBytes"/>) and load-bearing for the manifest stamp.
+    /// </summary>
+    public void ResetTxGzipCache()
+    {
+        _txGzip.Clear();
+        lock (_txManifestGzipLock)
+        {
+            _txManifestGzip = (-1, default, null);
+        }
+    }
+
+    private byte[]? GzipTxFile(string hash)
+    {
+        try
+        {
+            return Gzip(File.ReadAllBytes(Path.Combine(TxDir, hash + ".js")));
+        }
+        catch (Exception)
+        {
+            return null; // fall back to the raw file; /shell/ must stay serveable
+        }
+    }
 
     private static byte[] ReadResource(string logicalName)
     {
