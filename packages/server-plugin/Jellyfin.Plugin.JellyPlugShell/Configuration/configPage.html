@@ -181,6 +181,17 @@
                                 Read per request, so it takes effect without a server restart.
                             </div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableLatestShowsFastPath" />
+                                <span>Disable the Latest Shows fast path</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Hands GET /HomeScreen/Section/LatestShows back to Home Screen Sections' own
+                                30-day window walk (54 queries / ~1.2 s of server time on this library).
+                                Leave off unless the row looks wrong.
+                            </div>
+                        </div>
                     </div>
 
                     <div class="verticalSection">
@@ -232,6 +243,7 @@
                     { id: 'HomeScreenSectionCacheSeconds', type: 'number' },
                     { id: 'HomeScreenSectionCacheServerOnly', type: 'bool' },
                     { id: 'DisableHomeScreenSectionCache', type: 'bool' },
+                    { id: 'DisableLatestShowsFastPath', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];

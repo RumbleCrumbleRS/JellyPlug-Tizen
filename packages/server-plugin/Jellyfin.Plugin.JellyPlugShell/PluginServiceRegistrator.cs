@@ -22,7 +22,15 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // JELA-732: short private cache over /HomeScreen/Section/{name}. The store is
         // a singleton so it survives across requests; the filter itself stays transient
         // like its sibling (ASP.NET resolves IStartupFilter once, at pipeline build).
+        // Registered before the JELA-731 fast path so the cache sits outside it: a hit
+        // short-circuits, a miss falls through to the fast path's one-query build.
         serviceCollection.AddSingleton<HomeScreenSectionCache>();
         serviceCollection.AddTransient<IStartupFilter, HomeScreenSectionCacheStartupFilter>();
+
+        // JELA-731: one-query "Latest Shows" row in place of Home Screen Sections'
+        // 30-day sliding-window scan (54 queries / 1,166 ms of server time on
+        // production). Same hook, and for the same reason — the route belongs to a
+        // third-party plugin, so there is nothing to substitute into.
+        serviceCollection.AddTransient<IStartupFilter, LatestShowsFastPathStartupFilter>();
     }
 }
