@@ -95,6 +95,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-238 JEL-237 defense-in-depth for : media-bar YouTube-iframe crash
 *JEL-484 actually decoded, so the old TV never crashed. update: cappi
 *JEL-623 the sweep (MutationObserver + 400ms interval) arms via
+*JEL-407 the src-setter interceptor routes the body through the
 *JEL-1580 v60: synthetic AF self-test harness. Gated by either
 *JEL-623 the self-test depends on the now-gated 600ms auto-
 *JEL-1779 Tizen 5.5 first-boot hits NotSupportedError when web
@@ -330,6 +331,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
 *JEL-134 JEL-132 v2): boot-time restore from the IndexedDB creds
 *JEL-1832 String-level on purpose: it has to cover both the string fas
+*JEL-1832 rewriteFontThirdPartyCss above — covers the string fast path
+*JEL-406 flow through the /407 dynamic-script interceptors, so legacy
+*JEL-557 engines still get the same transpile + cache treatment as th
+*JEL-1832 covers the string fast path AND the DOMParser path, and runs
 *JEL-621 kick the pre-lowered drop manifest fetch first so it overlap
 *JEL-1034 v53): speculative babel prime, flag-gated.
 *JEL-1984 align the speculative prime with the head-IIFE soft-skip
