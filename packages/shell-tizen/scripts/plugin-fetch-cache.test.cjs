@@ -119,6 +119,9 @@ function compileSeed(src, label) {
     "__txKey",
     "__txQC",
     "__txQGate",
+    // JELA-748: __qeB (swallowed-write counter) is part of the seed's tx
+    // module now — lift it too or __txSet's quota path reference-errors.
+    "__qeB",
     "__txLru",
     "__txPersistLru",
     "__txPrune",
