@@ -3,6 +3,12 @@
   try {
     window.__shellT0 || (window.__shellT0 = Date.now());
   } catch (_) {}
+  //@@SHELL_CORE:installLsWriteBehind@@
+
+  // JELA-751: arm the write-behind overlay before any cache body can be
+  // written this boot (the shell-core declaration above hoists).
+  installLsWriteBehind();
+
   // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
   // deltas (ms from __shellT0) to localStorage["jellyfin.shell.bootPhases"]
   // (last 10 boots) so rehaul baselines are readable on-device. Record is

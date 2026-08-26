@@ -23,6 +23,12 @@
     if (!window.__shellT0) window.__shellT0 = Date.now();
   } catch (_) {}
 
+  //@@SHELL_CORE:installLsWriteBehind@@
+
+  // JELA-751: arm the write-behind overlay before any cache body can be
+  // written this boot (the shell-core declaration above hoists).
+  installLsWriteBehind();
+
   // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
   // wall-clock deltas (ms from __shellT0) so before/after baselines for the
   // JEL-616 rehaul can be read on-device without host tooling (Q60R blocks
