@@ -164,6 +164,23 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">CORS preflight cache (JELA-709)</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableCorsPreflightMaxAge" />
+                                <span>Disable Access-Control-Max-Age on preflights</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch. By default the plugin appends Access-Control-Max-Age: 600 to every CORS
+                                preflight the server approves, letting a browser reuse the verdict instead of
+                                re-preflighting the same URL. The preflight cache is keyed on the full URL, so this
+                                saves the repeats only — measured at 5-8 of a TV boot's ~100 preflights. Takes effect
+                                without a restart; never overwrites a max-age another layer set.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">Boot diagnostics</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -210,6 +227,8 @@
                     { id: 'LiteNativeDefaultOn', type: 'bool' },
                     { id: 'LiteSubsDefaultOn', type: 'bool' },
                     { id: 'DisableLatestShowsFastPath', type: 'bool' },
+
+                    { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];
