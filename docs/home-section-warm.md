@@ -7,7 +7,7 @@ ticket's story a user still feels and the one lever left on its own list.
 
 A server that has been idle answers its first `/HomeScreen/Section/*` request
 **10–25x slower than its own warm median**. That much was in the ticket. What
-the ticket could not say — and what decides the shape of the fix — is *where*
+the ticket could not say — and what decides the shape of the fix — is _where_
 the cost lives.
 
 It is not the section, and it is not ASP.NET. Measured on production with the
@@ -17,14 +17,14 @@ with a 30 s TTL, and a repeat without `no-store` times a memo rather than a
 build). Server-side `x-response-time-ms`, one cold burst against the warm
 medians from the next four cycles in the same window:
 
-| probe | first call after idle | warm median | ratio |
-| --- | ---: | ---: | ---: |
-| `/System/Info` | 1.52 ms | 1.4 ms | **1.0x** |
-| `/Items?Limit=1&IncludeItemTypes=Movie` | 442 ms | 63 ms | **7.0x** |
-| `Section/BecauseYouWatched` | 208 ms | 7.6 ms | **27x** |
-| `Section/LatestShows` | 1,761 ms | 84 ms | **21x** |
-| `Section/LatestMovies` | 200 ms | 71 ms | 2.8x |
-| `Section/ContinueWatchingNextUp` | 943 ms | 105 ms | 9.0x |
+| probe                                   | first call after idle | warm median |    ratio |
+| --------------------------------------- | --------------------: | ----------: | -------: |
+| `/System/Info`                          |               1.52 ms |      1.4 ms | **1.0x** |
+| `/Items?Limit=1&IncludeItemTypes=Movie` |                442 ms |       63 ms | **7.0x** |
+| `Section/BecauseYouWatched`             |                208 ms |      7.6 ms |  **27x** |
+| `Section/LatestShows`                   |              1,761 ms |       84 ms |  **21x** |
+| `Section/LatestMovies`                  |                200 ms |       71 ms |     2.8x |
+| `Section/ContinueWatchingNextUp`        |                943 ms |      105 ms |     9.0x |
 
 Two readings do the work here.
 
@@ -41,7 +41,7 @@ is the wrong fix and why the JELA-732 cache cannot help: its TTL is 30 s, so
 the first boot of the day is always a miss.
 
 Note also that `LatestMovies` reads only 2.8x here while `BecauseYouWatched`,
-served *after* it, still reads 27x. The warm state is **not one shared switch
+served _after_ it, still reads 27x. The warm state is **not one shared switch
 that any query flips** — serving four sections did not warm the fifth. The
 warmer therefore reads both of the item types the "Latest" rows scan, rather
 than one token query.
@@ -53,12 +53,12 @@ like a once-a-morning problem to be solved with a nightly or hourly job. It is
 not. Walking the quiet interval up, each checkpoint carrying its own in-window
 warm reference so no ratio depends on a baseline taken half an hour earlier:
 
-| idle before the probe | first call | same window, second call | ratio |
-| ---: | ---: | ---: | ---: |
-| 30 s | 65.2 ms | 63.3 ms | **1.0x** |
-| 60 s | 164 ms | 62.6 ms | **2.6x** |
-| 120 s | 117 ms | 86.2 ms | 1.4x |
-| 300 s | 751 ms | 98.2 ms | **7.6x** |
+| idle before the probe | first call | same window, second call |    ratio |
+| --------------------: | ---------: | -----------------------: | -------: |
+|                  30 s |    65.2 ms |                  63.3 ms | **1.0x** |
+|                  60 s |     164 ms |                  62.6 ms | **2.6x** |
+|                 120 s |     117 ms |                  86.2 ms |     1.4x |
+|                 300 s |     751 ms |                  98.2 ms | **7.6x** |
 
 (The 120 s point sits below the 60 s one; single samples at this noise level
 are not monotonic. The onset and the saturation are the readable parts.)
