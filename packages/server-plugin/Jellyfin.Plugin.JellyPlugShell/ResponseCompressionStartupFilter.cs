@@ -43,6 +43,9 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 var request = context.Request;
                 var response = context.Response;
 
+                // Diagnostic: stamp EVERY request so we can tell if the filter fires for a path
+                response.Headers["X-JellyPlug-AE"] = request.Headers.AcceptEncoding.ToString();
+
                 // Skip excluded routes (bandwidth probes, media streams, images)
                 if (IsExcluded(request.Path))
                 {
