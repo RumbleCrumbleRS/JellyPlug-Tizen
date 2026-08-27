@@ -4280,6 +4280,75 @@
       "try{var PX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PX&&PX.open){var pO2=PX.open;" +
       'PX.open=function(pm2,pu2){var pa=arguments,pn=arguments.length;try{if(String(pm2||"").toUpperCase()==="GET"){var pr2=phRw(String(pu2||""));if(pr2!==String(pu2||"")){pa=[pm2,pr2];for(var pj2=2;pj2<pn;pj2++)pa.push(arguments[pj2])}}}catch(_){G.err++}return pO2.apply(this,pa)}}}catch(_){G.err++}' +
       "}catch(_){G.err++}}" +
+      // JELA-724: in-flight GET coalescer for allowlisted API paths.
+      //
+      // Plugin Pages 2.4.11.0 (/PluginPages/inject.js) drives its sidebar
+      // from a MutationObserver whose `initialized` guard is tested ONCE per
+      // callback, at the top of mutationHandler — but populateSidebar() is
+      // called from INSIDE the mutationRecords.forEach / addedNodes.some
+      // walk, with no guard of its own. Every added node in the batch that
+      // first carries .mainDrawer-scrollContainer > .userMenuOptions
+      // therefore issues its own ApiClient.getJSON('PluginPages/User'). The
+      // JELA-720 census caught SIX identical GETs inside a 6 ms window on
+      // both cold boots — 12 round trips (getJSON sets X-Emby-Authorization,
+      // so each GET drags its own CORS preflight) for one 345-byte body that
+      // is byte-stable across all six responses and across both boots.
+      //
+      // Why nothing we already ship absorbs it:
+      //   - JELA-709's Access-Control-Max-Age cannot: all six preflights are
+      //     in flight before any of them returns, so there is no cached
+      //     preflight for five of them to hit.
+      //   - The JELA-51 api-warm store below is ONE-SHOT (chk() deletes the
+      //     slot it serves), so even with the full AWL enabled — which lists
+      //     /PluginPages/User — it would absorb request 1 and let 2..6 out.
+      // It needs true in-flight coalescing, the same shape HomeScreenSections
+      // does server-side (JELA-685); this does it client-side.
+      //
+      // Contract: concurrent identical GETs to an allowlisted path share ONE
+      // network request. Every caller — the leader included — gets its OWN
+      // Response synthesized from the leader's snapshotted status/headers/
+      // body, so a body is never consumed twice and no caller can drain
+      // another's. NOTHING is cached: the slot is released the moment the
+      // leader's body is read, so a later GET always re-fetches and there is
+      // no staleness window to reason about. A leader that rejects replays
+      // each waiter on the real network (worst case = today's behaviour).
+      //
+      // Allowlisted rather than global on purpose. The leader's body is
+      // snapshotted to text, so a global list would buffer arbitrary
+      // payloads; and GETs that differ only in headers (Range) must never
+      // share one response. For the same reason a Request object, a body, or
+      // an AbortSignal opts the call out entirely — we only coalesce a plain
+      // string-URL GET whose every parameter is in the URL.
+      //
+      // Field-tunable without a shell release:
+      // localStorage['jellyfin.shell.fetchCoalescePaths'] appends
+      // comma-separated paths (each must start with "/", 32 max).
+      // Kill-switch: localStorage['jellyfin.shell.fetchCoalesceDisabled']='1'.
+      // Counters: window.__shellFC {on,n,lead,join,serve,rep,err}.
+      // Installed BEFORE the api-warm patch below, so the warm store still
+      // gets first refusal and only its fallthrough reaches the coalescer.
+      'if(!flg("jellyfin.shell.fetchCoalesceDisabled")&&!W.__shellFC&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
+      'var FCL=["/PluginPages/User"];' +
+      'try{var fcx=String(localStorage.getItem("jellyfin.shell.fetchCoalescePaths")||"").replace(/\\s+/g,"").split(","),fci;for(fci=0;fci<fcx.length;fci++)if(fcx[fci].charAt(0)==="/"&&FCL.length<32)FCL.push(fcx[fci])}catch(_){}' +
+      "var FC=W.__shellFC={on:1,n:FCL.length,lead:0,join:0,serve:0,rep:0,err:0},fcQ={};" +
+      'var fcK=function(u){var fh=u.indexOf("#");if(fh>=0)u=u.slice(0,fh);' +
+      'var fq=u.indexOf("?"),fp=fq<0?u:u.slice(0,fq);' +
+      'for(var fi2=0;fi2<FCL.length;fi2++){var fs2=FCL[fi2];if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u}return""};' +
+      "var fcSnap=function(fr){return fr.text().then(function(ft){var fhs={};" +
+      'try{fr.headers.forEach(function(fv,fn2){fhs[fn2]=fv})}catch(_){try{var fct=fr.headers.get("content-type");if(fct)fhs["content-type"]=fct}catch(__){}}' +
+      'return{s:fr.status,x:fr.statusText||"",h:fhs,b:ft}})};' +
+      "var fcMk=function(fd){var fst=fd.s||200;" +
+      "return new Response(fst===204||fst===205||fst===304?null:fd.b,{status:fst,statusText:fd.x,headers:fd.h})};" +
+      "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
+      'if(typeof fu==="string"&&!(fo&&(fo.body||fo.signal))&&(fo&&fo.method?String(fo.method).toUpperCase():"GET")==="GET"){' +
+      "var fk=fcK(fu);if(fk){var fe=fcQ[fk];" +
+      "if(fe){FC.join++;return fe.then(function(fd){FC.serve++;return fcMk(fd)},function(){FC.rep++;return fcF.call(W,fu,fo)})}" +
+      "FC.lead++;" +
+      "fe=fcQ[fk]=fcF.call(W,fu,fo).then(fcSnap).then(function(fd){delete fcQ[fk];return fd},function(fer){delete fcQ[fk];throw fer});" +
+      "return fe.then(function(fd){FC.serve++;return fcMk(fd)})}}" +
+      "}catch(_){FC.err++}" +
+      "return fcF.apply(W,arguments)}" +
+      "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
       // fires the DETERMINISTIC home-sections request list (JELA-50 WS-4
