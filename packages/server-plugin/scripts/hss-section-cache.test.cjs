@@ -222,14 +222,24 @@ assert.ok(
 
 // ---- 7. a hit reproduces what the short-circuit skipped ----------------------
 
+// JELA-794: the previous version of this block asserted only that ACAO was
+// read somewhere on the miss path and replayed on the hit. Both were true, and
+// the behaviour was still broken in production for the whole life of this
+// filter: the read happened after next() returned, where ASP.NET Core's CORS
+// middleware has not yet run its OnStarting callback, so it captured null every
+// time. Source pins cannot see that; these now pin WHERE the capture happens,
+// which is the part that was wrong. The behavioural proof is a throwaway
+// ASP.NET host replicating the real nesting (compression filter outermost ->
+// this filter -> UseCors -> endpoint), asserting the header set on an actual
+// cache hit — see docs/homescreen-section-cache.md.
 for (const [field, header] of [
   ["AllowOrigin", "Access-Control-Allow-Origin"],
   ["AllowCredentials", "Access-Control-Allow-Credentials"],
   ["ExposeHeaders", "Access-Control-Expose-Headers"],
 ]) {
   assert.ok(
-    filter.includes(`${field} = HeaderOrNull(response, "${header}")`),
-    `${header} must be captured into the entry on the miss path`,
+    filter.includes(`HeaderOrNull(response, "${header}")`),
+    `${header} must be captured into the entry`,
   );
   assert.ok(
     filter.includes(`headers["${header}"] = entry.${field}`),
@@ -238,6 +248,41 @@ for (const [field, header] of [
       "into a CORS failure, and only on the second load",
   );
 }
+
+{
+  // Scoped to ServeAndMaybeStoreAsync — the early bypasses at the top of the
+  // middleware also call nextMiddleware(), and they are not what this pins.
+  const bodyStart = filter.indexOf("private async Task ServeAndMaybeStoreAsync");
+  assert.ok(bodyStart !== -1, "ServeAndMaybeStoreAsync must still exist");
+  const store_ = filter.slice(bodyStart);
+  const onStarting = store_.indexOf("response.OnStarting(");
+  const nextCall = store_.indexOf("await nextMiddleware();");
+  const store = store_.indexOf("_cache.Store(");
+  assert.ok(
+    onStarting !== -1 && nextCall !== -1 && onStarting < nextCall,
+    "the CORS capture must sit in an OnStarting callback REGISTERED BEFORE nextMiddleware() " +
+      "runs. ASP.NET Core's CORS middleware stamps Access-Control-* from its own OnStarting " +
+      "callback, and this filter (plus the compression filter outside it) buffers the body, " +
+      "so the response has not started when next() returns and a header read there sees " +
+      "nothing. OnStarting callbacks fire in reverse registration order, so registering " +
+      "first means running last — after CORS. This is the JELA-794 bug verbatim.",
+  );
+  assert.ok(
+    store > onStarting && store < nextCall,
+    "the Store call must live inside that same OnStarting callback — storing earlier is what " +
+      "captured a null ACAO into every entry",
+  );
+}
+
+assert.ok(
+  /allowOrigin == null && !string\.IsNullOrEmpty\(context\.Request\.Headers\.Origin/.test(
+    filter,
+  ),
+  "fail-safe: a cross-origin request whose ACAO could not be captured must NOT be stored. " +
+    "A miss costs a rebuild; a hit that replays no ACAO is a dead home row on every TV, " +
+    "because the shell runs at file:// and every section request it makes is cross-origin. " +
+    "This keeps correctness independent of the OnStarting ordering argument above.",
+);
 assert.ok(
   /headers\["x-response-time-ms"\] = stopwatch\.Elapsed/.test(filter),
   "a hit must emit its own x-response-time-ms — Jellyfin's writer is inside this filter " +
@@ -245,7 +290,15 @@ assert.ok(
 );
 assert.ok(
   /Vary/.test(filter) && /EnsureVaryOrigin/.test(filter),
-  "a cacheable body carrying ACAO must Vary: Origin (JELA-688 shipped this bug once)",
+  "a cacheable body must Vary: Origin (JELA-688 shipped this bug once)",
+);
+assert.ok(
+  !/Access-Control-Allow-Origin"\]\.ToString\(\)\)\)\s*\n\s*return;/.test(filter),
+  "EnsureVaryOrigin must NOT be gated on ACAO being present. M63 does not partition its " +
+    "HTTP cache by request mode (JELA-687), so the dangerous direction is the one that gate " +
+    "missed: an entry stored for a request that sent no Origin carries no CORS headers and " +
+    "gets replayed into a later cross-origin fetch, which then fails for a body the server " +
+    "would have allowed. Vary: Origin is unconditional (JELA-794).",
 );
 assert.ok(
   /headers\[CacheStatusHeader\] = "hit"/.test(filter) &&
