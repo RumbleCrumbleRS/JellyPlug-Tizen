@@ -346,7 +346,15 @@ public class DiagIngestService
         // localStorage vs re-fetched), jc = JSI snippet-channel cache state
         // (1 inlined, 0 re-fetched, -1 absent) — warm-boot payload-elision
         // telemetry. All numeric; TryNum keeps the sanitizer numeric-only.
-        foreach (var name in new[] { "skip", "done", "ch", "cm", "jc" })
+        // JELA-748 (AC2): priming-state fields. ls = localStorage chars in use
+        // (key+value, -1 = census threw), lk = key count, qe = swallowed
+        // localStorage write failures this boot (txSetStatic /
+        // txRecordQuerySlot / __txSet / __txPersistLru all soft-fail into
+        // catch(_){}, so without qe a store that has stopped accepting writes
+        // is indistinguishable from one that is working). ch/cm alone cannot
+        // tell an un-primed boot from a store that is refusing the writes that
+        // would prime it.
+        foreach (var name in new[] { "skip", "done", "ch", "cm", "jc", "ls", "lk", "qe" })
         {
             if (txEl.TryGetProperty(name, out var el) && TryNum(el, out var n))
             {
