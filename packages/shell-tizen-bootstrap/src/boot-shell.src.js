@@ -3196,6 +3196,83 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
+      // JELA-740 (accepted CEO confirmation 45f50c90): opt-in query-param
+      // auth for API GETs, default OFF via
+      // localStorage['jellyfin.shell.queryAuth']='1'.
+      // 'jellyfin.shell.queryAuthDisabled' is honored NOW as the
+      // kill-switch reserved for a future default-ON flip (apiWarm house
+      // rule). Every jellyfin-web API call is cross-origin and carries
+      // `Authorization` (measured: NOT X-Emby-Authorization), which is not
+      // CORS-safelisted, so every GET costs preflight + request = two
+      // serialized round trips (~94 OPTIONS per cold boot, 38-39 of them
+      // before firstCard). Moving the token to the api_key query param
+      // (accepted by the server on every probed boot endpoint: 200 +
+      // ACAO:*, 401 without; server-side cost equal to header auth) makes
+      // the GET a CORS-simple request - no preflight at all. Measured on
+      // the M63 rig through a +50 ms/req h2 delay proxy, n=7/arm:
+      // OPTIONS 94->7, firstCard median -600..-818 ms (p=0.006-0.010) and
+      // variance collapse (6/7 shim boots inside a 31 ms band); prize
+      // scales with RTT x critical-chain depth. Non-GETs, relative URLs,
+      // Request-object fetch inputs, auth-header-less calls and URLs
+      // already carrying api_key/ApiKey all pass through untouched
+      // (= today's path); a request whose token cannot be parsed or whose
+      // headers cannot be copied also falls through untouched (sk++), so
+      // worst case is always today's boot. Installed FIRST in this body -
+      // innermost under the hssPin/apiWarm wrappers - so it rewrites the
+      // final URL the outer layers produce while their store keys/pins
+      // keep matching pre-auth URLs. XHR path: open() records
+      // method/url/async, setRequestHeader() buffers instead of applying
+      // (headers cannot precede open, so buffering at the instance is
+      // order-safe), send() re-opens on the rewritten URL (open resets
+      // headers, none were applied yet) and replays the non-auth buffer.
+      // One install per WINDOW (survives the document.write handoff).
+      // Referer mitigation per the accepted tradeoff: a no-referrer meta
+      // is (re)inserted per DOCUMENT under the same flag. Counters:
+      // window.__shellQA {on,fr,xr,sw,sk,err} = fetch rewrites, xhr
+      // rewrites, swallowed headers, skips, errors.
+      'if(flg("jellyfin.shell.queryAuth")&&!flg("jellyfin.shell.queryAuthDisabled")){try{' +
+      'try{if(document.head&&!document.getElementById("__shellQAMeta")){var qMt=document.createElement("meta");qMt.id="__shellQAMeta";qMt.name="referrer";qMt.content="no-referrer";document.head.insertBefore(qMt,document.head.firstChild)}}catch(_){}' +
+      "if(!W.__shellQA){" +
+      "var qa=W.__shellQA={on:1,fr:0,xr:0,sw:0,sk:0,err:0};" +
+      'var qaHN=["Authorization","X-Emby-Authorization","X-Emby-Token"];' +
+      'var qaHdr=function(n){n=String(n||"").toLowerCase();return n==="authorization"||n==="x-emby-authorization"||n==="x-emby-token"};' +
+      'var qaTok=function(n,v){n=String(n||"").toLowerCase();v=String(v||"");if(n==="x-emby-token")return v;var qm=/Token="([^"]*)"/.exec(v);return qm&&qm[1]?qm[1]:""};' +
+      "var qaUrl=function(u){return/^https?:\\/\\//.test(u)&&!/[?&]api_?key=/i.test(u)};" +
+      'var qaAdd=function(u,t){return u+(u.indexOf("?")<0?"?":"&")+"api_key="+encodeURIComponent(t)};' +
+      'if(typeof W.fetch==="function"){try{var qF=W.fetch;W.fetch=function(qu,qo){try{' +
+      'var qMm=qo&&qo.method?String(qo.method).toUpperCase():"GET";' +
+      'if(qMm==="GET"&&typeof qu==="string"&&qo&&qo.headers&&qaUrl(qu)){' +
+      'var qh=qo.headers,qt="",qp=0,qn=0,qh2=null,qi,qv,qk;' +
+      'if(typeof qh.get==="function"&&typeof qh["delete"]==="function"){' +
+      "for(qi=0;qi<3;qi++){qv=null;try{qv=qh.get(qaHN[qi])}catch(_){}if(qv){qp=1;if(!qt)qt=qaTok(qaHN[qi],qv)}}" +
+      'if(qt){try{qh2=new W.Headers(qh);for(qi=0;qi<3;qi++){if(qh2.get(qaHN[qi])){qh2["delete"](qaHN[qi]);qn++}}}catch(_){qh2=null}}' +
+      "}else{" +
+      "for(qk in qh){if(qaHdr(qk)){qp=1;if(!qt)qt=qaTok(qk,qh[qk])}}" +
+      "if(qt){qh2={};for(qk in qh){if(qaHdr(qk)){qn++;continue}qh2[qk]=qh[qk]}}" +
+      "}" +
+      "if(qt&&qh2){var qo2={},qk2;for(qk2 in qo)qo2[qk2]=qo[qk2];qo2.headers=qh2;qa.fr++;qa.sw+=qn;return qF.call(W,qaAdd(qu,qt),qo2)}" +
+      "if(qp)qa.sk++" +
+      "}" +
+      "}catch(_){qa.err++}" +
+      "return qF.apply(W,arguments)}}catch(_){qa.err++}}" +
+      "try{var QP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;" +
+      "if(QP&&QP.open&&QP.setRequestHeader&&QP.send){" +
+      "var qOp=QP.open,qSh=QP.setRequestHeader,qSe=QP.send;" +
+      'QP.open=function(qm3,qu3){try{this.__qaM=String(qm3||"").toUpperCase();this.__qaU=String(qu3||"");this.__qaA=arguments.length>2?!!arguments[2]:!0;this.__qaB=null}catch(_){qa.err++}return qOp.apply(this,arguments)};' +
+      'QP.setRequestHeader=function(qn3,qv3){try{if(this.__qaM==="GET"&&qaUrl(this.__qaU||"")){if(!this.__qaB)this.__qaB=[];this.__qaB.push([qn3,qv3]);return}}catch(_){qa.err++}return qSh.apply(this,arguments)};' +
+      "QP.send=function(){try{" +
+      "var qb=this.__qaB;" +
+      "if(qb){this.__qaB=null;" +
+      'var qt3="",qp3=0,qi3;' +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qaHdr(qb[qi3][0])){qp3=1;if(!qt3)qt3=qaTok(qb[qi3][0],qb[qi3][1])}}" +
+      'if(qt3){try{qOp.call(this,this.__qaM,qaAdd(this.__qaU,qt3),this.__qaA)}catch(_){qt3="";qa.err++}}' +
+      "if(qp3&&!qt3)qa.sk++;" +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qt3&&qaHdr(qb[qi3][0])){qa.sw++;continue}try{qSh.call(this,qb[qi3][0],qb[qi3][1])}catch(_){qa.err++}}" +
+      "if(qt3)qa.xr++}" +
+      "}catch(_){qa.err++}" +
+      "return qSe.apply(this,arguments)};" +
+      "}}catch(_){qa.err++}" +
+      "}}catch(_){G.err++}}" +
       // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
       // if upstream fixes the key derivation): opt-in pinned pageHash for
       // /HomeScreen/Sections, default OFF via
