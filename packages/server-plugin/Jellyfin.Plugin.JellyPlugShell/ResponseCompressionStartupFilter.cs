@@ -80,7 +80,7 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 var compressible = IsCompressibleContentType(response.ContentType);
                 if (hasStarted || body.Length < 150 || !string.IsNullOrEmpty(contentEncoding) || !compressible)
                 {
-                    _logger.LogDebug(
+                    _logger.LogInformation(
                         "JELA-727 skip {Path}: hasStarted={S} bodyLen={L} contentEncoding={E} compressible={C} contentType={CT}",
                         request.Path, hasStarted, body.Length, contentEncoding, compressible, response.ContentType);
                     if (body.Length > 0)
@@ -110,7 +110,7 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 AppendVary(response.Headers, "Accept-Encoding");
                 response.ContentLength = compressedBody.Length;
 
-                _logger.LogDebug(
+                _logger.LogInformation(
                     "JELA-727 compressed {Path}: {Raw} -> {Gz} bytes",
                     request.Path, body.Length, compressedBody.Length);
 
