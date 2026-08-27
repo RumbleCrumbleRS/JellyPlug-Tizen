@@ -252,7 +252,9 @@ for (const [field, header] of [
 {
   // Scoped to ServeAndMaybeStoreAsync — the early bypasses at the top of the
   // middleware also call nextMiddleware(), and they are not what this pins.
-  const bodyStart = filter.indexOf("private async Task ServeAndMaybeStoreAsync");
+  const bodyStart = filter.indexOf(
+    "private async Task ServeAndMaybeStoreAsync",
+  );
   assert.ok(bodyStart !== -1, "ServeAndMaybeStoreAsync must still exist");
   const store_ = filter.slice(bodyStart);
   const onStarting = store_.indexOf("response.OnStarting(");
@@ -293,7 +295,9 @@ assert.ok(
   "a cacheable body must Vary: Origin (JELA-688 shipped this bug once)",
 );
 assert.ok(
-  !/Access-Control-Allow-Origin"\]\.ToString\(\)\)\)\s*\n\s*return;/.test(filter),
+  !/Access-Control-Allow-Origin"\]\.ToString\(\)\)\)\s*\n\s*return;/.test(
+    filter,
+  ),
   "EnsureVaryOrigin must NOT be gated on ACAO being present. M63 does not partition its " +
     "HTTP cache by request mode (JELA-687), so the dangerous direction is the one that gate " +
     "missed: an entry stored for a request that sent no Origin carries no CORS headers and " +

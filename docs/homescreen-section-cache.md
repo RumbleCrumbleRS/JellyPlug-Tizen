@@ -84,14 +84,14 @@ each handled and each pinned by a test:
   returns.** ASP.NET Core's CORS middleware does not write `Access-Control-*`
   inline — it registers an `OnStarting` callback and stamps them when the
   response actually begins. This filter buffers the body and the compression
-  filter outside it buffers again, so the response has *not* started when
+  filter outside it buffers again, so the response has _not_ started when
   `next()` returns; header reads there see no CORS headers at all. JELA-732
   shipped that read and captured `AllowOrigin = null` on every entry, so every
   hit replayed nothing: measured on prod 1.0.37.0, a section cache hit came back
   with **no ACAO**, and a real M63 fetch from `Origin: null` — the shell's own
   request shape — failed with `Failed to fetch` while CDP showed a clean `200`
   (the JELA-687 divergence). JELA-794 moved the capture and the store into an
-  `OnStarting` callback registered *before* the inner pipeline runs; callbacks
+  `OnStarting` callback registered _before_ the inner pipeline runs; callbacks
   fire in reverse registration order, so it sees the finished header set.
 
   Correctness does not rest on that ordering argument. A cross-origin request
@@ -104,6 +104,7 @@ each handled and each pinned by a test:
   stored for a request that sent no `Origin` carries no CORS headers and gets
   replayed into a later cross-origin fetch, which then fails for a body the
   server would have allowed.
+
 - **`x-response-time-ms`.** Jellyfin's writer is inside and never runs on a
   short-circuit, so a hit emits its own. Without it every hit would vanish from
   the timing census that this work is measured by.
