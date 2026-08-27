@@ -222,6 +222,9 @@ function loadShell(src, label, store) {
   ];
   const txFns = [
     "__txKey",
+    // JELA-748: __qeB (swallowed-write counter) is part of the seed's tx
+    // module now — lift it too or __txSet's quota path reference-errors.
+    "__qeB",
     "__txLru",
     "__txPersistLru",
     "__txPrune",
