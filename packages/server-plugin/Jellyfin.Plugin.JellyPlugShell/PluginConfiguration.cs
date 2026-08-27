@@ -170,6 +170,31 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DisableCorsPreflightMaxAge { get; set; }
 
     /// <summary>
+    /// JELA-793: seconds between background library-warm passes, or 0 (the
+    /// default) to leave the warmer off entirely — the field is both the
+    /// enable and the kill switch, read on a 10 s tick, so changing it takes
+    /// effect without a restart.
+    ///
+    /// A box that has been idle answers its first /HomeScreen/Section/* request
+    /// 10-25x slower than its own warm median, and the penalty is in the shared
+    /// library-query path rather than in any one section: a trivial
+    /// /Items?Limit=1 control pays it too, while /System/Info stays at its
+    /// 1.5 ms floor. So every home row on the first TV boot after a quiet
+    /// stretch pays at once, and the JELA-732 section cache cannot help — its
+    /// TTL is 30 s, so a first boot is always a miss.
+    ///
+    /// The interval has to be short. Walking the quiet interval up on
+    /// production, against each checkpoint's own in-window warm reference:
+    /// 30 s of idle costs nothing, 60 s costs 2.6x, 5 min costs 7.6x. This
+    /// decays in about a minute, not in the "hours" the symptom was first
+    /// reported over. An interval longer than the decay time buys nothing at
+    /// all, which is the one way to get this wrong that still looks enabled —
+    /// hence 30, and hence the number being an operator-visible field rather
+    /// than a constant.
+    /// </summary>
+    public int SectionWarmIntervalSeconds { get; set; }
+
+    /// <summary>
     /// JELA-723 kill switch: stop stamping Cache-Control/Vary on the three
     /// third-party plugin client scripts (/NotifySync/client.js,
     /// /GetAvatar/ClientScript, /PluginPages/inject.js). Read per-response, so

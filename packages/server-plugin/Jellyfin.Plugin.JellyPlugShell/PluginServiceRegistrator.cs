@@ -50,6 +50,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // third-party plugin, so there is nothing to substitute into.
         serviceCollection.AddTransient<IStartupFilter, LatestShowsFastPathStartupFilter>();
 
+        // JELA-793: background library-warm timer. Registered LAST because it adds no
+        // middleware — it only needs a hook that runs once the container is built — and
+        // registering it anywhere else would shuffle the nesting of the filters above,
+        // which is load-bearing. Off unless SectionWarmIntervalSeconds is set.
+        serviceCollection.AddSingleton<SectionWarmService>();
+        serviceCollection.AddTransient<IStartupFilter, SectionWarmStartupFilter>();
+
         // JELA-709: IStartupFilter is resolved as an IEnumerable — every
         // registration runs — so unlike a service substitution this survives
         // registering BEFORE Jellyfin's own web wiring. See the filter's docs.
