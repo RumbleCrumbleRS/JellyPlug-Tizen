@@ -474,8 +474,21 @@ const CSS_MAP = { home: "ddd" };
     );
     assert(
       urls.indexOf("http://srv/web/themes/dark/theme.css") !== -1 &&
-        urls.indexOf("http://srv/JellyfinEnhanced/js/jellyseerr/api.js") !== -1,
+        urls.indexOf("http://srv/web/blurhash.worker.bundle.js") !== -1 &&
+        urls.indexOf("http://srv/shell/fonts/mediabar-slideshowpure.css") !==
+          -1,
       "3: static stable-path seed fetched (absolutized)",
+    );
+    // JELA-771: the bare /JellyfinEnhanced/js/* module seed and the
+    // root-relative /gh/ ratings.css pin are unreachable by construction
+    // (JE loads versioned; /gh/ 404s on prod) — never warmed.
+    assert(
+      urls.every(
+        (u) =>
+          u.indexOf("/JellyfinEnhanced/js/") === -1 && u.indexOf("/gh/") === -1,
+      ),
+      "3: no bare JellyfinEnhanced module or /gh/ URL in the warm set: " +
+        JSON.stringify(urls),
     );
     assert(
       urls.every((u) => u.indexOf("undefined") === -1),
