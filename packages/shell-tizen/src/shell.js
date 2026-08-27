@@ -1351,7 +1351,7 @@
       // apiClient.lastDetectedBitrate so that the first playback (minutes away)
       // skips the escalation, and playback re-detects on its own if the cache
       // is cold or stale. So this holds rather than kills: suppress until the
-      // paint gate opens, then re-arm the vendor's own timer so the cache is
+      // release gate opens, then re-arm the vendor's own timer so the cache is
       // still warm before anyone can press play.
       //
       // The hold is an accessor, not `=false`: the connection manager
@@ -1359,17 +1359,52 @@
       // (re)auth and THEN calls the scheduler, so a plain write gets clobbered
       // in the window between onApi and login. Any already-scheduled
       // detectTimeout is cleared on install, and the guard re-runs every 500 ms
-      // until paint so a replaced window.ApiClient is covered too.
+      // until release so a replaced window.ApiClient is covered too.
+      //
+      // JELA-737: first paint is the WRONG release gate. JELA-730 established
+      // that firstCard is not when the home is done — the rows keep fetching
+      // and rendering for seconds after it — and JELA-736 measured the ladder
+      // landing at 7.4-8.5 s in 7/7 captures against settle times of 4.8-12.9 s,
+      // i.e. squarely INSIDE the fill window, every time. On a warm boot the
+      // ladder is 5,635 KiB of the 11.86 MiB total (46.4%) and renders nothing.
+      // Worse, it measures a link it is itself saturating, so it biases the
+      // chosen bitrate low. A constant post-paint delay cannot track settle;
+      // the trigger has to be the home actually going quiet.
+      //
+      // So the default gate is now "settle", evaluated on a 500 ms tick:
+      //   - `.card` AND `.card[data-id]` counts both unchanged for Q ms
+      //     (the same counters rec.js derives `settle` from), with at least
+      //     one real `.card[data-id]` on screen, AND
+      //   - zero in-flight XHR/fetch and no request start/finish for Q ms
+      //     (counted by wrapping XMLHttpRequest.prototype.send and
+      //     window.fetch pass-through at seed time), AND
+      //   - an authenticated ApiClient (otherwise we are on the login screen
+      //     and there is nothing to defer yet — keep holding).
+      // Ceiling: M ms after the first authenticated tick, release anyway with
+      // why="ceiling", so a deferral can never become a never. Note the vendor
+      // ALSO detects on the play path (playbackManager's pre-play
+      // detectBitrate()), so even a suppressed ladder cannot break playback.
       //
       // Flag-dark: opt in with localStorage["jellyfin.shell.deferBitrateTest"]="1".
-      // Post-paint delay is tunable via "jellyfin.shell.deferBitrateTestMs"
-      // (default 4000).
-      // Diag: window.__shellBT = {on,inst,cleared,sets,armed,fired,tHold,tArm}.
+      // Kill switch for the JELA-737 half only:
+      //   localStorage["jellyfin.shell.deferBitrateTestGate"]="paint"
+      // restores the JELA-684 first-paint release byte-for-byte.
+      // Post-release delay is tunable via "jellyfin.shell.deferBitrateTestMs"
+      // (default 4000), the quiet window via "...QuietMs" (default 3000) and
+      // the ceiling via "...MaxMs" (default 45000).
+      // Diag: window.__shellBT = {on,gate,inst,cleared,sets,armed,fired,tHold,
+      // tArm,why,polls,cards,cardsLoose,stable,tAuth,net,inflight,tBusy}.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
       "    var D=4000;",
       '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
-      "    var S=window.__shellBT={on:1,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0};",
+      '    var G="settle";',
+      '    try{if(localStorage.getItem("jellyfin.shell.deferBitrateTestGate")==="paint")G="paint";}catch(_){}',
+      "    var Q=3000;",
+      '    try{var qv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestQuietMs")||"",10);if(qv>=250&&qv<=120000)Q=qv;}catch(_){}',
+      "    var M=45000;",
+      '    try{var mv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMaxMs")||"",10);if(mv>=1000&&mv<=600000)M=mv;}catch(_){}',
+      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0};',
       "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
       "    function hold(){",
       "      var a=cur();",
@@ -1381,20 +1416,56 @@
       "      if(!S.tHold)S.tHold=Date.now();",
       "    }",
       "    var iv=null;",
-      "    function release(){",
+      "    function release(w){",
+      "      if(S.tArm)return;",
       "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
-      "      S.tArm=Date.now();",
+      '      S.tArm=Date.now();S.why=w||"paint";',
       "      var a=cur();if(!a)return;",
-      // Restore the vendor's own shape — a plain writable property plus a
-      // detectTimeout the player can still cancel via p(e) — rather than
-      // calling detectBitrate() straight, so nothing downstream is surprised.
       "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
       "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
       "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
       "    }",
-      "    function arm(){hold();try{iv=setInterval(hold,500);}catch(_){}}",
+      "    function busy(){S.tBusy=Date.now();}",
+      "    function net(){",
+      "      try{var XP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype;",
+      "      if(XP&&XP.send&&!XP.__shellBTNet){XP.__shellBTNet=1;var os=XP.send;",
+      "        XP.send=function(){var x=this,d=0;function fin(){if(d)return;d=1;S.inflight--;busy();}",
+      "          S.inflight++;S.net++;busy();",
+      '          try{x.addEventListener("loadend",fin,false);}catch(_){}',
+      "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
+      "          try{return os.apply(this,arguments);}catch(e){fin();throw e;}};}}catch(_){}",
+      "      try{if(window.fetch&&!window.fetch.__shellBTNet){var of=window.fetch;",
+      "        var nf=function(){var p;S.inflight++;S.net++;busy();",
+      "          try{p=of.apply(this,arguments);}catch(e){S.inflight--;busy();throw e;}",
+      "          try{p.then(function(){S.inflight--;busy();},function(){S.inflight--;busy();});}catch(_){S.inflight--;busy();}",
+      "          return p;};",
+      "        nf.__shellBTNet=1;window.fetch=nf;}}catch(_){}",
+      "    }",
+      "    var lc=-1,ld=-1,tS=0;",
+      "    function poll(){",
+      "      S.polls++;",
+      "      var a=cur(),tok=0;",
+      "      try{tok=!!(a&&a.accessToken&&a.accessToken());}catch(_){tok=0;}",
+      "      if(tok&&!S.tAuth)S.tAuth=Date.now();",
+      "      var n=Date.now(),c=null,cd=-1;",
+      '      try{c=document.querySelectorAll(".card").length;cd=document.querySelectorAll(".card[data-id]").length;}catch(_){c=null;}',
+      "      if(c===null)return;",
+      "      S.cardsLoose=c;S.cards=cd;",
+      "      if(c!==lc||cd!==ld){lc=c;ld=cd;tS=n;}",
+      "      S.stable=tS?n-tS:0;",
+      "      if(!S.tAuth)return;",
+      '      if(n-S.tAuth>=M){release("ceiling");return;}',
+      "      if(ld<=0||!tS)return;",
+      "      if(n-tS<Q)return;",
+      "      if(S.inflight>0)return;",
+      "      if(n-S.tBusy<Q)return;",
+      '      release("settle");',
+      "    }",
+      '    function tick(){hold();if(G==="settle")poll();}',
+      "    function arm(){hold();try{iv=setInterval(tick,500);}catch(_){}}",
       "    var pg=window.__shellPaintGate;",
-      "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
+      '    if(G==="settle"){busy();net();if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}}',
+      "    else if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
       // JELA-707: paint-gated re-injector for the JellyfinEnhanced script
@@ -3784,7 +3855,14 @@
       // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
       // root-relative /gh/ jsdelivr pin resolved against the server origin
       // and 404ed on prod — a spurious warm every CWS boot.
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-771: the 27 bare /JellyfinEnhanced/js/* module entries and the
+      // /gh/ ratings.css pin are deleted — unreachable by construction: JE's
+      // loadScripts always requests modules versioned (?v=<cachekey>), and
+      // the JEL-406/407 legacy interceptor fetches versioned modules with
+      // cache:"no-store", so nothing can ever read an HTTP-cache entry
+      // warmed under the bare URL; the root-relative /gh/ pin 404ed on prod
+      // (same class as the JELA-716 note above).
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
@@ -3840,6 +3918,83 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
+      // JELA-740 (accepted CEO confirmation 45f50c90): opt-in query-param
+      // auth for API GETs, default OFF via
+      // localStorage['jellyfin.shell.queryAuth']='1'.
+      // 'jellyfin.shell.queryAuthDisabled' is honored NOW as the
+      // kill-switch reserved for a future default-ON flip (apiWarm house
+      // rule). Every jellyfin-web API call is cross-origin and carries
+      // `Authorization` (measured: NOT X-Emby-Authorization), which is not
+      // CORS-safelisted, so every GET costs preflight + request = two
+      // serialized round trips (~94 OPTIONS per cold boot, 38-39 of them
+      // before firstCard). Moving the token to the api_key query param
+      // (accepted by the server on every probed boot endpoint: 200 +
+      // ACAO:*, 401 without; server-side cost equal to header auth) makes
+      // the GET a CORS-simple request - no preflight at all. Measured on
+      // the M63 rig through a +50 ms/req h2 delay proxy, n=7/arm:
+      // OPTIONS 94->7, firstCard median -600..-818 ms (p=0.006-0.010) and
+      // variance collapse (6/7 shim boots inside a 31 ms band); prize
+      // scales with RTT x critical-chain depth. Non-GETs, relative URLs,
+      // Request-object fetch inputs, auth-header-less calls and URLs
+      // already carrying api_key/ApiKey all pass through untouched
+      // (= today's path); a request whose token cannot be parsed or whose
+      // headers cannot be copied also falls through untouched (sk++), so
+      // worst case is always today's boot. Installed FIRST in this body -
+      // innermost under the hssPin/apiWarm wrappers - so it rewrites the
+      // final URL the outer layers produce while their store keys/pins
+      // keep matching pre-auth URLs. XHR path: open() records
+      // method/url/async, setRequestHeader() buffers instead of applying
+      // (headers cannot precede open, so buffering at the instance is
+      // order-safe), send() re-opens on the rewritten URL (open resets
+      // headers, none were applied yet) and replays the non-auth buffer.
+      // One install per WINDOW (survives the document.write handoff).
+      // Referer mitigation per the accepted tradeoff: a no-referrer meta
+      // is (re)inserted per DOCUMENT under the same flag. Counters:
+      // window.__shellQA {on,fr,xr,sw,sk,err} = fetch rewrites, xhr
+      // rewrites, swallowed headers, skips, errors.
+      'if(flg("jellyfin.shell.queryAuth")&&!flg("jellyfin.shell.queryAuthDisabled")){try{' +
+      'try{if(document.head&&!document.getElementById("__shellQAMeta")){var qMt=document.createElement("meta");qMt.id="__shellQAMeta";qMt.name="referrer";qMt.content="no-referrer";document.head.insertBefore(qMt,document.head.firstChild)}}catch(_){}' +
+      "if(!W.__shellQA){" +
+      "var qa=W.__shellQA={on:1,fr:0,xr:0,sw:0,sk:0,err:0};" +
+      'var qaHN=["Authorization","X-Emby-Authorization","X-Emby-Token"];' +
+      'var qaHdr=function(n){n=String(n||"").toLowerCase();return n==="authorization"||n==="x-emby-authorization"||n==="x-emby-token"};' +
+      'var qaTok=function(n,v){n=String(n||"").toLowerCase();v=String(v||"");if(n==="x-emby-token")return v;var qm=/Token="([^"]*)"/.exec(v);return qm&&qm[1]?qm[1]:""};' +
+      "var qaUrl=function(u){return/^https?:\\/\\//.test(u)&&!/[?&]api_?key=/i.test(u)};" +
+      'var qaAdd=function(u,t){return u+(u.indexOf("?")<0?"?":"&")+"api_key="+encodeURIComponent(t)};' +
+      'if(typeof W.fetch==="function"){try{var qF=W.fetch;W.fetch=function(qu,qo){try{' +
+      'var qMm=qo&&qo.method?String(qo.method).toUpperCase():"GET";' +
+      'if(qMm==="GET"&&typeof qu==="string"&&qo&&qo.headers&&qaUrl(qu)){' +
+      'var qh=qo.headers,qt="",qp=0,qn=0,qh2=null,qi,qv,qk;' +
+      'if(typeof qh.get==="function"&&typeof qh["delete"]==="function"){' +
+      "for(qi=0;qi<3;qi++){qv=null;try{qv=qh.get(qaHN[qi])}catch(_){}if(qv){qp=1;if(!qt)qt=qaTok(qaHN[qi],qv)}}" +
+      'if(qt){try{qh2=new W.Headers(qh);for(qi=0;qi<3;qi++){if(qh2.get(qaHN[qi])){qh2["delete"](qaHN[qi]);qn++}}}catch(_){qh2=null}}' +
+      "}else{" +
+      "for(qk in qh){if(qaHdr(qk)){qp=1;if(!qt)qt=qaTok(qk,qh[qk])}}" +
+      "if(qt){qh2={};for(qk in qh){if(qaHdr(qk)){qn++;continue}qh2[qk]=qh[qk]}}" +
+      "}" +
+      "if(qt&&qh2){var qo2={},qk2;for(qk2 in qo)qo2[qk2]=qo[qk2];qo2.headers=qh2;qa.fr++;qa.sw+=qn;return qF.call(W,qaAdd(qu,qt),qo2)}" +
+      "if(qp)qa.sk++" +
+      "}" +
+      "}catch(_){qa.err++}" +
+      "return qF.apply(W,arguments)}}catch(_){qa.err++}}" +
+      "try{var QP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;" +
+      "if(QP&&QP.open&&QP.setRequestHeader&&QP.send){" +
+      "var qOp=QP.open,qSh=QP.setRequestHeader,qSe=QP.send;" +
+      'QP.open=function(qm3,qu3){try{this.__qaM=String(qm3||"").toUpperCase();this.__qaU=String(qu3||"");this.__qaA=arguments.length>2?!!arguments[2]:!0;this.__qaB=null}catch(_){qa.err++}return qOp.apply(this,arguments)};' +
+      'QP.setRequestHeader=function(qn3,qv3){try{if(this.__qaM==="GET"&&qaUrl(this.__qaU||"")){if(!this.__qaB)this.__qaB=[];this.__qaB.push([qn3,qv3]);return}}catch(_){qa.err++}return qSh.apply(this,arguments)};' +
+      "QP.send=function(){try{" +
+      "var qb=this.__qaB;" +
+      "if(qb){this.__qaB=null;" +
+      'var qt3="",qp3=0,qi3;' +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qaHdr(qb[qi3][0])){qp3=1;if(!qt3)qt3=qaTok(qb[qi3][0],qb[qi3][1])}}" +
+      'if(qt3){try{qOp.call(this,this.__qaM,qaAdd(this.__qaU,qt3),this.__qaA)}catch(_){qt3="";qa.err++}}' +
+      "if(qp3&&!qt3)qa.sk++;" +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qt3&&qaHdr(qb[qi3][0])){qa.sw++;continue}try{qSh.call(this,qb[qi3][0],qb[qi3][1])}catch(_){qa.err++}}" +
+      "if(qt3)qa.xr++}" +
+      "}catch(_){qa.err++}" +
+      "return qSe.apply(this,arguments)};" +
+      "}}catch(_){qa.err++}" +
+      "}}catch(_){G.err++}}" +
       // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
       // if upstream fixes the key derivation): opt-in pinned pageHash for
       // /HomeScreen/Sections, default OFF via

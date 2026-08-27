@@ -53,6 +53,31 @@
  *     C2. both flags on + cold store -> nothing pre-paint, then exactly one
  *         real detection after paint, persisted for the next boot.
  *     C3. bitrateCache alone does NOT defer — the flags stay independent.
+ *   PART D — JELA-737 SETTLE GATE (the shipped default).
+ *
+ * JELA-737. First paint is the wrong release gate. JELA-730 showed firstCard
+ * is not when the home is done, and JELA-736 measured the ladder landing at
+ * 7.4-8.5 s in 7/7 captures against settle times of 4.8-12.9 s — inside the
+ * fill window every time, 5,635 KiB / 46.4% of a warm boot's bytes, and
+ * measuring a link it is itself saturating. A constant post-paint delay cannot
+ * track settle, so the default gate is now the home actually going quiet:
+ * card counts stable for Q ms AND zero in-flight XHR/fetch with no request
+ * activity for Q ms AND an authenticated ApiClient, with an M ms ceiling after
+ * first auth so a deferral can never become a never.
+ *     D0. the SHIPPED default (no gate key) is "settle".
+ *     D1. onPaint alone does NOT release under the settle gate.
+ *     D2. cards still arriving -> still held, however quiet the link is.
+ *     D3. cards stable but a request in flight -> still held.
+ *     D4. the quiet window must elapse AFTER the last request finishes.
+ *     D5. stable + quiet -> release, then exactly one probe at the delay.
+ *     D6. no cards ever (login screen) -> the ceiling releases it.
+ *     D7. never authenticated -> never released (the ceiling clock is armed
+ *         by the first authed tick, not by install).
+ *     D8. the quiet window is tunable.
+ *     D9. gate="paint" is the kill switch: settle conditions do nothing.
+ *     D10. XHR is counted as well as fetch.
+ *     D11. the fetch wrapper is pass-through (same object back, a rejection
+ *          is still observed and does not strand the in-flight count).
  *
  * Run: node scripts/defer-bitrate-test.test.cjs
  *   or: pnpm --filter @jellyfin-tv/shell-tizen test
@@ -69,6 +94,9 @@ const MIN = SRC.endsWith("boot-shell.src.js")
   : SRC.replace(/shell\.js$/, "shell.min.js");
 
 const FLAG = "jellyfin.shell.deferBitrateTest";
+const GATE_FLAG = "jellyfin.shell.deferBitrateTestGate";
+const QUIET_FLAG = "jellyfin.shell.deferBitrateTestQuietMs";
+const MAX_FLAG = "jellyfin.shell.deferBitrateTestMaxMs";
 const KILL_LINE = 'localStorage.getItem("' + FLAG + '")!=="1"';
 
 let failures = 0;
@@ -149,6 +177,27 @@ check(
   srcLabel + ": registers release on onPaint",
   src.includes("pg.onPaint(release)"),
 );
+check(srcLabel + ": JELA-737 gate knob present", src.includes(GATE_FLAG));
+check(srcLabel + ": JELA-737 quiet knob present", src.includes(QUIET_FLAG));
+check(srcLabel + ": JELA-737 ceiling knob present", src.includes(MAX_FLAG));
+check(
+  srcLabel + ': settle is the default gate (only "paint" opts out)',
+  src.includes('var G="settle"') &&
+    src.includes('localStorage.getItem("' + GATE_FLAG + '")==="paint"'),
+);
+check(
+  srcLabel + ": settle reads the same counters rec.js derives settle from",
+  src.includes('document.querySelectorAll(".card").length') &&
+    src.includes('document.querySelectorAll(".card[data-id]").length'),
+);
+check(
+  srcLabel + ": in-flight is counted on both transports",
+  src.includes("XP.send=function()") && src.includes("window.fetch=nf"),
+);
+check(
+  srcLabel + ": a deferral cannot become a never (ceiling release)",
+  src.includes('release("ceiling")'),
+);
 // The diag object and the vendor property/timer names are the only identifiers
 // that survive minification — everything else in the shim is a local.
 for (const [label, text] of [
@@ -165,6 +214,9 @@ for (const [label, text] of [
     label + ": clears the vendor timer handle",
     text.includes("detectTimeout"),
   );
+  check(label + ": JELA-737 gate knob survives", text.includes(GATE_FLAG));
+  check(label + ": JELA-737 quiet knob survives", text.includes(QUIET_FLAG));
+  check(label + ": JELA-737 ceiling knob survives", text.includes(MAX_FLAG));
 }
 if (shim) {
   check("shim is ES5 (no arrow functions)", shim.indexOf("=>") === -1);
@@ -255,6 +307,12 @@ function vendorSchedule(api, clock) {
 // Run the shim with a fake paint gate and a controllable localStorage.
 function runShim(store, opts) {
   opts = opts || {};
+  // PART B pins the JELA-684 first-paint release, which JELA-737 kept as the
+  // explicit "paint" gate. The shipped DEFAULT is settle — PART D covers it,
+  // and D0 pins that the default really is settle.
+  if (!Object.prototype.hasOwnProperty.call(store, GATE_FLAG)) {
+    store[GATE_FLAG] = "paint";
+  }
   const clock = makeClock();
   const win = {};
   const gateCbs = { api: [], paint: [] };
@@ -529,6 +587,9 @@ if (!shim || !cacheShim) {
 } else {
   // A store that actually writes, plus a real Date, since 686 persists.
   function runBoth(store, seedRow) {
+    if (!Object.prototype.hasOwnProperty.call(store, GATE_FLAG)) {
+      store[GATE_FLAG] = "paint";
+    }
     const clock = makeClock();
     const win = {};
     const gateCbs = { api: [], paint: [] };
@@ -668,6 +729,366 @@ if (!shim || !cacheShim) {
       "C3: bitrateCache alone leaves the pre-paint probe running (684 is the deferral)",
       api.calls === 1 && !r.win.__shellBT,
       JSON.stringify({ calls: api.calls, bt: r.win.__shellBT || null }),
+    );
+  }
+}
+
+// ===========================================================================
+// PART D — JELA-737 SETTLE GATE (the shipped default)
+//
+// The gate is evaluated on the same 500 ms tick that re-guards the hold, and
+// needs THREE things at once: the card counts stable for Q ms (with at least
+// one real .card[data-id]), no in-flight XHR/fetch and no request activity for
+// Q ms, and an authenticated ApiClient. A ceiling M ms after the first authed
+// tick releases regardless, so a deferral can never become a never.
+//
+// The sandbox here adds what PART B does not need: a document whose card
+// counts the test drives directly, a fetch that hands back a synchronously
+// settleable thenable (a real Promise would need the microtask queue, which
+// the virtual clock does not own), and an XMLHttpRequest whose prototype the
+// shim can wrap.
+// ===========================================================================
+function makeDeferred() {
+  const cbs = [];
+  return {
+    promise: {
+      then(f, g) {
+        cbs.push([f, g]);
+        return { then() {} };
+      },
+    },
+    resolve() {
+      cbs.slice().forEach((pair) => pair[0] && pair[0]());
+    },
+    reject() {
+      cbs.slice().forEach((pair) => pair[1] && pair[1]());
+    },
+  };
+}
+
+function runSettle(store, opts) {
+  opts = opts || {};
+  const clock = makeClock();
+  const win = {};
+  const gateCbs = { api: [], paint: [] };
+  win.__shellPaintGate = opts.noGate
+    ? undefined
+    : {
+        onApi(cb) {
+          gateCbs.api.push(cb);
+        },
+        onPaint(cb) {
+          gateCbs.paint.push(cb);
+        },
+      };
+  const dom = { loose: 0, strict: 0 };
+  const doc = {
+    querySelectorAll(sel) {
+      return { length: sel === ".card" ? dom.loose : dom.strict };
+    },
+  };
+  const fetches = [];
+  win.fetch = function () {
+    const d = makeDeferred();
+    fetches.push(d);
+    return d.promise;
+  };
+  function XHR() {
+    this.readyState = 0;
+    this.listeners = [];
+  }
+  XHR.prototype.addEventListener = function (n, f) {
+    if (n === "loadend") this.listeners.push(f);
+  };
+  XHR.prototype.send = function () {
+    this.sent = (this.sent || 0) + 1;
+  };
+  win.XMLHttpRequest = XHR;
+  const sandbox = {
+    window: win,
+    document: doc,
+    localStorage: {
+      getItem(k) {
+        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+      },
+    },
+    setTimeout: clock.setTimeout,
+    setInterval: clock.setInterval,
+    clearTimeout: clock.clear,
+    clearInterval: clock.clear,
+    Date: { now: () => clock.now() + 1 },
+    Object,
+    parseInt,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(shim, sandbox);
+  return {
+    win,
+    clock,
+    dom,
+    fetches,
+    XHR,
+    finishXhr(x) {
+      x.readyState = 4;
+      x.listeners.slice().forEach((f) => f());
+    },
+    fireApi: () => gateCbs.api.forEach((c) => c()),
+    firePaint: () => gateCbs.paint.forEach((c) => c()),
+    state: () => win.__shellBT,
+  };
+}
+
+// Bring the home up: one card, one request that finishes, then go quiet.
+function fillHome(r, cards) {
+  r.dom.loose = cards;
+  r.dom.strict = cards;
+  const p = r.win.fetch();
+  r.clock.advance(500);
+  return p;
+}
+
+if (!shim) {
+  console.error("FAIL: shim not extractable — skipping PART D");
+  failures++;
+} else {
+  // --- D0: the SHIPPED default is settle, not paint. -----------------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    check(
+      "D0: with no gate key the shipped default is the settle gate",
+      r.state() && r.state().gate === "settle",
+      JSON.stringify(r.state() && r.state().gate),
+    );
+  }
+
+  // --- D1: onPaint does not release under the settle gate. -----------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.firePaint();
+    r.clock.advance(40000); // still short of the 45 s ceiling
+    check(
+      "D1: first paint alone does not release the hold",
+      r.state().tArm === 0 && api.calls === 0,
+      JSON.stringify({ calls: api.calls, s: r.state() }),
+    );
+  }
+
+  // --- D2: cards still arriving -> still held on a totally quiet link. -----
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    for (let i = 1; i <= 40; i++) {
+      // a row lands every 500 ms for 20 s; nothing is ever in flight
+      r.dom.loose = i * 6;
+      r.dom.strict = i * 6;
+      r.clock.advance(500);
+    }
+    check(
+      "D2: a home that is still filling is not settled",
+      r.state().tArm === 0 && api.calls === 0,
+      JSON.stringify({ calls: api.calls, cards: r.state().cards }),
+    );
+  }
+
+  // --- D3: cards stable but a request still in flight -> held. -------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    fillHome(r, 250);
+    r.clock.advance(20000);
+    check(
+      "D3: an outstanding request keeps the ladder held",
+      r.state().tArm === 0 && r.state().inflight === 1,
+      JSON.stringify({ s: r.state() }),
+    );
+  }
+
+  // --- D4/D5: quiet window, then release and exactly one probe. ------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    fillHome(r, 250);
+    r.clock.advance(10000);
+    r.fetches[0].resolve();
+    check(
+      "D4: in-flight count returns to zero when the request finishes",
+      r.state().inflight === 0,
+      JSON.stringify({ s: r.state() }),
+    );
+    r.clock.advance(2500);
+    check(
+      "D4: not released before the quiet window elapses",
+      r.state().tArm === 0,
+      JSON.stringify({ s: r.state() }),
+    );
+    r.clock.advance(1000);
+    check(
+      "D5: released once the home is stable and the link is quiet",
+      r.state().tArm !== 0 && r.state().why === "settle",
+      JSON.stringify({ s: r.state() }),
+    );
+    check("D5: probe not fired at release", api.calls === 0);
+    // The delay is measured from the release tick, not from this line.
+    const rel = r.state().tArm - 1;
+    r.clock.advance(rel + 3999 - r.clock.now());
+    check("D5: and not before the delay", api.calls === 0);
+    r.clock.advance(1);
+    check(
+      "D5: fires exactly once after the delay",
+      api.calls === 1,
+      "calls=" + api.calls,
+    );
+    r.clock.advance(60000);
+    check(
+      "D5: no re-guard interval left running, no second probe",
+      r.clock.pending() === 0 && api.calls === 1,
+      JSON.stringify({ pending: r.clock.pending(), calls: api.calls }),
+    );
+  }
+
+  // --- D6: no cards ever (login screen) -> the ceiling releases. -----------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(44000);
+    check("D6: still held just before the ceiling", r.state().tArm === 0);
+    r.clock.advance(2000);
+    check(
+      "D6: the ceiling releases a home that never settles",
+      r.state().tArm !== 0 && r.state().why === "ceiling",
+      JSON.stringify({ s: r.state() }),
+    );
+    r.clock.advance(4000);
+    check("D6: and the probe still runs", api.calls === 1);
+  }
+
+  // --- D7: never authenticated -> nothing to defer, nothing released. ------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    api.token = null;
+    r.win.ApiClient = api;
+    r.fireApi();
+    r.dom.loose = 12;
+    r.dom.strict = 12;
+    r.clock.advance(120000);
+    check(
+      "D7: the ceiling clock is armed by auth, not by install",
+      r.state().tArm === 0 && r.state().tAuth === 0,
+      JSON.stringify({ s: r.state() }),
+    );
+  }
+
+  // --- D8: the quiet window is tunable. ------------------------------------
+  {
+    const r = runSettle({ [FLAG]: "1", [QUIET_FLAG]: "10000" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    fillHome(r, 40);
+    r.fetches[0].resolve();
+    r.clock.advance(9000);
+    check("D8: quiet=10000 still held at 9 s", r.state().tArm === 0);
+    r.clock.advance(2000);
+    check(
+      "D8: released once the longer quiet window elapses",
+      r.state().tArm !== 0 && r.state().why === "settle",
+      JSON.stringify({ s: r.state() }),
+    );
+  }
+
+  // --- D9: gate="paint" is the kill switch. --------------------------------
+  {
+    const r = runSettle({ [FLAG]: "1", [GATE_FLAG]: "paint" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    fillHome(r, 250);
+    r.clock.advance(60000);
+    check(
+      "D9: gate=paint ignores settle entirely (no polling, no release)",
+      r.state().tArm === 0 && r.state().polls === 0 && api.calls === 0,
+      JSON.stringify({ s: r.state(), calls: api.calls }),
+    );
+    r.firePaint();
+    r.clock.advance(4000);
+    check(
+      "D9: ...and releases on first paint exactly as JELA-684 did",
+      api.calls === 1 && r.state().why === "paint",
+      JSON.stringify({ calls: api.calls, why: r.state().why }),
+    );
+  }
+
+  // --- D10: XHR counts too. ------------------------------------------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    r.dom.loose = 30;
+    r.dom.strict = 30;
+    const x = new r.XHR();
+    x.send();
+    check(
+      "D10: an XHR send is counted in flight",
+      r.state().inflight === 1,
+      JSON.stringify({ s: r.state() }),
+    );
+    r.clock.advance(20000);
+    check("D10: and holds the ladder while it runs", r.state().tArm === 0);
+    r.finishXhr(x);
+    check("D10: loadend clears it", r.state().inflight === 0);
+    r.finishXhr(x);
+    check(
+      "D10: a second loadend does not double-decrement",
+      r.state().inflight === 0,
+      JSON.stringify({ s: r.state() }),
+    );
+    r.clock.advance(3500);
+    check(
+      "D10: release follows the XHR going quiet",
+      r.state().tArm !== 0 && r.state().why === "settle",
+      JSON.stringify({ s: r.state() }),
+    );
+  }
+
+  // --- D11: the fetch wrapper is transparent. ------------------------------
+  {
+    const r = runSettle({ [FLAG]: "1" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    const p = r.win.fetch("https://tv.example.test/x");
+    check(
+      "D11: the caller gets the underlying promise back unchanged",
+      p === r.fetches[0].promise,
+    );
+    r.fetches[0].reject();
+    check(
+      "D11: a rejected request does not strand the in-flight count",
+      r.state().inflight === 0,
+      JSON.stringify({ s: r.state() }),
+    );
+    check(
+      "D11: both transports were wrapped exactly once",
+      r.win.fetch.__shellBTNet === 1 && r.XHR.prototype.__shellBTNet === 1,
     );
   }
 }
