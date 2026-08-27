@@ -24,6 +24,23 @@
  *   - oversize bodies are not stored
  *   - XHR delivery: readyState/status/responseText/response shadowed, events
  *     fired; abort() before delivery suppresses it
+ *
+ * JELA-760 widens the SAME store into the series drill-down behind its own flag
+ * localStorage['jellyfin.shell.itemCache']='1' (kill-switch
+ * 'jellyfin.shell.itemCacheDisabled'), so sections F/G/H pin:
+ *   - flag independence in both directions: itemCache alone arms the drill
+ *     shapes without the views pair, aliasCoalesce alone arms neither
+ *   - AC1: 14 reads of one item body (the count JELA-759 measured) collapse to
+ *     ONE request — a one-shot slot covers one of them, a multi-read slot all
+ *   - AC2: /Shows/{id}/Episodes, /Shows/NextUp and /Items/{id}/ThemeMedia are
+ *     covered, the last over XHR, the transport a fetch-level join cannot reach
+ *   - AC3: the four per-route pollers collapse on their own longer TTL
+ *   - TTLs are real: an item slot expires at 30 s, config outlives it at 60 s
+ *   - CLASSED invalidation: the third-party plugin write that lands inside
+ *     every dwell (JELA-757) retires config only and must NOT empty the item
+ *     slots; a play-state write and any unrecognised write do retire them; a
+ *     write that cannot touch an item body retires nothing; both transports
+ *   - with the drill flag off, JELA-742's behaviour is unchanged
  */
 "use strict";
 const fs = require("fs");
@@ -648,12 +665,373 @@ async function E() {
   console.log("OK: E3: record over XHR, serve over fetch");
 }
 
+// ---- JELA-760 fixtures -----------------------------------------------------
+const SERIES = "aaaaaaaabbbbccccddddeeeeffff0001";
+const SEASON = "aaaaaaaabbbbccccddddeeeeffff0002";
+const EPISODE = "aaaaaaaabbbbccccddddeeeeffff0003";
+const EPLIST = JSON.stringify({ Items: [{ Id: EPISODE, Name: "Ep 1" }] });
+const TAGS = JSON.stringify({ tags: ["a"] });
+const NOTIFY = JSON.stringify({ n: 0 });
+// itemCache on, aliasCoalesce off — the two flags must be independent.
+function icEnv(extra) {
+  return makeEnv({
+    flagOff: true,
+    store: Object.assign({ "jellyfin.shell.itemCache": "1" }, extra || {}),
+  });
+}
+const EPURL =
+  "/Shows/" + SERIES + "/Episodes?SeasonId=" + SEASON + "&UserId=" + UID;
+
+// ---- F. JELA-760 gating and flag independence ------------------------------
+async function F() {
+  // F1 — itemCache alone arms the block and covers the episode list.
+  let e = icEnv();
+  e.run();
+  assert(e.window.__shellACo && e.window.__shellACo.on, "F1: armed");
+  assert.strictEqual(e.window.__shellACo.ic, 1, "F1: drill mode reported");
+  let p = get(e, EPURL);
+  assert.strictEqual(e.netCalls.length, 1, "F1: first episode list hits net");
+  e.netCalls[0].resolve(200, EPLIST);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, EPURL);
+  assert.strictEqual(
+    e.netCalls.length,
+    1,
+    "F1/AC1: the refetched episode list issues NO request",
+  );
+  assert.strictEqual(await bodyOf(p), EPLIST, "F1: body served verbatim");
+  console.log("OK: F1: itemCache alone collapses /Shows/{id}/Episodes");
+
+  // F2 — aliasCoalesce alone must NOT pick up the drill shapes.
+  e = makeEnv();
+  e.run();
+  assert.strictEqual(e.window.__shellACo.ic, 0, "F2: drill mode off");
+  p = get(e, EPURL);
+  e.netCalls[0].resolve(200, EPLIST);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, EPURL);
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "F2: without itemCache the episode list is untouched",
+  );
+  e.netCalls[1].resolve(200, EPLIST);
+  await bodyOf(p);
+  console.log("OK: F2: the JELA-742 flag alone does not arm the drill shapes");
+
+  // F3 — kill-switch.
+  e = icEnv({ "jellyfin.shell.itemCacheDisabled": "1" });
+  e.run();
+  assert(!e.window.__shellACo, "F3: itemCacheDisabled=1 beats itemCache=1");
+  console.log("OK: F3: itemCacheDisabled=1 beats itemCache=1");
+
+  // F4 — the converse: itemCache must not silently ship JELA-742's views pair.
+  e = icEnv();
+  e.run();
+  p = get(e, "/UserViews?userId=" + UID);
+  e.netCalls[0].resolve(200, VIEWS);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/Users/" + UID + "/Views");
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "F4: the views pair stays behind aliasCoalesce",
+  );
+  e.netCalls[1].resolve(200, VIEWS);
+  await bodyOf(p);
+  console.log("OK: F4: itemCache does not arm the views pair");
+}
+
+// ---- G. multi-read, TTLs, key safety ---------------------------------------
+async function G() {
+  // G1 — the headline: the drill reads the same item body 14x. A one-shot slot
+  // covers one of those; a multi-read slot covers all of them.
+  let e = icEnv();
+  e.run();
+  let p = get(e, "/Users/" + UID + "/Items/" + SERIES);
+  e.netCalls[0].resolve(200, ITEM1);
+  await bodyOf(p);
+  await e.drainMicro();
+  for (let i = 0; i < 13; i++) {
+    p = get(
+      e,
+      i % 2 ? "/Items/" + SERIES : "/Users/" + UID + "/Items/" + SERIES,
+    );
+    assert.strictEqual(await bodyOf(p), ITEM1, "G1: read " + i + " served");
+  }
+  assert.strictEqual(
+    e.netCalls.length,
+    1,
+    "G1/AC1: 14 reads of the series body = 1 request",
+  );
+  assert.strictEqual(e.window.__shellACo.mh, 13, "G1: 13 multi-reads counted");
+  assert.strictEqual(
+    e.window.__shellACo.sv,
+    ITEM1.length * 13,
+    "G1: bytes kept off the wire counted",
+  );
+  console.log("OK: G1/AC1: 14 reads of one item body collapse to 1 request");
+
+  // G2 — the slot is not immortal: past the item TTL it goes back to the net.
+  e = icEnv();
+  e.run();
+  p = get(e, "/Users/" + UID + "/Items/" + SERIES);
+  e.netCalls[0].resolve(200, ITEM1);
+  await bodyOf(p);
+  await e.drainMicro();
+  e.tick(30001);
+  p = get(e, "/Users/" + UID + "/Items/" + SERIES);
+  assert.strictEqual(e.netCalls.length, 2, "G2: past the TTL it refetches");
+  e.netCalls[1].resolve(200, ITEM1);
+  await bodyOf(p);
+  console.log("OK: G2: an item slot expires at itemCacheTtlMs (30 s default)");
+
+  // G3 — config outlives items: 60 s vs 30 s, and each poller has its own key.
+  e = icEnv();
+  e.run();
+  const cfgs = [
+    ["/JellyfinEnhanced/tag-cache/" + UID, TAGS],
+    ["/JellyfinEnhanced/user-settings/" + UID + "/settings.json", TAGS],
+    ["/JellyfinEnhanced/jellyseerr/user-status", TAGS],
+    ["/NotifySync/Data", NOTIFY],
+  ];
+  for (const [u, b] of cfgs) {
+    const q = get(e, u);
+    e.netCalls[e.netCalls.length - 1].resolve(200, b);
+    await bodyOf(q);
+    await e.drainMicro();
+  }
+  assert.strictEqual(e.netCalls.length, 4, "G3: each poller fetched once");
+  const itm = get(e, "/Users/" + UID + "/Items/" + SEASON);
+  e.netCalls[4].resolve(200, ITEM1);
+  await bodyOf(itm);
+  await e.drainMicro();
+  e.tick(40000); // past the 30 s item TTL, inside the 60 s config TTL
+  for (const [u, b] of cfgs) {
+    assert.strictEqual(
+      await bodyOf(get(e, u)),
+      b,
+      "G3: " + u + " still served",
+    );
+  }
+  assert.strictEqual(
+    e.netCalls.length,
+    5,
+    "G3/AC3: the four per-route pollers are answered from cache",
+  );
+  const late = get(e, "/Users/" + UID + "/Items/" + SEASON);
+  assert.strictEqual(e.netCalls.length, 6, "G3: the item slot did expire");
+  e.netCalls[5].resolve(200, ITEM1);
+  await bodyOf(late);
+  console.log("OK: G3/AC3: the per-route pollers collapse on a longer TTL");
+
+  // G4 — NextUp and ThemeMedia (XHR in the wild) are covered too.
+  e = icEnv();
+  e.run();
+  p = get(e, "/Shows/NextUp?seriesid=" + SERIES + "&UserId=" + UID);
+  e.netCalls[0].resolve(200, EPLIST);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/Shows/NextUp?seriesid=" + SERIES + "&UserId=" + UID);
+  assert.strictEqual(e.netCalls.length, 1, "G4: NextUp collapses");
+  await bodyOf(p);
+  const t1 = new e.window.XMLHttpRequest();
+  t1.open("GET", SRV + "/Items/" + SEASON + "/ThemeMedia", true);
+  t1.send();
+  t1.__respond(200, EPLIST);
+  await e.drainMicro();
+  const t2 = new e.window.XMLHttpRequest();
+  t2.open("GET", SRV + "/Items/" + SEASON + "/ThemeMedia", true);
+  t2.send();
+  assert.strictEqual(
+    e.xcalls.length,
+    1,
+    "G4: ThemeMedia collapses over XHR — the transport a fetch-level join cannot reach",
+  );
+  console.log("OK: G4: NextUp (fetch) and ThemeMedia (XHR) collapse");
+
+  // G5 — safety: a different projection is a different key, and a foreign user
+  // is never served.
+  e = icEnv();
+  e.run();
+  p = get(e, EPURL);
+  e.netCalls[0].resolve(200, EPLIST);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, EPURL + "&Fields=Overview");
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "G5: a differing residual query never reads another projection",
+  );
+  e.netCalls[1].resolve(200, EPLIST);
+  await bodyOf(p);
+  p = get(e, "/Shows/" + SERIES + "/Episodes?UserId=" + OTHER);
+  assert.strictEqual(e.netCalls.length, 3, "G5: a foreign userId is untouched");
+  e.netCalls[2].resolve(200, EPLIST);
+  await bodyOf(p);
+  p = get(e, "/JellyfinEnhanced/tag-cache/" + OTHER);
+  assert.strictEqual(
+    e.netCalls.length,
+    4,
+    "G5: another user's tag-cache is untouched",
+  );
+  e.netCalls[3].resolve(200, TAGS);
+  await bodyOf(p);
+  console.log("OK: G5: differing params and foreign users never share a slot");
+}
+
+// ---- H. classed invalidation (the JELA-757 trap) ---------------------------
+// Seed one item slot and two config slots — one under the plugin root that
+// does the writing (JellyfinEnhanced) and one under a DIFFERENT plugin
+// (NotifySync) — then fire `method url` and report which survived.
+async function H() {
+  async function seeded() {
+    const e = icEnv();
+    e.run();
+    let p = get(e, "/Users/" + UID + "/Items/" + SERIES);
+    e.netCalls[0].resolve(200, ITEM1);
+    await bodyOf(p);
+    await e.drainMicro();
+    p = get(e, "/NotifySync/Data");
+    e.netCalls[1].resolve(200, NOTIFY);
+    await bodyOf(p);
+    await e.drainMicro();
+    p = get(e, "/JellyfinEnhanced/tag-cache/" + UID);
+    e.netCalls[2].resolve(200, TAGS);
+    await bodyOf(p);
+    await e.drainMicro();
+    assert.strictEqual(e.netCalls.length, 3, "H: seeded 3 slots");
+    return e;
+  }
+  async function probe(e) {
+    const before = e.netCalls.length;
+    const a = get(e, "/Users/" + UID + "/Items/" + SERIES);
+    const itemLive = e.netCalls.length === before;
+    if (!itemLive) e.netCalls[e.netCalls.length - 1].resolve(200, ITEM1);
+    await bodyOf(a);
+    await e.drainMicro();
+    const mid = e.netCalls.length;
+    const b = get(e, "/NotifySync/Data");
+    const cfgLive = e.netCalls.length === mid;
+    if (!cfgLive) e.netCalls[e.netCalls.length - 1].resolve(200, NOTIFY);
+    await bodyOf(b);
+    await e.drainMicro();
+    const mid2 = e.netCalls.length;
+    const c = get(e, "/JellyfinEnhanced/tag-cache/" + UID);
+    const cfgSameLive = e.netCalls.length === mid2;
+    if (!cfgSameLive) e.netCalls[e.netCalls.length - 1].resolve(200, TAGS);
+    await bodyOf(c);
+    await e.drainMicro();
+    return { item: itemLive, cfg: cfgLive, cfgSame: cfgSameLive };
+  }
+
+  // H1 — the exact write JELA-757 measured inside every dwell. A blanket flush
+  // would empty the store here; the classed flush must spare the item slot.
+  let e = await seeded();
+  e.window.fetch(
+    SRV + "/JellyfinEnhanced/user-settings/" + UID + "/settings.json",
+    {
+      method: "POST",
+    },
+  );
+  e.netCalls[e.netCalls.length - 1].resolve(204, "");
+  await e.drainMicro();
+  let r = await probe(e);
+  assert(r.item, "H1: a plugin write must NOT retire the item slot");
+  assert(!r.cfgSame, "H1: it DOES retire its own plugin's config slots");
+  console.log("OK: H1: a plugin-namespace write retires config only");
+
+  // H1b — and the config half is scoped to the WRITING plugin's root. The
+  // seven settings.json POSTs in the JELA-759 capture are all
+  // JellyfinEnhanced's; retiring NotifySync's slot as well cost 16 of the
+  // drill's requests for a body the write cannot reach.
+  assert(r.cfg, "H1b: a write must NOT retire another plugin's config slot");
+  console.log("OK: H1b: the config flush is scoped to the writing plugin");
+
+  // H2 — a play-state write must retire the item bodies it can have changed.
+  e = await seeded();
+  e.window.fetch(SRV + "/Users/" + UID + "/PlayedItems/" + EPISODE, {
+    method: "POST",
+  });
+  e.netCalls[e.netCalls.length - 1].resolve(200, "{}");
+  await e.drainMicro();
+  r = await probe(e);
+  assert(!r.item, "H2: PlayedItems retires the item slots");
+  assert(r.cfg && r.cfgSame, "H2: PlayedItems leaves config alone");
+  console.log("OK: H2: a play-state write retires the item slots");
+
+  // H3 — unknown shapes fail toward correctness.
+  e = await seeded();
+  e.window.fetch(SRV + "/Something/Unknown", { method: "PUT" });
+  e.netCalls[e.netCalls.length - 1].resolve(200, "{}");
+  await e.drainMicro();
+  r = await probe(e);
+  assert(!r.item, "H3: an unrecognised write still retires the item slots");
+  console.log("OK: H3: an unrecognised write still retires items");
+
+  // H4 — writes that provably cannot touch an item body are exempt.
+  e = await seeded();
+  e.window.fetch(SRV + "/DisplayPreferences/usersettings?userId=" + UID, {
+    method: "POST",
+  });
+  e.netCalls[e.netCalls.length - 1].resolve(204, "");
+  await e.drainMicro();
+  r = await probe(e);
+  assert(
+    r.item && r.cfg && r.cfgSame,
+    "H4: DisplayPreferences retires nothing",
+  );
+  console.log("OK: H4: an exempt write retires nothing");
+
+  // H5 — the flush is transport-agnostic (ThemeMedia proved XHR is in play).
+  e = await seeded();
+  const x = new e.window.XMLHttpRequest();
+  x.open("POST", SRV + "/Users/" + UID + "/FavoriteItems/" + SERIES, true);
+  x.send();
+  x.__respond(200, "{}");
+  await e.drainMicro();
+  r = await probe(e);
+  assert(!r.item, "H5: an XHR write retires the item slots too");
+  assert(r.cfg && r.cfgSame, "H5: and still spares config");
+  console.log("OK: H5: the flush fires over XHR as well as fetch");
+
+  // H6 — with the drill flag off, JELA-742's behaviour is byte-for-byte intact:
+  // no flush hook, because there is no multi-read slot to retire.
+  e = makeEnv();
+  e.run();
+  let p = get(e, "/Items/" + ID1);
+  e.netCalls[0].resolve(200, ITEM1);
+  await bodyOf(p);
+  await e.drainMicro();
+  e.window.fetch(SRV + "/Users/" + UID + "/PlayedItems/" + ID1, {
+    method: "POST",
+  });
+  e.netCalls[e.netCalls.length - 1].resolve(200, "{}");
+  await e.drainMicro();
+  p = get(e, "/Users/" + UID + "/Items/" + ID1);
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "H6: without itemCache the alias pair still collapses across a write",
+  );
+  assert.strictEqual(await bodyOf(p), ITEM1, "H6: JELA-742 body served");
+  assert.strictEqual(e.window.__shellACo.fl, 0, "H6: no flush accounted");
+  console.log("OK: H6: the drill flag off leaves JELA-742 untouched");
+}
+
 A()
   .then(B)
   .then(C)
   .then(D)
   .then(E)
-  .then(() => console.log("\nAll alias-coalesce checks passed."))
+  .then(F)
+  .then(G)
+  .then(H)
+  .then(() => console.log("\nAll alias-coalesce + item-cache checks passed."))
   .catch((e) => {
     console.error(e);
     process.exit(1);
