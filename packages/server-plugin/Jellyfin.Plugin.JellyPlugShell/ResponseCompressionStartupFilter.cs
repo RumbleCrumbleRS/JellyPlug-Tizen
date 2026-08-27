@@ -43,9 +43,6 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 var request = context.Request;
                 var response = context.Response;
 
-                // Diagnostic: stamp EVERY request so we can tell if the filter fires for a path
-                response.Headers["X-JellyPlug-AE"] = request.Headers.AcceptEncoding.ToString();
-
                 // Skip excluded routes (bandwidth probes, media streams, images)
                 if (IsExcluded(request.Path))
                 {
@@ -53,7 +50,17 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                     return;
                 }
 
-                // Only compress when the client advertises gzip support
+                // Only compress when the client advertises gzip support.
+                //
+                // JELA-792: the File Transformation plugin (2.5.11.0) loads before this
+                // one, so its IStartupFilter sits OUTSIDE ours, and it clears
+                // Accept-Encoding on the two routes it rewrites — /web/index.html and
+                // /web/ — so the inner static branch hands it identity HTML to inject
+                // into. By the time we see those requests the client's real
+                // Accept-Encoding is gone, so index.html ships identity (~20 KiB/boot)
+                // no matter what we do here. Measured: every other /web/ asset keeps
+                // its Accept-Encoding and compresses normally. Fixing it means
+                // compressing at the Caddy edge; it is not reachable from this hook.
                 var acceptEncoding = request.Headers.AcceptEncoding.ToString();
                 if (!acceptEncoding.Contains("gzip", StringComparison.OrdinalIgnoreCase))
                 {
@@ -83,7 +90,7 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 var compressible = IsCompressibleContentType(response.ContentType);
                 if (hasStarted || body.Length < 150 || !string.IsNullOrEmpty(contentEncoding) || !compressible)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "JELA-727 skip {Path}: hasStarted={S} bodyLen={L} contentEncoding={E} compressible={C} contentType={CT}",
                         request.Path, hasStarted, body.Length, contentEncoding, compressible, response.ContentType);
                     if (body.Length > 0)
@@ -91,9 +98,18 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                     return;
                 }
 
-                // Compress the body
+                // Compress the body.
+                //
+                // JELA-792: Optimal, not Fastest. Measured on production bodies,
+                // Fastest is far weaker than its name suggests — /ScheduledTasks went
+                // 29,324 -> 9,741 on the wire at Fastest against 6,983 at level 6, and
+                // /web/manifest.json 812 -> 332 against 298. That is ~25-28% of the
+                // remaining bytes, on a boot this issue exists to make smaller, for
+                // sub-millisecond CPU on bodies this size. Fastest also lost outright
+                // on small payloads: /System/Info/Public (215 B) compressed to >= 215
+                // and shipped identity, which is what made AC1 read as a failure.
                 using var compressed = new MemoryStream();
-                using (var gz = new GZipStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+                using (var gz = new GZipStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
                 {
                     gz.Write(body, 0, body.Length);
                 }
@@ -113,7 +129,7 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 AppendVary(response.Headers, "Accept-Encoding");
                 response.ContentLength = compressedBody.Length;
 
-                _logger.LogInformation(
+                _logger.LogDebug(
                     "JELA-727 compressed {Path}: {Raw} -> {Gz} bytes",
                     request.Path, body.Length, compressedBody.Length);
 
