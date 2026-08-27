@@ -200,8 +200,11 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-707: re-pinned — both shells' seeds gained the paint-gated
     // JellyfinEnhanced re-injector (identical block; the hashes still
     // differ for the pre-existing reasons above).
-    retail: "2168a1783f3a5e51",
-    boot: "70ca658c483f3d96",
+    // JELA-748: re-pinned again — both shells gained __qeB (the swallowed-
+    // localStorage-write counter behind the beacon's tx.qe) and route
+    // __txSet's exhausted quota path through it.
+    retail: "120495b8be9e13ed",
+    boot: "ff535ba1cfe4de67",
   },
   {
     name: "buildDiagSeedScript",
