@@ -203,8 +203,11 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-748: re-pinned again — both shells gained __qeB (the swallowed-
     // localStorage-write counter behind the beacon's tx.qe) and route
     // __txSet's exhausted quota path through it.
-    retail: "120495b8be9e13ed",
-    boot: "ff535ba1cfe4de67",
+    // JELA-737: re-pinned — both shells' seeds gained the settle-gated
+    // bitrate-ladder release (identical block; same pre-existing
+    // divergence reasons as above).
+    retail: "8b396bf20fc48fdd",
+    boot: "00fbb39cbdb8f4b4",
   },
   {
     name: "buildDiagSeedScript",
