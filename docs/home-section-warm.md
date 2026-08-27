@@ -69,22 +69,56 @@ hourly trigger — the obvious design, and the one the ticket's "scheduled
 warm-up" wording suggests — would leave the box cold for 59 of every 60
 minutes and miss essentially every real boot.
 
+## What a warm pass has to do — measured, after the cheap version failed
+
+The first version of this warmed the cheapest thing that plausibly shared the
+substrate: two user-less ordered item scans, same rows, same indexes, no user,
+no DTOs, no images. **It was a clean null**, and it is worth recording exactly
+how convincing it looked, because the argument for it is still a good argument.
+
+Holding the quiet window at 300 s and varying only the treatment applied
+immediately before a **concurrent** home fan-out (server-side
+`x-response-time-ms`, ms):
+
+| treatment before the fan-out               | LatestShows | LatestMovies |    CWNU |    BYW |
+| ------------------------------------------ | ----------: | -----------: | ------: | -----: |
+| nothing (control)                          |       2,199 |        1,528 |   2,317 |    635 |
+| nothing (control, repeat)                  |       1,823 |        1,526 |   1,839 |    560 |
+| 2 ordered item scans, **no user**          |       2,058 |        1,587 |   2,109 |    581 |
+| the same 2 scans, **with a user**          |       1,362 |        1,103 |   1,336 | **13** |
+| **build the LatestShows row for one user** |     **140** |      **141** | **172** | **21** |
+| in-window warm reference                   |        ~150 |         ~140 |    ~180 |    ~15 |
+
+The user-less scans moved nothing. Adding a user is a real lever — it fixes
+`BecauseYouWatched` outright, which is almost entirely user-data work — but it
+only takes ~40% off the three big rows. Building the row gets all of it.
+
+Two further results are what make that affordable, and changing either
+invalidates the cost model:
+
+- **One section carries the other three.** Warming only `LatestShows` left the
+  whole fan-out at 140/141/172/21 ms. So the warmer does not need to reach the
+  other three sections, which matters because they belong to a third-party
+  plugin and reaching them would mean loopback HTTP with a stored credential.
+- **One user carries the household.** Warming as user _Test_ and then firing
+  the fan-out as user _Matt_ read 148/124/135/15 ms. The expensive cold state
+  is the shared item, DTO and image work; the per-user part is small.
+
 ## The fix
 
-`SectionWarmService`: a background timer that issues the two ordered library
-reads the "Latest" rows scan — the most recent 200 items by premiere date, for
-`Episode` and for `Movie` — every `SectionWarmIntervalSeconds`. Off by default
-(`0`); the field is both the enable and the kill switch, is re-read on a 10 s
-tick, and so takes effect without a restart.
+`SectionWarmService`: a background timer that, every
+`SectionWarmIntervalSeconds`, builds the `LatestShows` row for **one** user via
+`LatestShowsFastPath.TryBuild` — the same call the JELA-731 middleware makes to
+answer a real request — and discards the result. Users are walked round-robin,
+one per pass, so whatever per-user state is left over is covered within a lap
+without paying 11x per pass to redo the shared work.
 
-The pass is read-only and deliberately minimal: no user on the query, no DTO
-projection, no images, no user data, `EnableTotalRecordCount = false`. The only
-state it changes is state a real request would have had to build for itself.
+Off by default (`0`); the field is both the enable and the kill switch, is
+re-read on a 10 s tick, and so takes effect without a restart.
 
-**Why no user.** A user-scoped query pulls in permission filtering and
-user-data joins, and forces the warmer to choose which of the household's 11
-users to spend the box's CPU on. The measured cold cost is in reading the item
-rows and their ordering index, which is shared.
+When `TryBuild` steps aside — `HideWatchedItems` on or unreadable, or a user
+with no TV library — the pass falls back to the user-scoped ordered scans,
+which the table above puts at roughly 40% of the win rather than 0%.
 
 **Why a timer and not an `IScheduledTask`.** This plugin already owns two
 scheduled tasks, so a third was the obvious home for this, and it is the wrong
@@ -97,10 +131,10 @@ invisible to both. `scripts/section-warm.test.cjs` pins this, because the next
 person to find a bare timer in a plugin with two scheduled tasks will
 reasonably want to tidy it into a third.
 
-**Cost.** At a 30 s interval, ~2,880 passes/day at roughly 120 ms of query time
-each: about 345 s of CPU per day, ~0.4% of one core. Overlapping passes are
-skipped rather than queued, so a box that is already struggling cannot have the
-warmer pile onto it.
+**Cost.** One row build is ~150 ms; at a 30 s interval that is ~2,880 passes a
+day and about **0.5% of one core**. Overlapping passes are skipped rather than
+queued, so a box that is already struggling cannot have the warmer pile onto
+it.
 
 ## Running the measurement again
 

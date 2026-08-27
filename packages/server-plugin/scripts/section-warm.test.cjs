@@ -26,9 +26,17 @@
  *      the gate into BLOCKED a large fraction of the time and take the
  *      programme's own instrument down with it.
  *
- *   C. Read-only and user-less. No DTOs, no images, no user data, no writes —
- *      the only state a pass changes is state a real request would have had to
- *      build for itself anyway.
+ *   C. It warms by BUILDING THE ROW, one user per pass. The cheap version —
+ *      user-less ordered item scans — was measured and is a null: it moved a
+ *      300 s-cold fan-out from 2,199/1,528/2,317/635 ms to 2,058/1,587/2,109/
+ *      581 ms. Building the LatestShows row for one user gets 140/141/172/21
+ *      against a warm reference of 146/158/184/16. So the pins below defend
+ *      the expensive-looking call against being "optimised" back into the
+ *      version that does nothing, and defend one-user-per-pass against
+ *      becoming all-users-per-pass (11x the cost to redo shared work).
+ *
+ *   C2. Still read-only. It builds an in-memory row and discards it; nothing
+ *      it does is observable as a change.
  *
  *   D. It cannot pile up or take the host down. Overlapping passes are
  *      skipped rather than queued, and an unhandled exception on a timer
@@ -101,28 +109,66 @@ assert.ok(
   "SectionWarmService must record WHY it is a timer and not a scheduled task",
 );
 
-// ---- C. read-only, user-less, no DTO work ------------------------------------
+// ---- C. it warms by building the row, one user per pass ----------------------
 
+// THE pin on this file. The obvious "cheaper" refactor — drop the row build,
+// keep the item scans — is the exact version that was measured and produced
+// nothing, and it is indistinguishable from a working warmer without a 10-minute
+// production A/B. Anyone removing this call has to delete an assertion that says
+// so.
 assert.ok(
-  /EnableTotalRecordCount\s*=\s*false/.test(svc),
-  "the warm probe must not ask for a total record count — it is a second pass over the same set, for nothing",
+  /LatestShowsFastPath\.TryBuild\(/.test(svc),
+  "the warm pass must BUILD the row — user-less item scans alone are a measured null (2,058 vs 2,199 ms control)",
 );
 assert.ok(
-  /new DtoOptions\(false\)\s*\{\s*EnableImages\s*=\s*false\s*\}/.test(svc),
-  "the warm probe must not build DTOs or resolve images",
+  /NULL|null\b/.test(svc) && /2,058/.test(svc),
+  "SectionWarmService must carry the numbers that rule out the cheap version, or it will be reintroduced",
+);
+
+// One user per pass. Warming every user each pass is 11x the cost to redo the
+// same shared item/DTO/image work — measured: warming as one user left another
+// user's fan-out at 148/124/135/15 ms.
+assert.ok(
+  /Interlocked\.Increment\(ref _userCursor\)/.test(svc),
+  "users must be walked round-robin, one per pass",
+);
+// Pinned as "no loop in this file at all" rather than "no loop over a variable
+// named users": the first version of this assertion matched the identifier, and
+// a seeded mutation that looped over the expression directly walked straight
+// through it. There is no loop here today, so the strong form costs nothing.
+assert.ok(
+  !/\bforeach\b|\bfor\s*\(|\bwhile\s*\(/.test(svc),
+  "a warm pass must not loop over users — that is 11x the cost to redo the same shared work",
+);
+assert.strictEqual(
+  (svc.match(/LatestShowsFastPath\.TryBuild\(/g) || []).length,
+  1,
+  "exactly one row build per pass",
+);
+// GetUsersIds, not GetUsers: identity only, no User entity materialised per pass.
+assert.ok(
+  /GetUsersIds\(\)/.test(svc) && !/\.GetUsers\(\)/.test(svc),
+  "the user walk needs ids only",
+);
+// A lap that reshuffles every pass is not a lap.
+assert.ok(
+  /GetUsersIds\(\)\.OrderBy\(/.test(svc),
+  "the user order must be stable across passes",
+);
+
+// The fallback probe, for when TryBuild steps aside (HideWatchedItems on, or a
+// user with no TV library). Worth ~40% rather than 0%, so it must stay cheap.
+assert.ok(
+  /EnableTotalRecordCount\s*=\s*false/.test(svc),
+  "the fallback probe must not ask for a total record count — a second pass over the same set, for nothing",
 );
 assert.ok(
   /Limit\s*=\s*ProbeLimit/.test(svc) && /ProbeLimit\s*=\s*200/.test(svc),
-  "the warm probe must be bounded by an explicit row limit",
+  "the fallback probe must be bounded by an explicit row limit",
 );
-// A user on the query would pull in permission filtering and user-data joins,
-// and would force the warmer to pick which of the household's users to spend
-// the box's CPU on.
-assert.ok(
-  !/new InternalItemsQuery\(/.test(svc),
-  "the warm probe must use the user-less InternalItemsQuery ctor",
-);
-// Nothing a warm pass does may be observable as a change.
+
+// ---- C2. still read-only -----------------------------------------------------
+
 assert.ok(
   !/\b(Save|Update|Delete|Create|Write)Item|SaveChanges|Response\b/.test(svc),
   "a warm pass must be read-only",
