@@ -217,6 +217,63 @@ public class HomeScreenSectionCacheStartupFilter : IStartupFilter
         var originalBodyFeature = context.Features.Get<IHttpResponseBodyFeature>();
         using var buffer = new MemoryStream();
 
+        // Filled in below, read back inside the OnStarting callback.
+        byte[]? storableBody = null;
+        string? storableETag = null;
+        string? storableContentType = null;
+
+        // JELA-794: this callback — NOT the code after nextMiddleware() — is the
+        // only place the CORS headers are observable.
+        //
+        // ASP.NET Core's CORS middleware does not write Access-Control-* inline;
+        // it registers an OnStarting callback and stamps them when the response
+        // actually begins. This filter buffers the body, and the compression
+        // filter outside it buffers again, so the response has NOT started when
+        // we return from nextMiddleware(). The old code snapshotted headers
+        // there and captured AllowOrigin = null every single time, then replayed
+        // that nothing on every hit: measured on prod 1.0.37.0, a cache hit came
+        // back with no Access-Control-Allow-Origin at all and a real M63 fetch
+        // from Origin: null failed with "Failed to fetch" while CDP showed a
+        // clean 200 (the JELA-687 divergence).
+        //
+        // OnStarting callbacks run in REVERSE registration order, and this one
+        // is registered before the inner pipeline runs, so it fires after the
+        // CORS middleware's and sees the finished header set.
+        response.OnStarting(() =>
+        {
+            if (storableBody == null || storableETag == null)
+                return Task.CompletedTask;
+
+            EnsureVaryOrigin(response.Headers);
+
+            var allowOrigin = HeaderOrNull(response, "Access-Control-Allow-Origin");
+
+            // Fail-safe, and the reason correctness here does not rest on that
+            // ordering argument: a cross-origin request whose CORS headers we
+            // could not capture is simply NOT cached. A miss costs a rebuild; a
+            // hit that replays no Access-Control-Allow-Origin is a dead row on
+            // every TV, because the shell runs at file:// and every section
+            // request it makes is cross-origin.
+            if (allowOrigin == null && !string.IsNullOrEmpty(context.Request.Headers.Origin.ToString()))
+                return Task.CompletedTask;
+
+            var storedUtc = DateTimeOffset.UtcNow;
+            _cache.Store(key, new HomeScreenSectionCache.CachedResponse
+            {
+                Body = storableBody,
+                ETag = storableETag,
+                ContentType = storableContentType ?? "application/json; charset=utf-8",
+                AllowOrigin = allowOrigin,
+                AllowCredentials = HeaderOrNull(response, "Access-Control-Allow-Credentials"),
+                ExposeHeaders = HeaderOrNull(response, "Access-Control-Expose-Headers"),
+                Vary = HeaderOrNull(response, "Vary"),
+                StoredUtc = storedUtc,
+                ExpiresUtc = storedUtc + ttl,
+            });
+
+            return Task.CompletedTask;
+        });
+
         context.Features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(buffer));
         try
         {
@@ -238,24 +295,15 @@ public class HomeScreenSectionCacheStartupFilter : IStartupFilter
             var etag = HomeScreenSectionCache.ComputeETag(body);
             response.Headers["ETag"] = etag;
             ApplyClientCacheHeaders(response.Headers, ttl, config);
-            EnsureVaryOrigin(response.Headers);
             response.Headers[CacheStatusHeader] = "miss";
 
+            // Arms the OnStarting callback registered above. Vary and the store
+            // itself happen there, once the CORS headers exist.
             if (body.Length <= HomeScreenSectionCache.MaxBodyBytes)
             {
-                var storedUtc = DateTimeOffset.UtcNow;
-                _cache.Store(key, new HomeScreenSectionCache.CachedResponse
-                {
-                    Body = body,
-                    ETag = etag,
-                    ContentType = response.ContentType ?? "application/json; charset=utf-8",
-                    AllowOrigin = HeaderOrNull(response, "Access-Control-Allow-Origin"),
-                    AllowCredentials = HeaderOrNull(response, "Access-Control-Allow-Credentials"),
-                    ExposeHeaders = HeaderOrNull(response, "Access-Control-Expose-Headers"),
-                    Vary = HeaderOrNull(response, "Vary"),
-                    StoredUtc = storedUtc,
-                    ExpiresUtc = storedUtc + ttl,
-                });
+                storableBody = body;
+                storableETag = etag;
+                storableContentType = response.ContentType;
             }
 
             if (HomeScreenSectionCache.ETagMatches(context.Request.Headers.IfNoneMatch.ToString(), etag))
@@ -297,15 +345,22 @@ public class HomeScreenSectionCacheStartupFilter : IStartupFilter
     }
 
     /// <summary>
-    /// A cacheable body that carries an Access-Control-Allow-Origin must vary
-    /// on Origin, or an HTTP cache can hand a response minted for one origin
-    /// to a fetch from another (JELA-688 shipped exactly this bug once).
+    /// Every cacheable section response varies on Origin — including the ones
+    /// that carry no Access-Control-Allow-Origin at all.
+    ///
+    /// JELA-794: the old version returned early unless an
+    /// Access-Control-Allow-Origin was already present, which covered only half
+    /// the hazard. M63 does not partition its HTTP cache by request mode
+    /// (JELA-687), so the dangerous direction is the other one: an entry stored
+    /// for a request that sent no Origin carries no CORS headers, and M63 will
+    /// happily replay it into a later cross-origin fetch, which then fails for
+    /// a body the server would have allowed. Varying on Origin unconditionally
+    /// gives the two request modes separate cache slots and closes both
+    /// directions. The header is appended, never assigned, so the compression
+    /// filter's Vary: Accept-Encoding survives.
     /// </summary>
     private static void EnsureVaryOrigin(IHeaderDictionary headers)
     {
-        if (string.IsNullOrEmpty(headers["Access-Control-Allow-Origin"].ToString()))
-            return;
-
         var vary = headers["Vary"].ToString();
         if (string.IsNullOrEmpty(vary))
             headers["Vary"] = "Origin";
