@@ -75,11 +75,14 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 var body = buffer.ToArray();
 
                 // Skip if already encoded, non-JSON/text, or too small to bother
-                if (response.HasStarted
-                    || body.Length < 150
-                    || !string.IsNullOrEmpty(response.Headers.ContentEncoding.ToString())
-                    || !IsCompressibleContentType(response.ContentType))
+                var hasStarted = response.HasStarted;
+                var contentEncoding = response.Headers.ContentEncoding.ToString();
+                var compressible = IsCompressibleContentType(response.ContentType);
+                if (hasStarted || body.Length < 150 || !string.IsNullOrEmpty(contentEncoding) || !compressible)
                 {
+                    _logger.LogDebug(
+                        "JELA-727 skip {Path}: hasStarted={S} bodyLen={L} contentEncoding={E} compressible={C} contentType={CT}",
+                        request.Path, hasStarted, body.Length, contentEncoding, compressible, response.ContentType);
                     if (body.Length > 0)
                         await originalBodyFeature.Stream.WriteAsync(body);
                     return;
@@ -106,6 +109,10 @@ public class ResponseCompressionStartupFilter : IStartupFilter
                 response.Headers.ContentEncoding = "gzip";
                 AppendVary(response.Headers, "Accept-Encoding");
                 response.ContentLength = compressedBody.Length;
+
+                _logger.LogDebug(
+                    "JELA-727 compressed {Path}: {Raw} -> {Gz} bytes",
+                    request.Path, body.Length, compressedBody.Length);
 
                 await originalBodyFeature.Stream.WriteAsync(compressedBody);
             });
