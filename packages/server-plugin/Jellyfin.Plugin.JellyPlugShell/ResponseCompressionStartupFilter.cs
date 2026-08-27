@@ -27,11 +27,21 @@ public class ResponseCompressionStartupFilter : IStartupFilter
     private static readonly Type? MiddlewareType = Type.GetType(
         "Microsoft.AspNetCore.ResponseCompression.ResponseCompressionMiddleware, Microsoft.AspNetCore.ResponseCompression");
 
+    private static readonly Type? ProviderServiceType = Type.GetType(
+        "Microsoft.AspNetCore.ResponseCompression.IResponseCompressionProvider, Microsoft.AspNetCore.ResponseCompression");
+
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
     {
         return app =>
         {
-            if (MiddlewareType != null)
+            // UseMiddleware(Type) constructs the middleware at pipeline build:
+            // if IResponseCompressionProvider ever stopped being registered
+            // (it powers Jellyfin's static-file compression today), an
+            // unguarded branch would fail the whole server at startup instead
+            // of just skipping compression.
+            if (MiddlewareType != null
+                && ProviderServiceType != null
+                && app.ApplicationServices.GetService(ProviderServiceType) != null)
             {
                 app.UseWhen(
                     context => !IsExcluded(context.Request.Path),
