@@ -1,72 +1,120 @@
+using System.IO.Compression;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.JellyPlugShell;
 
 /// <summary>
-/// Inserts ASP.NET Core ResponseCompressionMiddleware at the front of the
-/// pipeline so controller output (not just static files) is compressed.
-/// Jellyfin only wraps its static-file branch — every controller response
-/// ships uncompressed, costing ~3.9 MiB per boot on a TV whose boot is
-/// bytes-and-RTT bound.
+/// Inserts gzip compression at the front of the pipeline so controller output
+/// (not just static files) is compressed. Jellyfin only wraps its static-file
+/// branch — every controller response ships uncompressed, costing ~3.9 MiB per
+/// boot on a TV whose boot is bytes-and-RTT bound.
 ///
-/// Jellyfin already registers response compression services (they power
-/// static-file compression). This filter reuses those registrations by
-/// inserting the same middleware ahead of routing. UseMiddleware(Type) is
-/// used instead of UseResponseCompression() to avoid a compile-time
-/// extension-method resolution conflict between the shared framework and
-/// the NuGet DI abstractions that Jellyfin.Controller pins.
+/// The original approach (UseMiddleware via reflected Type) was silent-noop in
+/// Jellyfin's plugin AssemblyLoadContext: Type.GetType() and AppDomain scans
+/// both failed to produce a type that ActivatorUtilities could wire against the
+/// already-registered IResponseCompressionProvider. Rather than chasing another
+/// layer of reflection, this filter implements gzip directly — the same pattern
+/// HomeScreenSectionCacheStartupFilter uses for body capture.
 ///
-/// Type.GetType("…, AssemblyName") is unreliable across plugin AssemblyLoadContexts
-/// in Jellyfin — the plugin's isolated context may not resolve shared-framework
-/// assemblies by simple name. AppDomain.CurrentDomain.GetAssemblies() searches the
-/// already-loaded set instead; Microsoft.AspNetCore.ResponseCompression is always
-/// loaded because Jellyfin uses it for static-file compression.
-///
-/// BREACH/CRIME: compressing authenticated responses over TLS is the
-/// standard theoretical caveat. Jellyfin already compresses authenticated
-/// static content, the API responses carry no reflected user input
-/// alongside the auth token, and this is a LAN/DDNS deployment.
+/// BREACH/CRIME: compressing authenticated responses over TLS is the standard
+/// theoretical caveat. Jellyfin already compresses authenticated static content,
+/// the API responses carry no reflected user input alongside the auth token, and
+/// this is a LAN/DDNS deployment.
 /// </summary>
 public class ResponseCompressionStartupFilter : IStartupFilter
 {
-    private const string AssemblyName = "Microsoft.AspNetCore.ResponseCompression";
+    private readonly ILogger<ResponseCompressionStartupFilter> _logger;
 
-    // Resolve at pipeline-build time (inside Configure), not at service-registration
-    // time. The Microsoft.AspNetCore.ResponseCompression assembly is loaded by
-    // Jellyfin for static-file compression, but it may not be loaded yet when
-    // RegisterServices runs. By the time IStartupFilter.Configure is called the
-    // service container is fully built and the assembly is in AppDomain.
-    private static Type? ResolveType(string typeName) =>
-        AppDomain.CurrentDomain.GetAssemblies()
-            .FirstOrDefault(a => a.GetName().Name == AssemblyName)
-            ?.GetType($"{AssemblyName}.{typeName}");
+    public ResponseCompressionStartupFilter(ILogger<ResponseCompressionStartupFilter> logger)
+    {
+        _logger = logger;
+    }
 
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
     {
         return app =>
         {
-            var middlewareType = ResolveType("ResponseCompressionMiddleware");
-            var providerType   = ResolveType("IResponseCompressionProvider");
-
-            // UseMiddleware(Type) constructs the middleware at pipeline build:
-            // if IResponseCompressionProvider ever stopped being registered
-            // (it powers Jellyfin's static-file compression today), an
-            // unguarded branch would fail the whole server at startup instead
-            // of just skipping compression.
-            if (middlewareType != null
-                && providerType != null
-                && app.ApplicationServices.GetService(providerType) != null)
+            app.Use(async (context, nextMiddleware) =>
             {
-                app.UseWhen(
-                    context => !IsExcluded(context.Request.Path),
-                    branch => branch.UseMiddleware(middlewareType));
-            }
+                var request = context.Request;
+                var response = context.Response;
+
+                // Skip excluded routes (bandwidth probes, media streams, images)
+                if (IsExcluded(request.Path))
+                {
+                    await nextMiddleware();
+                    return;
+                }
+
+                // Only compress when the client advertises gzip support
+                var acceptEncoding = request.Headers.AcceptEncoding.ToString();
+                if (!acceptEncoding.Contains("gzip", StringComparison.OrdinalIgnoreCase))
+                {
+                    await nextMiddleware();
+                    return;
+                }
+
+                // Intercept the response body so we can decide whether to compress
+                var originalBodyFeature = context.Features.Get<IHttpResponseBodyFeature>()!;
+                using var buffer = new MemoryStream();
+                context.Features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(buffer));
+
+                try
+                {
+                    await nextMiddleware();
+                }
+                finally
+                {
+                    context.Features.Set(originalBodyFeature);
+                }
+
+                var body = buffer.ToArray();
+
+                // Skip if already encoded, non-JSON/text, or too small to bother
+                if (response.HasStarted
+                    || body.Length < 150
+                    || !string.IsNullOrEmpty(response.Headers.ContentEncoding.ToString())
+                    || !IsCompressibleContentType(response.ContentType))
+                {
+                    if (body.Length > 0)
+                        await originalBodyFeature.Stream.WriteAsync(body);
+                    return;
+                }
+
+                // Compress the body
+                using var compressed = new MemoryStream();
+                using (var gz = new GZipStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+                {
+                    gz.Write(body, 0, body.Length);
+                }
+
+                var compressedBody = compressed.ToArray();
+
+                // Only ship compressed if it's actually smaller
+                if (compressedBody.Length >= body.Length)
+                {
+                    response.ContentLength = body.Length;
+                    if (body.Length > 0)
+                        await originalBodyFeature.Stream.WriteAsync(body);
+                    return;
+                }
+
+                response.Headers.ContentEncoding = "gzip";
+                AppendVary(response.Headers, "Accept-Encoding");
+                response.ContentLength = compressedBody.Length;
+
+                await originalBodyFeature.Stream.WriteAsync(compressedBody);
+            });
+
             next(app);
         };
     }
 
-    private static bool IsExcluded(Microsoft.AspNetCore.Http.PathString path)
+    private static bool IsExcluded(PathString path)
     {
         if (!path.HasValue)
             return false;
@@ -83,5 +131,35 @@ public class ResponseCompressionStartupFilter : IStartupFilter
             return true;
 
         return false;
+    }
+
+    private static bool IsCompressibleContentType(string? contentType)
+    {
+        if (string.IsNullOrEmpty(contentType))
+            return false;
+
+        // Strip parameters (e.g. "; charset=utf-8")
+        var semi = contentType.IndexOf(';', StringComparison.Ordinal);
+        var mimeType = (semi < 0 ? contentType : contentType[..semi]).Trim();
+
+        return mimeType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+            || mimeType.Equals("text/json", StringComparison.OrdinalIgnoreCase)
+            || mimeType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            || mimeType.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
+            || mimeType.Equals("application/javascript", StringComparison.OrdinalIgnoreCase)
+            || mimeType.Equals("application/wasm", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AppendVary(IHeaderDictionary headers, string field)
+    {
+        var existing = headers.Vary.ToString();
+        if (string.IsNullOrEmpty(existing))
+        {
+            headers.Vary = field;
+        }
+        else if (!existing.Contains(field, StringComparison.OrdinalIgnoreCase))
+        {
+            headers.Vary = existing + ", " + field;
+        }
     }
 }
