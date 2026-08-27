@@ -212,6 +212,24 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">Plugin script cache (JELA-723)</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisablePluginScriptCacheHeaders" />
+                                <span>Disable Cache-Control stamping on plugin client scripts</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch. By default the plugin stamps public, max-age=86400 (plus Vary:
+                                Accept-Encoding, Origin) on /NotifySync/client.js, /GetAvatar/ClientScript and
+                                /PluginPages/inject.js, so a TV re-downloads them at most once a day instead of
+                                every boot (NotifySync's own max-age is 300 s; the other two send none). Takes
+                                effect without a restart; a stale script self-corrects within a day of a plugin
+                                upgrade.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">Boot diagnostics</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -263,6 +281,7 @@
                     { id: 'DisableLatestShowsFastPath', type: 'bool' },
 
                     { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
+                    { id: 'DisablePluginScriptCacheHeaders', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];

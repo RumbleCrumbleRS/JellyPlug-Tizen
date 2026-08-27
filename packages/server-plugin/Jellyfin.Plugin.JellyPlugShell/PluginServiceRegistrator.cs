@@ -19,6 +19,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // filter itself inserts the middleware at the front of the pipeline.
         serviceCollection.AddTransient<IStartupFilter, ResponseCompressionStartupFilter>();
 
+        // JELA-723: revalidatable Cache-Control + Vary on the three third-party
+        // plugin client scripts the shell injects on the boot critical path
+        // (NotifySync max-age=300 re-downloads 62 KiB every boot; the other two
+        // ship no Cache-Control at all). Routes we do not own — same hook as
+        // JELA-731/732.
+        serviceCollection.AddTransient<IStartupFilter, PluginScriptCacheStartupFilter>();
+
         // JELA-722: immutable headers on content-hashed /web/ chunks. IStartupFilter +
         // OnStarting is the only order-independent hook here — RegisterServices runs
         // before Startup.ConfigureServices, so a direct middleware substitution loses.
