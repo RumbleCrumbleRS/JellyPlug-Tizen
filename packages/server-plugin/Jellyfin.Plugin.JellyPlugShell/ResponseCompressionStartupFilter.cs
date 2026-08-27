@@ -17,6 +17,12 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// extension-method resolution conflict between the shared framework and
 /// the NuGet DI abstractions that Jellyfin.Controller pins.
 ///
+/// Type.GetType("…, AssemblyName") is unreliable across plugin AssemblyLoadContexts
+/// in Jellyfin — the plugin's isolated context may not resolve shared-framework
+/// assemblies by simple name. AppDomain.CurrentDomain.GetAssemblies() searches the
+/// already-loaded set instead; Microsoft.AspNetCore.ResponseCompression is always
+/// loaded because Jellyfin uses it for static-file compression.
+///
 /// BREACH/CRIME: compressing authenticated responses over TLS is the
 /// standard theoretical caveat. Jellyfin already compresses authenticated
 /// static content, the API responses carry no reflected user input
@@ -24,28 +30,37 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// </summary>
 public class ResponseCompressionStartupFilter : IStartupFilter
 {
-    private static readonly Type? MiddlewareType = Type.GetType(
-        "Microsoft.AspNetCore.ResponseCompression.ResponseCompressionMiddleware, Microsoft.AspNetCore.ResponseCompression");
+    private const string AssemblyName = "Microsoft.AspNetCore.ResponseCompression";
 
-    private static readonly Type? ProviderServiceType = Type.GetType(
-        "Microsoft.AspNetCore.ResponseCompression.IResponseCompressionProvider, Microsoft.AspNetCore.ResponseCompression");
+    // Resolve at pipeline-build time (inside Configure), not at service-registration
+    // time. The Microsoft.AspNetCore.ResponseCompression assembly is loaded by
+    // Jellyfin for static-file compression, but it may not be loaded yet when
+    // RegisterServices runs. By the time IStartupFilter.Configure is called the
+    // service container is fully built and the assembly is in AppDomain.
+    private static Type? ResolveType(string typeName) =>
+        AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == AssemblyName)
+            ?.GetType($"{AssemblyName}.{typeName}");
 
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
     {
         return app =>
         {
+            var middlewareType = ResolveType("ResponseCompressionMiddleware");
+            var providerType   = ResolveType("IResponseCompressionProvider");
+
             // UseMiddleware(Type) constructs the middleware at pipeline build:
             // if IResponseCompressionProvider ever stopped being registered
             // (it powers Jellyfin's static-file compression today), an
             // unguarded branch would fail the whole server at startup instead
             // of just skipping compression.
-            if (MiddlewareType != null
-                && ProviderServiceType != null
-                && app.ApplicationServices.GetService(ProviderServiceType) != null)
+            if (middlewareType != null
+                && providerType != null
+                && app.ApplicationServices.GetService(providerType) != null)
             {
                 app.UseWhen(
                     context => !IsExcluded(context.Request.Path),
-                    branch => branch.UseMiddleware(MiddlewareType));
+                    branch => branch.UseMiddleware(middlewareType));
             }
             next(app);
         };
