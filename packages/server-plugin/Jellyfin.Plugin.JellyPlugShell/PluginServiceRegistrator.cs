@@ -14,6 +14,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<DiagIngestService>();
         serviceCollection.AddSingleton<ConfigFingerprintService>();
 
+        // JELA-727: gzip for controller output — Jellyfin's own compression only
+        // wraps the static-file branch. Registered alongside the other filters; the
+        // filter itself inserts the middleware at the front of the pipeline.
+        serviceCollection.AddTransient<IStartupFilter, ResponseCompressionStartupFilter>();
+
         // JELA-722: immutable headers on content-hashed /web/ chunks. IStartupFilter +
         // OnStarting is the only order-independent hook here — RegisterServices runs
         // before Startup.ConfigureServices, so a direct middleware substitution loses.
