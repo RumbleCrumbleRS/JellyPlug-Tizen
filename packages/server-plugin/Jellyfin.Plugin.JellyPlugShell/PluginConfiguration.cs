@@ -168,4 +168,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// other layer set. Read per-response — flipping it needs no restart.
     /// </summary>
     public bool DisableCorsPreflightMaxAge { get; set; }
+
+    /// <summary>
+    /// JELA-723 kill switch: stop stamping Cache-Control/Vary on the three
+    /// third-party plugin client scripts (/NotifySync/client.js,
+    /// /GetAvatar/ClientScript, /PluginPages/inject.js). Read per-response, so
+    /// flipping it takes effect without a restart and each plugin's own
+    /// headers come back exactly as it sent them.
+    /// </summary>
+    public bool DisablePluginScriptCacheHeaders { get; set; }
 }
