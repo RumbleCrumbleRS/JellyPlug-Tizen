@@ -198,11 +198,12 @@
                                 A server that has been idle answers its first home row 10-25x slower than its
                                 own warm speed, and every row pays at once — the cost is in the shared library
                                 query path, not in any one section, and the row cache above cannot help because
-                                its TTL expires long before the first boot of the day. This runs two small
-                                read-only library queries in the background to hold that state open. 0 turns it
-                                off. The penalty comes back within about a minute of idle — measured here: none
-                                at 30 s, 2.6x at 60 s, 7.6x at 5 min — so an interval above 60 buys very little
-                                and 30 is the tested setting. Roughly 0.4% of one CPU core.
+                                its TTL expires long before the first boot of the day. This rebuilds one home
+                                row in the background, for one user at a time, to hold that state open —
+                                measured, that is enough to keep all four rows and every user fast. 0 turns it
+                                off. The penalty comes back within about a minute of idle — none at 30 s, 2.6x
+                                at 60 s, 7.6x at 5 min — so an interval above 60 buys very little and 30 is the
+                                tested setting. Roughly 0.5% of one CPU core.
                             </div>
                         </div>
                     </div>

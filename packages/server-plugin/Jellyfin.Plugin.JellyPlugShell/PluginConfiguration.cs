@@ -183,6 +183,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// stretch pays at once, and the JELA-732 section cache cannot help — its
     /// TTL is 30 s, so a first boot is always a miss.
     ///
+    /// A pass rebuilds ONE home row for ONE user, which measured is enough to
+    /// carry all four rows and the whole household (~0.5% of one core at 30 s).
+    /// The cheaper thing this originally did — user-less item scans — is a
+    /// measured null; see SectionWarmService.
+    ///
     /// The interval has to be short. Walking the quiet interval up on
     /// production, against each checkpoint's own in-window warm reference:
     /// 30 s of idle costs nothing, 60 s costs 2.6x, 5 min costs 7.6x. This

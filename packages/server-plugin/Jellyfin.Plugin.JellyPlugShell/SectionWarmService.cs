@@ -6,8 +6,8 @@ using System.Threading;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Dto;
-using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Querying;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -33,18 +33,44 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// is what sets the cadence: an hourly — or even five-minutely — warmer would miss almost
 /// every real boot while looking, from the settings page, exactly like a working one.</para>
 ///
+/// <para><b>What a pass has to do, measured rather than reasoned.</b> The first version of
+/// this warmed the cheapest thing that plausibly shared the substrate — two user-less
+/// ordered item scans, same rows, same indexes, no user, no DTOs, no images — and it was
+/// a clean NULL. Holding the quiet window at 300 s and varying only the treatment applied
+/// before a concurrent home fan-out (LatestShows / LatestMovies / ContinueWatchingNextUp /
+/// BecauseYouWatched, ms):</para>
+///
+/// <list type="bullet">
+/// <item><description>nothing: 2,199 / 1,528 / 2,317 / 635 — and 1,823 / 1,526 / 1,839 /
+/// 560 on a repeat, so the control is stable</description></item>
+/// <item><description>2 ordered scans, no user: 2,058 / 1,587 / 2,109 / 581 — <b>nothing
+/// moved</b></description></item>
+/// <item><description>the same 2 scans with a user: 1,362 / 1,103 / 1,336 / 13 — ~40%,
+/// and BecauseYouWatched fully</description></item>
+/// <item><description>building the LatestShows row for one user: <b>140 / 141 / 172 /
+/// 21</b>, against an in-window warm reference of 146 / 158 / 184 / 16</description></item>
+/// </list>
+///
+/// <para>So the pass builds the row. Two further results are what make that affordable,
+/// and both are load-bearing enough that changing either invalidates the cost model:
+/// warming <b>one</b> section carries the other three, and warming <b>one</b> user carries
+/// the rest of the household — warming as user Test left a fan-out issued as user Matt
+/// reading 148 / 124 / 135 / 15 ms. The expensive cold state is the shared item, DTO and
+/// image work; the per-user part is small.</para>
+///
 /// <para><b>Why a plain timer and not an <c>IScheduledTask</c>.</b> This plugin already
 /// owns two scheduled tasks, so the task route was the obvious one — and it is the wrong
 /// one. The JELA-692 perf pre-flight gate blocks any production measurement while a
-/// scheduled task is non-Idle; a warmer firing every ~45 s would put a task in Running
+/// scheduled task is non-Idle; a warmer firing every 30 s would put a task in Running
 /// state a large fraction of the time and randomly block the gate that every performance
 /// conclusion in this programme is quoted against. It would also write a task-history row
 /// per pass. A timer is invisible to both.</para>
 ///
 /// <para>Off by default (<see cref="PluginConfiguration.SectionWarmIntervalSeconds"/> is
-/// 0). It touches nothing a request can see: it issues read-only item queries with no
-/// user, builds no DTOs, writes no response, and stores nothing — the only state it
-/// changes is the state a request would have had to build for itself anyway.</para>
+/// 0). It touches nothing a request can see: it reads, builds an in-memory row it then
+/// discards, writes no response and stores nothing — the only state it changes is the
+/// state a request would have had to build for itself anyway. One row build per pass is
+/// ~150 ms, so ~0.5% of one core at 30 s.</para>
 /// </summary>
 public sealed class SectionWarmService : IDisposable
 {
@@ -58,10 +84,8 @@ public sealed class SectionWarmService : IDisposable
     internal static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Rows read per probe. 200 is the page size <c>LatestShowsSection</c> asks for per
-    /// window and the first probe size <see cref="LatestShowsFastPath"/> uses, so a pass
-    /// touches the same stretch of the same indexes a real row build does — the point is
-    /// to warm what the row reads, not to read as little as possible.
+    /// Rows read per fallback probe. 200 is the page size <c>LatestShowsSection</c> asks
+    /// for per window and the first probe size <see cref="LatestShowsFastPath"/> uses.
     /// </summary>
     internal const int ProbeLimit = 200;
 
@@ -73,6 +97,7 @@ public sealed class SectionWarmService : IDisposable
     private int _started;
     private int _running;
     private long _passes;
+    private long _userCursor = -1;
     private bool _loggedFirstPass;
     private bool _loggedFirstError;
 
@@ -168,62 +193,113 @@ public sealed class SectionWarmService : IDisposable
 
     private void WarmOnce()
     {
+        var userManager = _services?.GetService<IUserManager>();
         var libraryManager = _services?.GetService<ILibraryManager>();
-        if (libraryManager is null)
+        var dtoService = _services?.GetService<IDtoService>();
+
+        if (userManager is null || libraryManager is null || dtoService is null)
+        {
+            return;
+        }
+
+        var userId = NextUser(userManager);
+        if (userId is null)
         {
             return;
         }
 
         var stopwatch = Stopwatch.StartNew();
 
-        // The two ordered scans behind every "Latest" row on the home. Both Home Screen
-        // Sections' own window walk and the JELA-731 fast path read exactly this: the most
-        // recent items of one type ordered by premiere date. Deliberately NOT one probe —
-        // the baseline showed a cheap section still paying its full cold penalty after
-        // four other sections had already been served, so the warm state is not one shared
-        // switch that any query flips.
-        var episodes = Probe(libraryManager, BaseItemKind.Episode);
-        var movies = Probe(libraryManager, BaseItemKind.Movie);
+        // Build the LatestShows row exactly as a request would: this is the same call the
+        // JELA-731 middleware makes to answer GET /HomeScreen/Section/LatestShows, for a
+        // real user, all the way through DTO and image resolution.
+        //
+        // It looks like far more work than a warm-up needs, and the cheap version was
+        // measured and is a NULL. Two user-less ordered item scans every 30 s — the same
+        // rows, the same indexes, but no user, no DTOs and no images — moved a 300 s-cold
+        // fan-out from 2,199/1,528/2,317/635 ms to 2,058/1,587/2,109/581 ms, i.e. not at
+        // all. Putting a user on those same scans got roughly 40% of it. Building this one
+        // row got ALL of it: 140/141/172/21 ms against an in-window warm reference of
+        // 146/158/184/16.
+        //
+        // And it is one row, not four. Warming LatestShows alone carries LatestMovies,
+        // ContinueWatchingNextUp and BecauseYouWatched with it — which is what makes this
+        // affordable, and what keeps the warmer free of any dependency on a third-party
+        // plugin's internals or on a stored credential to call its routes over loopback.
+        var built = LatestShowsFastPath.TryBuild(userId.Value, userManager, libraryManager, dtoService);
+
+        // TryBuild returns null when it cannot prove it reproduces the upstream row —
+        // HideWatchedItems on or unreadable, or a user with no TV library. That is a
+        // supported configuration, not a fault, so fall back to the user-scoped ordered
+        // scans: measured at ~40% of the win rather than 0%.
+        var rows = built?.Items.Count;
+        if (rows is null)
+        {
+            Probe(libraryManager, BaseItemKind.Episode);
+            Probe(libraryManager, BaseItemKind.Movie);
+        }
 
         stopwatch.Stop();
         LastPassMs = stopwatch.Elapsed.TotalMilliseconds;
         var passes = Interlocked.Increment(ref _passes);
 
         // One Information line on the first pass, so "is the warmer actually running?" is
-        // answerable from the server log without a debug build. Every pass after that is
-        // Debug: at a ~45 s cadence this fires ~1,900 times a day and must not be a
-        // presence in the log an operator has to scroll past.
+        // answerable from the server log without a debug build — and it names the path
+        // taken, because the fallback is worth far less and is otherwise invisible. Every
+        // pass after that is Debug: at a 30 s cadence this fires ~2,900 times a day and
+        // must not be a presence an operator has to scroll past.
         if (!_loggedFirstPass)
         {
             _loggedFirstPass = true;
             _logger.LogInformation(
-                "section warm active: first pass read {Episodes} episodes + {Movies} movies in {Elapsed} ms",
-                episodes,
-                movies,
+                "section warm active: first pass built {Rows} rows in {Elapsed} ms",
+                rows?.ToString(CultureInfo.InvariantCulture) ?? "no (fell back to item scans)",
                 LastPassMs.ToString("0.0", CultureInfo.InvariantCulture));
             return;
         }
 
         _logger.LogDebug(
-            "section warm pass {Pass}: {Episodes} episodes + {Movies} movies in {Elapsed} ms",
+            "section warm pass {Pass}: {Rows} rows in {Elapsed} ms",
             passes,
-            episodes,
-            movies,
+            rows?.ToString(CultureInfo.InvariantCulture) ?? "no (fell back to item scans)",
             LastPassMs.ToString("0.0", CultureInfo.InvariantCulture));
     }
 
     /// <summary>
-    /// Reads the most recent <see cref="ProbeLimit"/> items of one type by premiere date.
+    /// Picks the user this pass warms on behalf of, round-robin over the household in a
+    /// stable order.
     /// </summary>
     /// <remarks>
-    /// No user on the query, and that is the design: a user-scoped query would pull in
-    /// permission filtering and user-data joins, would have to pick <em>which</em> of the
-    /// household's users to warm on the household's behalf, and would multiply the cost by
-    /// the user count. The cold cost measured is in reading the item rows and their
-    /// ordering index, which is shared. <c>DtoOptions(false)</c> keeps it to that: no
-    /// images, no user data, no DTO projection — none of which the warm-up needs and all
-    /// of which a real request builds per user anyway.
+    /// One user per pass, not all of them. The expensive part of the cold cost is the
+    /// shared item/DTO/image work, so a single user's build is what lifts the whole box;
+    /// warming all 11 users every pass would multiply the cost by 11 to re-do that shared
+    /// work eleven times. Round-robin rather than a fixed pick because whatever per-user
+    /// state is left over is then covered too, within one lap, and because "the first
+    /// user" is an arbitrary choice that would quietly privilege one household member.
     /// </remarks>
+    private Guid? NextUser(IUserManager userManager)
+    {
+        // GetUsersIds rather than GetUsers: this needs identity only, and materialising
+        // every User entity per pass to read one Guid off it is work the warm-up is
+        // supposed to be cheap enough to avoid. Ordered, because the natural order is not
+        // contractually stable and a lap that reshuffles every pass is not a lap.
+        var users = userManager.GetUsersIds().OrderBy(x => x).ToArray();
+        if (users.Length == 0)
+        {
+            return null;
+        }
+
+        var next = Interlocked.Increment(ref _userCursor);
+
+        // Modulo of a value that will eventually wrap negative: & long.MaxValue first.
+        return users[(int)((next & long.MaxValue) % users.Length)];
+    }
+
+    /// <summary>
+    /// Reads the most recent <see cref="ProbeLimit"/> items of one type by premiere date.
+    /// The fallback pass only — see <see cref="WarmOnce"/> for why this is not the main
+    /// one.
+    /// </summary>
     private static int Probe(ILibraryManager libraryManager, BaseItemKind kind)
     {
         var items = libraryManager.GetItemList(new InternalItemsQuery
