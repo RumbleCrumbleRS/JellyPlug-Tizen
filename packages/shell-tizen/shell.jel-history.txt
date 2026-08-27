@@ -7,6 +7,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 
 *JEL-3 Jellyfin Tizen browser-shell prototype , milestone M1).
 *JEL-2 Architecture (per roadmap section 3
+*JEL-406 the /407 legacy interceptor fetches versioned modules with
 *JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
 *JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
 *JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
@@ -95,6 +96,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-238 JEL-237 defense-in-depth for : media-bar YouTube-iframe crash
 *JEL-484 actually decoded, so the old TV never crashed. update: cappi
 *JEL-623 the sweep (MutationObserver + 400ms interval) arms via
+*JEL-407 the src-setter interceptor routes the body through the
 *JEL-1580 v60: synthetic AF self-test harness. Gated by either
 *JEL-623 the self-test depends on the now-gated 600ms auto-
 *JEL-1779 Tizen 5.5 first-boot hits NotSupportedError when web
@@ -166,6 +168,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-535 v24: webpack 5 wr.c exists but is empty (closure-bound'
 *JEL-727 also pick factories that look like pluginManager so we
 *JEL-623 kick the walker on first paint instead of at seed time.
+*JEL-535 `wr` itself comes from the probe-push idiom (QA-verified on
+*JEL-535 probe-push: a chunk with no modules whose runtime callback i
 *JEL-401 Plugin script transpilation
 *JEL-401 `Chromium/56` instead of `Chrome/56` (Q60R 2019 panels seen
 *JEL-436 will reject, preventing <video> element creation on Tizen 5.
@@ -202,6 +206,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-617 First paint records boot-phase ring mark "snap" recorder
 *JEL-647 JELA-22 : window scroll offset, so capture only snapshots th
 *JEL-436 precedent) captures __webpack_require__, then p + u(id) /
+*JEL-406 the /407 legacy interceptor fetches versioned modules with
 *JEL-66 ships to; cf. the note that Chrome 68+ is the one that wipes
 *JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
 *JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
@@ -331,6 +336,10 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1974 v68): stamp `tDocumentWrite` into window.__qaMarks and
 *JEL-134 JEL-132 v2): boot-time restore from the IndexedDB creds
 *JEL-1832 String-level on purpose: it has to cover both the string fas
+*JEL-1832 rewriteFontThirdPartyCss above — covers the string fast path
+*JEL-406 flow through the /407 dynamic-script interceptors, so legacy
+*JEL-557 engines still get the same transpile + cache treatment as th
+*JEL-1832 covers the string fast path AND the DOMParser path, and runs
 *JEL-621 kick the pre-lowered drop manifest fetch first so it overlap
 *JEL-1034 v53): speculative babel prime, flag-gated.
 *JEL-1984 align the speculative prime with the head-IIFE soft-skip
