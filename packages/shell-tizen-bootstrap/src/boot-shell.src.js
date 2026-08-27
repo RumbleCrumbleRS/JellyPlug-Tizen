@@ -3080,7 +3080,14 @@
       // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
       // root-relative /gh/ jsdelivr pin resolved against the server origin
       // and 404ed on prod — a spurious warm every CWS boot.
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-771: the 27 bare /JellyfinEnhanced/js/* module entries and the
+      // /gh/ ratings.css pin are deleted — unreachable by construction: JE's
+      // loadScripts always requests modules versioned (?v=<cachekey>), and
+      // the JEL-406/407 legacy interceptor fetches versioned modules with
+      // cache:"no-store", so nothing can ever read an HTTP-cache entry
+      // warmed under the bare URL; the root-relative /gh/ pin 404ed on prod
+      // (same class as the JELA-716 note above).
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
