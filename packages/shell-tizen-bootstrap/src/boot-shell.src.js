@@ -3,6 +3,12 @@
   try {
     window.__shellT0 || (window.__shellT0 = Date.now());
   } catch (_) {}
+  //@@SHELL_CORE:installLsWriteBehind@@
+
+  // JELA-751: arm the write-behind overlay before any cache body can be
+  // written this boot (the shell-core declaration above hoists).
+  installLsWriteBehind();
+
   // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
   // deltas (ms from __shellT0) to localStorage["jellyfin.shell.bootPhases"]
   // (last 10 boots) so rehaul baselines are readable on-device. Record is
@@ -1441,8 +1447,11 @@
       // instead of replaying a stale transpiled body. Lockstep with the TV
       // shell's txKey / __txKey (JEL-26).
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      // JELA-748 (AC2): seed-side twin of txWriteLost — a swallowed
+      // localStorage write bumps the shared window counter reported as tx.qe.
+      "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
-      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
+      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1459,7 +1468,7 @@
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -3925,7 +3934,10 @@
         if (qc === 1)
           localStorage.setItem(TX_PFX + "ts:" + k, String(Date.now()));
       }
-    } catch (_) {}
+    } catch (_) {
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
+    }
   }
   function txGetStatic(url) {
     try {
@@ -3968,11 +3980,21 @@
   }
   // JEL-619: cap raised 262144 -> 2097152 (mirror of shell.js txSetStatic)
   // so the JSI channel aggregate can cache its transpile under txc:.
+  // JELA-748 (AC2): count localStorage writes that were SWALLOWED, so the
+  // fleet beacon can tell "the store stopped accepting writes" from "the
+  // store is working". Lockstep with shell.js txWriteLost.
+  function txWriteLost() {
+    try {
+      window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
+    } catch (_) {}
+  }
   function txSetStatic(url, body) {
     if (!(typeof body != "string" || body.length > 2097152))
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
-      } catch (_) {}
+      } catch (_) {
+        txWriteLost();
+      }
   }
   // ---- Config-epoch boot gate (JELA-59, parent JELA-57 WS-2) -------------
   //
