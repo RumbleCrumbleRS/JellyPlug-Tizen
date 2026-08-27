@@ -1166,17 +1166,31 @@
       // enableAutomaticBitrateDetection. On a saved-server cold boot that lands
       // at t~7.7 s, inside the pre-firstCard window, and escalates
       // 500 KB -> 1 MB -> 3 MB (served as 512 KiB + 1 MiB + 4 MiB = 5.5 MiB).
-      // Nothing on home consumes it, so hold it until the paint gate opens then
-      // re-arm the vendor's own timer. The hold is an accessor because the
+      // Nothing on home consumes it, so hold it until the release gate opens
+      // then re-arm the vendor's own timer. The hold is an accessor because the
       // connection manager re-assigns the property from its options on every
       // (re)auth and then calls the scheduler.
+      // JELA-737: the release gate is settle, not first paint — JELA-736
+      // measured the ladder landing inside the home-fill window in 7/7 captures
+      // (7.4-8.5 s vs settle 4.8-12.9 s), 46.4% of a warm boot's bytes, while
+      // biasing its own result low by saturating the link it is measuring.
+      // Release needs card counts stable for Q ms, zero in-flight XHR/fetch and
+      // no request activity for Q ms, and an authed ApiClient; a ceiling M ms
+      // after first auth guarantees a deferral never becomes a never.
       // Flag-dark: localStorage["jellyfin.shell.deferBitrateTest"]="1".
+      // JELA-737 kill switch: "jellyfin.shell.deferBitrateTestGate"="paint".
       // Diag: window.__shellBT.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
       "    var D=4000;",
       '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
-      "    var S=window.__shellBT={on:1,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0};",
+      '    var G="settle";',
+      '    try{if(localStorage.getItem("jellyfin.shell.deferBitrateTestGate")==="paint")G="paint";}catch(_){}',
+      "    var Q=3000;",
+      '    try{var qv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestQuietMs")||"",10);if(qv>=250&&qv<=120000)Q=qv;}catch(_){}',
+      "    var M=45000;",
+      '    try{var mv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMaxMs")||"",10);if(mv>=1000&&mv<=600000)M=mv;}catch(_){}',
+      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0};',
       "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
       "    function hold(){",
       "      var a=cur();",
@@ -1188,17 +1202,56 @@
       "      if(!S.tHold)S.tHold=Date.now();",
       "    }",
       "    var iv=null;",
-      "    function release(){",
+      "    function release(w){",
+      "      if(S.tArm)return;",
       "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
-      "      S.tArm=Date.now();",
+      '      S.tArm=Date.now();S.why=w||"paint";',
       "      var a=cur();if(!a)return;",
       "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
       "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
       "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
       "    }",
-      "    function arm(){hold();try{iv=setInterval(hold,500);}catch(_){}}",
+      "    function busy(){S.tBusy=Date.now();}",
+      "    function net(){",
+      "      try{var XP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype;",
+      "      if(XP&&XP.send&&!XP.__shellBTNet){XP.__shellBTNet=1;var os=XP.send;",
+      "        XP.send=function(){var x=this,d=0;function fin(){if(d)return;d=1;S.inflight--;busy();}",
+      "          S.inflight++;S.net++;busy();",
+      '          try{x.addEventListener("loadend",fin,false);}catch(_){}',
+      "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
+      "          try{return os.apply(this,arguments);}catch(e){fin();throw e;}};}}catch(_){}",
+      "      try{if(window.fetch&&!window.fetch.__shellBTNet){var of=window.fetch;",
+      "        var nf=function(){var p;S.inflight++;S.net++;busy();",
+      "          try{p=of.apply(this,arguments);}catch(e){S.inflight--;busy();throw e;}",
+      "          try{p.then(function(){S.inflight--;busy();},function(){S.inflight--;busy();});}catch(_){S.inflight--;busy();}",
+      "          return p;};",
+      "        nf.__shellBTNet=1;window.fetch=nf;}}catch(_){}",
+      "    }",
+      "    var lc=-1,ld=-1,tS=0;",
+      "    function poll(){",
+      "      S.polls++;",
+      "      var a=cur(),tok=0;",
+      "      try{tok=!!(a&&a.accessToken&&a.accessToken());}catch(_){tok=0;}",
+      "      if(tok&&!S.tAuth)S.tAuth=Date.now();",
+      "      var n=Date.now(),c=null,cd=-1;",
+      '      try{c=document.querySelectorAll(".card").length;cd=document.querySelectorAll(".card[data-id]").length;}catch(_){c=null;}',
+      "      if(c===null)return;",
+      "      S.cardsLoose=c;S.cards=cd;",
+      "      if(c!==lc||cd!==ld){lc=c;ld=cd;tS=n;}",
+      "      S.stable=tS?n-tS:0;",
+      "      if(!S.tAuth)return;",
+      '      if(n-S.tAuth>=M){release("ceiling");return;}',
+      "      if(ld<=0||!tS)return;",
+      "      if(n-tS<Q)return;",
+      "      if(S.inflight>0)return;",
+      "      if(n-S.tBusy<Q)return;",
+      '      release("settle");',
+      "    }",
+      '    function tick(){hold();if(G==="settle")poll();}',
+      "    function arm(){hold();try{iv=setInterval(tick,500);}catch(_){}}",
       "    var pg=window.__shellPaintGate;",
-      "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
+      '    if(G==="settle"){busy();net();if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}}',
+      "    else if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
       // JELA-707: paint-gated re-injector for the JE tags held by
