@@ -255,6 +255,11 @@ function makeEnv(opts) {
     {
       jellyfin_credentials: opts.creds !== undefined ? opts.creds : CREDS,
       "jellyfin.shell.serverUrl": opts.srv !== undefined ? opts.srv : SRV,
+      // This suite unit-tests the alias/item-cache mechanisms in isolation.
+      // Without this, the JELA-752 in-flight coalescer's replay window (whose
+      // expiry setTimeout never fires under this env's stubbed timers) serves
+      // the TTL-refetch reads and the per-scenario request counts shift.
+      "jellyfin.shell.fetchCoalesceDisabled": "1",
     },
     opts.flagOff ? {} : { "jellyfin.shell.aliasCoalesce": "1" },
     opts.store || {},

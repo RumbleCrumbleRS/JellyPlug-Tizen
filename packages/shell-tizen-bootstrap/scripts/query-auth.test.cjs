@@ -248,6 +248,11 @@ function makeEnv(opts) {
       jellyfin_credentials: opts.creds !== undefined ? opts.creds : CREDS,
       "jellyfin.shell.serverUrl":
         opts.srv !== undefined ? opts.srv : "http://srv",
+      // This suite unit-tests the queryAuth rewrite in isolation. Without
+      // this, the JELA-752 coalescer joins the same-URL GET pairs below
+      // (its key is credentials+mode+URL, deliberately not auth headers)
+      // and the netCalls indices shift.
+      "jellyfin.shell.fetchCoalesceDisabled": "1",
     },
     opts.qaOff ? {} : { "jellyfin.shell.queryAuth": "1" },
     opts.store || {},
