@@ -203,10 +203,11 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-748: re-pinned again — both shells gained __qeB (the swallowed-
     // localStorage-write counter behind the beacon's tx.qe) and route
     // __txSet's exhausted quota path through it.
-    // JELA-753: re-pinned again — both shells' seeds gained the home-resume
-    // controller cache (identical block).
-    retail: "0ccf27a8b058abfd",
-    boot: "0adcef19afeb89d0",
+    // JELA-753 + JELA-737: re-pinned — merged seed carries both the
+    // home-resume controller cache and the settle-gated bitrate-ladder
+    // release (identical blocks in both shells).
+    retail: "c3636f8402f70544",
+    boot: "d2cd9a470c3e5301",
   },
   {
     name: "buildDiagSeedScript",
