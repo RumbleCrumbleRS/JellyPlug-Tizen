@@ -15,8 +15,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ConfigFingerprintService>();
 
         // JELA-727: gzip for controller output — Jellyfin's own compression only
-        // wraps the static-file branch. Registered alongside the other filters; the
-        // filter itself inserts the middleware at the front of the pipeline.
+        // wraps the static-file branch. MUST stay the first-registered filter:
+        // first-registered is OUTERMOST, and the JELA-732 section cache below
+        // captures identity bytes — its IsStorable refuses any body already
+        // carrying Content-Encoding, so compression registered inside it would
+        // silently turn that cache into a permanent miss. Outermost, both cache
+        // hits and misses stream their plain bytes through the compression body
+        // wrapper on the way to the wire.
         serviceCollection.AddTransient<IStartupFilter, ResponseCompressionStartupFilter>();
 
         // JELA-723: revalidatable Cache-Control + Vary on the three third-party
