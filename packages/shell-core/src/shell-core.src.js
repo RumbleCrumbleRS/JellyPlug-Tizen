@@ -260,3 +260,152 @@
     setInterval(arm, 5000);
   }
 //@@END:installResumeEpochCheck@@
+
+//@@BEGIN:installLsWriteBehind@@
+  function installLsWriteBehind() {
+    // JELA-751: write-behind overlay for large localStorage cache bodies.
+    //
+    // Chromium's per-origin localStorage commit persists "what is pending
+    // when a commit fires", and the boot-cadence first commit fires ~5 s
+    // after the session's first write. A first boot streams ~3.6 M chars
+    // of cache bodies (152 version-keyed tx slots, the txc: aggregates,
+    // bundlePatchState) over ~25 s, so only the head of the stream is
+    // pending at that commit and the tail never reaches disk — that is
+    // the whole JELA-748 0->39->86->152 three-boot priming curve.
+    // Shrinking the bytes does NOT move it (0.28x-0.52x arms persisted
+    // the IDENTICAL key set as control), and neither does a longer
+    // session (a 400 s boot persisted FEWER slots than a 45 s one). A
+    // single LATE burst, though, persists 152/152 (synthetic arm F-late):
+    // commit TIMING is the lever. So: hold every large cache body in a
+    // memory overlay during the boot burst (reads stay consistent via the
+    // wrapped getItem), then flush the whole set in ONE synchronous pass
+    // once held writes have been quiet for LSWB_QUIET_MS (hard cap
+    // LSWB_CAP_MS after the first hold) — a single commit captures the
+    // full set.
+    //
+    // Scope: string values >= LSWB_MIN chars whose key starts with
+    // "shell.tx" (version slots, txc: bodies, the LRU map) or equals
+    // "jellyfin.shell.bundlePatchState". Everything else — flags, creds,
+    // settings, the small ts:/vqk: siblings, hsbShellBody (written by the
+    // WGT bootstrap index.html before this installer can run) — writes
+    // through untouched. Storage.prototype is wrapped, NOT the
+    // localStorage instance, so the seed-side __txGet/__txSet running in
+    // the remote document after the document.write handoff (same realm,
+    // same prototype) hit the same overlay; sessionStorage traffic passes
+    // through (this !== localStorage). No lifecycle listeners (the
+    // lifecycle-resume contract) — timers only, and timers survive the
+    // handoff on both engine generations. A body still held when the app
+    // dies is lost, which is exactly its fate today past the first
+    // commit; readers see a cache miss and refetch (self-healing, same
+    // contract as a pruned slot).
+    //
+    // Flag-dark: opt-in localStorage["jellyfin.shell.lsWriteBehind"]="1";
+    // kill switch ["jellyfin.shell.lsWriteBehindDisabled"]="1". QA
+    // surface: window.__shellLsWB {st:"hold"|"flushed", q, qc (held
+    // count/chars), fl, fc (flushed count/chars), qe (flush quota
+    // errors), ms (flush wall-clock)}.
+    var LSWB_MIN = 4096;
+    var LSWB_QUIET_MS = 6000;
+    var LSWB_CAP_MS = 60000;
+    try {
+      if (window.__shellLsWB) return;
+      if (!Object.create) return;
+      var enabled = false;
+      try {
+        enabled =
+          localStorage.getItem("jellyfin.shell.lsWriteBehind") === "1" &&
+          localStorage.getItem("jellyfin.shell.lsWriteBehindDisabled") !== "1";
+      } catch (_) {}
+      if (!enabled) return;
+      var proto = window.Storage && Storage.prototype;
+      var LS = window.localStorage;
+      if (!proto || !proto.setItem || !proto.getItem || !proto.removeItem)
+        return;
+      if (!LS) return;
+      var oSet = proto.setItem;
+      var oGet = proto.getItem;
+      var oRem = proto.removeItem;
+      // Null-prototype map: held keys are attacker-free (our own cache
+      // keys) but getItem probes it with ARBITRARY keys, so inherited
+      // props ("constructor") must not read as hits.
+      var held = Object.create(null);
+      var st = { st: "hold", q: 0, qc: 0, fl: 0, fc: 0, qe: 0, ms: 0 };
+      window.__shellLsWB = st;
+      var quietT = null;
+      var capT = null;
+      function holds(k, v) {
+        return (
+          v.length >= LSWB_MIN &&
+          (k.lastIndexOf("shell.tx", 0) === 0 ||
+            k === "jellyfin.shell.bundlePatchState")
+        );
+      }
+      function flush() {
+        if (st.st !== "hold") return;
+        st.st = "flushed";
+        try {
+          if (quietT) clearTimeout(quietT);
+          if (capT) clearTimeout(capT);
+        } catch (_) {}
+        var t0 = Date.now();
+        for (var k in held) {
+          try {
+            oSet.call(LS, k, held[k]);
+            st.fl++;
+            st.fc += held[k].length;
+          } catch (_) {
+            // Quota — soft fail, same contract as txSetStatic: the slot
+            // reads as a miss next boot and refetches.
+            st.qe++;
+          }
+        }
+        held = Object.create(null);
+        st.q = 0;
+        st.qc = 0;
+        st.ms = Date.now() - t0;
+      }
+      function rearm() {
+        try {
+          if (quietT) clearTimeout(quietT);
+          quietT = setTimeout(flush, LSWB_QUIET_MS);
+          if (!capT) capT = setTimeout(flush, LSWB_CAP_MS);
+        } catch (_) {
+          flush();
+        }
+      }
+      proto.setItem = function (k, v) {
+        if (this === LS && st.st === "hold") {
+          var key = String(k);
+          var val = String(v);
+          if (holds(key, val)) {
+            if (held[key] !== undefined) st.qc -= held[key].length;
+            else st.q++;
+            held[key] = val;
+            st.qc += val.length;
+            rearm();
+            return;
+          }
+        }
+        return oSet.apply(this, arguments);
+      };
+      proto.getItem = function (k) {
+        if (this === LS) {
+          var hv = held[String(k)];
+          if (hv !== undefined) return hv;
+        }
+        return oGet.apply(this, arguments);
+      };
+      proto.removeItem = function (k) {
+        if (this === LS) {
+          var key = String(k);
+          if (held[key] !== undefined) {
+            st.qc -= held[key].length;
+            st.q--;
+            delete held[key];
+          }
+        }
+        return oRem.apply(this, arguments);
+      };
+    } catch (_) {}
+  }
+//@@END:installLsWriteBehind@@

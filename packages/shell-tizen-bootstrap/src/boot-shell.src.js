@@ -3,6 +3,12 @@
   try {
     window.__shellT0 || (window.__shellT0 = Date.now());
   } catch (_) {}
+  //@@SHELL_CORE:installLsWriteBehind@@
+
+  // JELA-751: arm the write-behind overlay before any cache body can be
+  // written this boot (the shell-core declaration above hoists).
+  installLsWriteBehind();
+
   // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
   // deltas (ms from __shellT0) to localStorage["jellyfin.shell.bootPhases"]
   // (last 10 boots) so rehaul baselines are readable on-device. Record is
@@ -1160,17 +1166,31 @@
       // enableAutomaticBitrateDetection. On a saved-server cold boot that lands
       // at t~7.7 s, inside the pre-firstCard window, and escalates
       // 500 KB -> 1 MB -> 3 MB (served as 512 KiB + 1 MiB + 4 MiB = 5.5 MiB).
-      // Nothing on home consumes it, so hold it until the paint gate opens then
-      // re-arm the vendor's own timer. The hold is an accessor because the
+      // Nothing on home consumes it, so hold it until the release gate opens
+      // then re-arm the vendor's own timer. The hold is an accessor because the
       // connection manager re-assigns the property from its options on every
       // (re)auth and then calls the scheduler.
+      // JELA-737: the release gate is settle, not first paint — JELA-736
+      // measured the ladder landing inside the home-fill window in 7/7 captures
+      // (7.4-8.5 s vs settle 4.8-12.9 s), 46.4% of a warm boot's bytes, while
+      // biasing its own result low by saturating the link it is measuring.
+      // Release needs card counts stable for Q ms, zero in-flight XHR/fetch and
+      // no request activity for Q ms, and an authed ApiClient; a ceiling M ms
+      // after first auth guarantees a deferral never becomes a never.
       // Flag-dark: localStorage["jellyfin.shell.deferBitrateTest"]="1".
+      // JELA-737 kill switch: "jellyfin.shell.deferBitrateTestGate"="paint".
       // Diag: window.__shellBT.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
       "    var D=4000;",
       '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
-      "    var S=window.__shellBT={on:1,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0};",
+      '    var G="settle";',
+      '    try{if(localStorage.getItem("jellyfin.shell.deferBitrateTestGate")==="paint")G="paint";}catch(_){}',
+      "    var Q=3000;",
+      '    try{var qv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestQuietMs")||"",10);if(qv>=250&&qv<=120000)Q=qv;}catch(_){}',
+      "    var M=45000;",
+      '    try{var mv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMaxMs")||"",10);if(mv>=1000&&mv<=600000)M=mv;}catch(_){}',
+      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0};',
       "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
       "    function hold(){",
       "      var a=cur();",
@@ -1182,18 +1202,88 @@
       "      if(!S.tHold)S.tHold=Date.now();",
       "    }",
       "    var iv=null;",
-      "    function release(){",
+      "    function release(w){",
+      "      if(S.tArm)return;",
       "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
-      "      S.tArm=Date.now();",
+      '      S.tArm=Date.now();S.why=w||"paint";',
       "      var a=cur();if(!a)return;",
       "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
       "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
       "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
       "    }",
-      "    function arm(){hold();try{iv=setInterval(hold,500);}catch(_){}}",
+      "    function busy(){S.tBusy=Date.now();}",
+      "    function net(){",
+      "      try{var XP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype;",
+      "      if(XP&&XP.send&&!XP.__shellBTNet){XP.__shellBTNet=1;var os=XP.send;",
+      "        XP.send=function(){var x=this,d=0;function fin(){if(d)return;d=1;S.inflight--;busy();}",
+      "          S.inflight++;S.net++;busy();",
+      '          try{x.addEventListener("loadend",fin,false);}catch(_){}',
+      "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
+      "          try{return os.apply(this,arguments);}catch(e){fin();throw e;}};}}catch(_){}",
+      "      try{if(window.fetch&&!window.fetch.__shellBTNet){var of=window.fetch;",
+      "        var nf=function(){var p;S.inflight++;S.net++;busy();",
+      "          try{p=of.apply(this,arguments);}catch(e){S.inflight--;busy();throw e;}",
+      "          try{p.then(function(){S.inflight--;busy();},function(){S.inflight--;busy();});}catch(_){S.inflight--;busy();}",
+      "          return p;};",
+      "        nf.__shellBTNet=1;window.fetch=nf;}}catch(_){}",
+      "    }",
+      "    var lc=-1,ld=-1,tS=0;",
+      "    function poll(){",
+      "      S.polls++;",
+      "      var a=cur(),tok=0;",
+      "      try{tok=!!(a&&a.accessToken&&a.accessToken());}catch(_){tok=0;}",
+      "      if(tok&&!S.tAuth)S.tAuth=Date.now();",
+      "      var n=Date.now(),c=null,cd=-1;",
+      '      try{c=document.querySelectorAll(".card").length;cd=document.querySelectorAll(".card[data-id]").length;}catch(_){c=null;}',
+      "      if(c===null)return;",
+      "      S.cardsLoose=c;S.cards=cd;",
+      "      if(c!==lc||cd!==ld){lc=c;ld=cd;tS=n;}",
+      "      S.stable=tS?n-tS:0;",
+      "      if(!S.tAuth)return;",
+      '      if(n-S.tAuth>=M){release("ceiling");return;}',
+      "      if(ld<=0||!tS)return;",
+      "      if(n-tS<Q)return;",
+      "      if(S.inflight>0)return;",
+      "      if(n-S.tBusy<Q)return;",
+      '      release("settle");',
+      "    }",
+      '    function tick(){hold();if(G==="settle")poll();}',
+      "    function arm(){hold();try{iv=setInterval(tick,500);}catch(_){}}",
       "    var pg=window.__shellPaintGate;",
-      "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
+      '    if(G==="settle"){busy();net();if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}}',
+      "    else if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
+      "  })();}catch(_){}",
+      // JELA-707: paint-gated re-injector for the JE tags held by
+      // stripJeScriptsForDefer (URLs on window.__shellJeDefer, survives the
+      // doc.write handoff). onPaint always eventually fires; then a settle
+      // delay ("jellyfin.shell.deferJeMs", default 3000) keeps JE's fan-out
+      // off the row-fill window. append-then-set-src is JE's own load shape
+      // so the JEL-407 setter interceptor transpiles/caches as usual;
+      // async=false keeps source order; "&amp;" decoded (raw attr text).
+      // No-gate fallback 20 s. Lockstep with shell.js.
+      "  try{(function(){",
+      "    var J=window.__shellJeDefer;",
+      "    if(!J||!J.urls||!J.urls.length)return;",
+      "    var D=3000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferJeMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    function inj(){",
+      "      if(J.rel)return;",
+      "      J.rel=1;J.tInj=Date.now();",
+      "      for(var i=0;i<J.urls.length;i++){",
+      "        try{",
+      '          var s=document.createElement("script");',
+      "          s.async=false;",
+      '          s.setAttribute("data-shell-je-deferred","1");',
+      "          (document.head||document.documentElement).appendChild(s);",
+      '          s.src=String(J.urls[i]).replace(/&amp;/g,"&");',
+      "          J.inj++;",
+      "        }catch(_){}",
+      "      }",
+      "    }",
+      "    function rel(){if(J.tRel)return;J.tRel=Date.now();setTimeout(inj,D);}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onPaint){pg.onPaint(rel);}else{setTimeout(inj,20000);}",
       "  })();}catch(_){}",
       "  try{(function(){",
       "    var on=false;",
@@ -1410,8 +1500,11 @@
       // instead of replaying a stale transpiled body. Lockstep with the TV
       // shell's txKey / __txKey (JEL-26).
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      // JELA-748 (AC2): seed-side twin of txWriteLost — a swallowed
+      // localStorage write bumps the shared window counter reported as tx.qe.
+      "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
-      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
+      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1428,7 +1521,7 @@
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -2346,6 +2439,243 @@
       // first-paint is early enough by seconds.
       "    (function(){function kick(){setTimeout(__shellWalkWebpack,200);}var pg=window.__shellPaintGate;if(pg&&pg.onPaint){pg.onPaint(kick);}else{kick();}})();",
       "  }catch(_){}",
+      // JELA-753: reuse the home tab controller across a route change.
+      //
+      // Pressing Back from an item detail page rebuilds the ENTIRE home from
+      // the network — 47-59 requests, 227-300 KB and a ~2.1-2.4 s network
+      // span per press, measured n=6 on the JELA-112 rig. Back-to-home is the
+      // single most common navigation on a remote, so ~3.5 browsed items cost
+      // a second entire boot; under the JELA-713 concurrency-queueing model
+      // that is exactly the regime that queues.
+      //
+      // The cause is upstream, and it is NOT a missing cache — the cheap path
+      // already exists and is simply unreachable. `hometab`'s controller has
+      // it:
+      //
+      //   onResume(e){ if(this.sectionsRendered) return sections.resume(...);
+      //                this.destroyHomeSections(); this.sectionsRendered=1;
+      //                return apiClient.getCurrentUser().then(loadSections); }
+      //
+      // but the `home` chunk parks that controller in
+      // `var m = useMemo(() => [], [])` — an array scoped to the Home REACT
+      // COMPONENT INSTANCE. Navigating to /details unmounts the Home route, so
+      // `m` dies with it; coming back constructs a brand-new controller whose
+      // `sectionsRendered` is undefined and the resume branch is never
+      // reachable across a navigation. It only ever helps a tab switch inside
+      // one mount.
+      //
+      // So the fix is to move the cache OUT of the React instance: a
+      // module-level (here: seed-level) map keyed by user id + tab index,
+      // exactly as the controller's own author would have written it had the
+      // owning component not been the storage.
+      //
+      // Two halves, because the controller alone is not enough:
+      //
+      //   1. CONTROLLER REUSE. Wrap the hometab module's default export. A
+      //      constructor that returns an object wins over `this`, so
+      //      `new Wrapped(view,params)` hands the home component back the
+      //      cached instance verbatim — no upstream call site changes, and
+      //      `refreshed` is already true on it so `E()` passes refresh:false
+      //      and `sections.resume` takes the no-op branch per container.
+      //   2. DOM RE-ADOPTION. The cached controller's `sectionsContainer` is
+      //      the OLD `.sections` node, which React detached on unmount (its
+      //      children survive — nothing calls destroyHomeSections()). The new
+      //      mount renders a fresh, EMPTY `.sections`. Reusing the controller
+      //      without moving the rendered rows across would resume a container
+      //      that is not in the document. So adopt(): copy the class list the
+      //      old container accumulated (`.sections` IS the
+      //      `.homeSectionsContainer` — Home Screen Sections stamps that class
+      //      on React's own node, so a fresh mount does not have it until
+      //      loadSections runs), move every child over, re-bind the
+      //      `settingschange` listener the constructor installed on the old
+      //      node, and re-point the controller.
+      //
+      // Interception point. `__webpack_require__` is not global (verified on
+      // the rig: `typeof window.__webpack_require__ === "undefined"`), and the
+      // hometab chunk is executed one microtask after its chunk lands — so a
+      // poll of `wr.m` cannot get in front of the first construction, and
+      // missing the FIRST construction is precisely missing the instance worth
+      // caching. The one hook with the right ordering is the chunk-loading
+      // global: webpack's `webpackJsonpCallback` installs the incoming
+      // modules into `wr.m`, then calls the ORIGINAL `push` it captured as its
+      // parent, and only then resolves the chunk promise that executes them.
+      // We create `self.webpackChunk` first (the seed runs before every
+      // jellyfin-web script) so our push becomes that parent, and wrap the
+      // hometab factory in the window between registration and execution.
+      // `wr` itself comes from the JEL-535 probe-push idiom (QA-verified on a
+      // physical QN82Q60RAFXZA), captured lazily on the first real chunk.
+      //
+      // FRESHNESS (stated policy, both halves enforced):
+      //   - TTL, default 5 min, tunable via
+      //     `jellyfin.shell.homeResumeTtlMs`. NOT sliding — the stamp is the
+      //     time of the last full build, so the home is rebuilt from the
+      //     network at least every TTL however much the user bounces.
+      //   - DIRTY invalidation. Any non-GET request to a user-data mutation
+      //     route (PlayedItems / FavoriteItems / Rating / UserData /
+      //     Sessions/Playing) bumps a counter; a cache entry is only reused
+      //     while the counter is unchanged. Mark something watched on the
+      //     detail page and the return to home is a full rebuild, which is
+      //     what makes the stale-watched-state case impossible rather than
+      //     unlikely. Playback start counts, so finishing an episode also
+      //     invalidates.
+      // Anything not matching those routes (browsing, scrolling, backing out)
+      // is exactly the case this exists for.
+      //
+      // Flag-dark; the flag IS the kill switch (default OFF), same as
+      // chunkWarm. Diag/proof-of-arm: window.__shellHR =
+      // {on,push,wr,found,mid,wrap,ctor,hits,miss,stale,dirty,moved,err,why}.
+      // An arm reporting hits:0 has not fired and must be discarded (JELA-690).
+      "  try{(function(){",
+      '    if(localStorage.getItem("jellyfin.shell.homeResume")!=="1")return;',
+      "    var W=window;",
+      '    var D=W.__shellHR={on:1,push:0,wr:0,found:0,mid:"",wrap:0,ctor:0,hits:0,miss:0,stale:0,dirty:0,moved:0,err:0,why:""};',
+      "    var TTL=300000;",
+      '    try{var tv=parseInt(localStorage.getItem("jellyfin.shell.homeResumeTtlMs")||"",10);if(tv>0&&tv<=3600000)TTL=tv;}catch(_){}',
+      "    var CACHE={},wr=null,DIRTY=0;",
+      "    function now(){return (new Date).getTime();}",
+      // Dirty tracking. Both transports are wrapped because jellyfin-web's
+      // apiclient uses fetch on modern engines and XHR on the legacy path.
+      "    var MUT=/(PlayedItems|FavoriteItems|\\/Rating|UserData|Sessions\\/Playing)/i;",
+      "    function note(m,u){try{",
+      '      m=String(m||"GET").toUpperCase();',
+      '      if(m==="GET"||m==="HEAD"||m==="OPTIONS")return;',
+      '      if(MUT.test(String(u||"")))DIRTY++;',
+      "    }catch(_){}}",
+      "    try{var XO=XMLHttpRequest.prototype.open;",
+      "      XMLHttpRequest.prototype.open=function(m,u){note(m,u);return XO.apply(this,arguments);};}catch(_){D.err++;}",
+      "    try{var OF=W.fetch;",
+      '      if(typeof OF==="function")W.fetch=function(i,init){',
+      '        try{note((init&&init.method)||(i&&i.method)||"GET",typeof i==="string"?i:(i&&i.url)||"");}catch(_){}',
+      "        return OF.apply(this,arguments);};}catch(_){D.err++;}",
+      // Cache key: user id + tab index, so a user switch never inherits the
+      // previous user's home and the favorites tab can never collide with it.
+      '    function uid(){try{var a=W.ApiClient;return a&&a.getCurrentUserId?String(a.getCurrentUserId()||""):"";}catch(_){return "";}}',
+      "    function keyOf(v){",
+      '      var ix="0";try{ix=String((v&&v.getAttribute&&v.getAttribute("data-index"))||"0");}catch(_){}',
+      '      return uid()+"|"+ix;',
+      "    }",
+      // Verbatim re-implementation of the `settingschange` handler the
+      // upstream constructor bound to the container it was handed.
+      "    function bindSettings(inst,el){",
+      '      try{el.addEventListener("settingschange",function(){',
+      "        try{inst.sectionsRendered=false;if(!inst.paused)inst.onResume({refresh:true});}catch(_){}",
+      "      },false);}catch(_){D.err++;}",
+      "    }",
+      "    function adopt(inst,view,params){",
+      '      var nu=view&&view.querySelector?view.querySelector(".sections"):null;',
+      "      var old=inst.sectionsContainer;",
+      "      if(!nu||!old)return false;",
+      "      if(nu!==old){",
+      "        try{nu.className=old.className;}catch(_){}",
+      "        while(old.firstChild)nu.appendChild(old.firstChild);",
+      "        bindSettings(inst,nu);",
+      "        D.moved++;",
+      "      }",
+      "      inst.view=view;inst.params=params;inst.sectionsContainer=nu;",
+      "      return true;",
+      "    }",
+      // Returns "" when the entry may be reused, else the reason it may not.
+      "    function usable(ent,view){",
+      '      if(!ent||!ent.inst)return "none";',
+      '      if(!ent.inst.sectionsRendered)return "unrendered";',
+      '      if(now()-ent.t>TTL)return "ttl";',
+      '      if(ent.dirty!==DIRTY)return "dirty";',
+      "      var c=ent.inst.sectionsContainer;",
+      '      if(!c||!c.firstChild)return "empty";',
+      '      if(!view||!view.querySelector)return "noview";',
+      '      return "";',
+      "    }",
+      "    function wrapCtor(Orig){",
+      '      if(!Orig||typeof Orig!=="function"||Orig.__shellHR)return Orig;',
+      "      function HR(view,params){",
+      "        D.ctor++;",
+      "        var k=keyOf(view),ent=CACHE[k],why=usable(ent,view);",
+      "        if(!why){",
+      "          try{",
+      "            if(adopt(ent.inst,view,params)){D.hits++;return ent.inst;}",
+      '            why="adopt";',
+      '          }catch(e){D.err++;why="throw:"+String((e&&e.message)||e).slice(0,40);}',
+      "        }",
+      '        if(why==="ttl")D.stale++;else if(why==="dirty")D.dirty++;',
+      "        D.miss++;D.why=why;",
+      // The stamp is deliberately the build time, never refreshed on reuse:
+      // TTL must bound how old the SHOWN rows can be, not how long the user
+      // has been idle.
+      "        var inst=new Orig(view,params);",
+      "        CACHE[k]={inst:inst,t:now(),dirty:DIRTY};",
+      "        return inst;",
+      "      }",
+      "      try{HR.prototype=Orig.prototype;}catch(_){}",
+      "      HR.__shellHR=1;D.wrap++;",
+      "      return HR;",
+      "    }",
+      // JEL-535 probe-push: a chunk with no modules whose runtime callback is
+      // handed __webpack_require__. Re-entrant from inside our own push hook —
+      // webpackJsonpCallback runs the runtime fn synchronously, so `wr` is set
+      // before the outer call resumes.
+      "    var capturing=0;",
+      "    function capture(){",
+      "      if(wr||capturing)return;",
+      "      capturing=1;",
+      "      try{",
+      "        var a=W.webpackChunk;",
+      '        if(a&&typeof a.push==="function")a.push([["__shellHR"+now()],{},function(r){wr=r;D.wr=1;}]);',
+      "      }catch(_){D.err++;}",
+      "      capturing=0;",
+      "    }",
+      // Anchored on the two names that define the controller. Both must be
+      // present, so an unrelated module mentioning one of them cannot match
+      // and a renamed upstream degrades to a silent skip (shipped behaviour),
+      // never to a wrong wrap.
+      "    function scan(data){",
+      "      try{",
+      "        if(!wr||D.found)return;",
+      "        var mods=data&&data[1];if(!mods)return;",
+      "        for(var id in mods){",
+      "          if(!Object.prototype.hasOwnProperty.call(mods,id))continue;",
+      '          var f=mods[id];if(typeof f!=="function")continue;',
+      '          var s="";try{s=String(f);}catch(_){continue;}',
+      '          if(s.indexOf("destroyHomeSections")<0||s.indexOf("sectionsRendered")<0)continue;',
+      '          var base=wr.m&&wr.m[id];if(typeof base!=="function")continue;',
+      "          (function(mid,orig){",
+      "            wr.m[mid]=function(mod,exp,req){",
+      "              orig(mod,exp,req);",
+      "              try{",
+      "                var ex=(mod&&mod.exports)||exp;",
+      '                if(ex&&typeof ex.default==="function")ex.default=wrapCtor(ex.default);',
+      "              }catch(_){D.err++;}",
+      "            };",
+      "          })(id,base);",
+      "          D.found=1;D.mid=String(id);",
+      "          return;",
+      "        }",
+      "      }catch(_){D.err++;}",
+      "    }",
+      "    function hook(a){",
+      "      try{",
+      '        if(!a||a.__shellHR||typeof a.push!=="function")return;',
+      "        a.__shellHR=1;",
+      "        var np=a.push;",
+      "        a.push=function(d){D.push++;try{capture();scan(d);}catch(_){D.err++;}return np.apply(a,arguments);};",
+      "      }catch(_){D.err++;}",
+      "    }",
+      // The seed runs before every jellyfin-web script, so this array IS the
+      // one webpack adopts (`self.webpackChunk=self.webpackChunk||[]`).
+      "    try{hook(W.webpackChunk=W.webpackChunk||[]);}catch(_){D.err++;}",
+      // Belt and braces for a build that renames the chunk-loading global: the
+      // window scan is capped at 3 s (it is not cheap on M63) and the whole
+      // interval stops the moment the factory is wrapped.
+      "    var tries=0,iv=null;",
+      "    function tick(){",
+      "      try{",
+      "        tries++;",
+      "        if(D.found||tries>240){if(iv)clearInterval(iv);return;}",
+      "        if(tries<=12){for(var k in W){if(/^webpackChunk/.test(k))hook(W[k]);}}",
+      "        capture();",
+      "      }catch(_){D.err++;}",
+      "    }",
+      "    try{iv=setInterval(tick,250);}catch(_){D.err++;}",
+      "  })();}catch(_){}",
       "})();",
     ].join(`
 `);
@@ -3037,7 +3367,17 @@
       'var p="";try{p=String(wr.p||"")}catch(_){}' +
       "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
       'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
+      // root-relative /gh/ jsdelivr pin resolved against the server origin
+      // and 404ed on prod — a spurious warm every CWS boot.
+      // JELA-771: the 27 bare /JellyfinEnhanced/js/* module entries and the
+      // /gh/ ratings.css pin are deleted — unreachable by construction: JE's
+      // loadScripts always requests modules versioned (?v=<cachekey>), and
+      // the JEL-406/407 legacy interceptor fetches versioned modules with
+      // cache:"no-store", so nothing can ever read an HTTP-cache entry
+      // warmed under the bare URL; the root-relative /gh/ pin 404ed on prod
+      // (same class as the JELA-716 note above).
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
@@ -3093,6 +3433,83 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
+      // JELA-740 (accepted CEO confirmation 45f50c90): opt-in query-param
+      // auth for API GETs, default OFF via
+      // localStorage['jellyfin.shell.queryAuth']='1'.
+      // 'jellyfin.shell.queryAuthDisabled' is honored NOW as the
+      // kill-switch reserved for a future default-ON flip (apiWarm house
+      // rule). Every jellyfin-web API call is cross-origin and carries
+      // `Authorization` (measured: NOT X-Emby-Authorization), which is not
+      // CORS-safelisted, so every GET costs preflight + request = two
+      // serialized round trips (~94 OPTIONS per cold boot, 38-39 of them
+      // before firstCard). Moving the token to the api_key query param
+      // (accepted by the server on every probed boot endpoint: 200 +
+      // ACAO:*, 401 without; server-side cost equal to header auth) makes
+      // the GET a CORS-simple request - no preflight at all. Measured on
+      // the M63 rig through a +50 ms/req h2 delay proxy, n=7/arm:
+      // OPTIONS 94->7, firstCard median -600..-818 ms (p=0.006-0.010) and
+      // variance collapse (6/7 shim boots inside a 31 ms band); prize
+      // scales with RTT x critical-chain depth. Non-GETs, relative URLs,
+      // Request-object fetch inputs, auth-header-less calls and URLs
+      // already carrying api_key/ApiKey all pass through untouched
+      // (= today's path); a request whose token cannot be parsed or whose
+      // headers cannot be copied also falls through untouched (sk++), so
+      // worst case is always today's boot. Installed FIRST in this body -
+      // innermost under the hssPin/apiWarm wrappers - so it rewrites the
+      // final URL the outer layers produce while their store keys/pins
+      // keep matching pre-auth URLs. XHR path: open() records
+      // method/url/async, setRequestHeader() buffers instead of applying
+      // (headers cannot precede open, so buffering at the instance is
+      // order-safe), send() re-opens on the rewritten URL (open resets
+      // headers, none were applied yet) and replays the non-auth buffer.
+      // One install per WINDOW (survives the document.write handoff).
+      // Referer mitigation per the accepted tradeoff: a no-referrer meta
+      // is (re)inserted per DOCUMENT under the same flag. Counters:
+      // window.__shellQA {on,fr,xr,sw,sk,err} = fetch rewrites, xhr
+      // rewrites, swallowed headers, skips, errors.
+      'if(flg("jellyfin.shell.queryAuth")&&!flg("jellyfin.shell.queryAuthDisabled")){try{' +
+      'try{if(document.head&&!document.getElementById("__shellQAMeta")){var qMt=document.createElement("meta");qMt.id="__shellQAMeta";qMt.name="referrer";qMt.content="no-referrer";document.head.insertBefore(qMt,document.head.firstChild)}}catch(_){}' +
+      "if(!W.__shellQA){" +
+      "var qa=W.__shellQA={on:1,fr:0,xr:0,sw:0,sk:0,err:0};" +
+      'var qaHN=["Authorization","X-Emby-Authorization","X-Emby-Token"];' +
+      'var qaHdr=function(n){n=String(n||"").toLowerCase();return n==="authorization"||n==="x-emby-authorization"||n==="x-emby-token"};' +
+      'var qaTok=function(n,v){n=String(n||"").toLowerCase();v=String(v||"");if(n==="x-emby-token")return v;var qm=/Token="([^"]*)"/.exec(v);return qm&&qm[1]?qm[1]:""};' +
+      "var qaUrl=function(u){return/^https?:\\/\\//.test(u)&&!/[?&]api_?key=/i.test(u)};" +
+      'var qaAdd=function(u,t){return u+(u.indexOf("?")<0?"?":"&")+"api_key="+encodeURIComponent(t)};' +
+      'if(typeof W.fetch==="function"){try{var qF=W.fetch;W.fetch=function(qu,qo){try{' +
+      'var qMm=qo&&qo.method?String(qo.method).toUpperCase():"GET";' +
+      'if(qMm==="GET"&&typeof qu==="string"&&qo&&qo.headers&&qaUrl(qu)){' +
+      'var qh=qo.headers,qt="",qp=0,qn=0,qh2=null,qi,qv,qk;' +
+      'if(typeof qh.get==="function"&&typeof qh["delete"]==="function"){' +
+      "for(qi=0;qi<3;qi++){qv=null;try{qv=qh.get(qaHN[qi])}catch(_){}if(qv){qp=1;if(!qt)qt=qaTok(qaHN[qi],qv)}}" +
+      'if(qt){try{qh2=new W.Headers(qh);for(qi=0;qi<3;qi++){if(qh2.get(qaHN[qi])){qh2["delete"](qaHN[qi]);qn++}}}catch(_){qh2=null}}' +
+      "}else{" +
+      "for(qk in qh){if(qaHdr(qk)){qp=1;if(!qt)qt=qaTok(qk,qh[qk])}}" +
+      "if(qt){qh2={};for(qk in qh){if(qaHdr(qk)){qn++;continue}qh2[qk]=qh[qk]}}" +
+      "}" +
+      "if(qt&&qh2){var qo2={},qk2;for(qk2 in qo)qo2[qk2]=qo[qk2];qo2.headers=qh2;qa.fr++;qa.sw+=qn;return qF.call(W,qaAdd(qu,qt),qo2)}" +
+      "if(qp)qa.sk++" +
+      "}" +
+      "}catch(_){qa.err++}" +
+      "return qF.apply(W,arguments)}}catch(_){qa.err++}}" +
+      "try{var QP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;" +
+      "if(QP&&QP.open&&QP.setRequestHeader&&QP.send){" +
+      "var qOp=QP.open,qSh=QP.setRequestHeader,qSe=QP.send;" +
+      'QP.open=function(qm3,qu3){try{this.__qaM=String(qm3||"").toUpperCase();this.__qaU=String(qu3||"");this.__qaA=arguments.length>2?!!arguments[2]:!0;this.__qaB=null}catch(_){qa.err++}return qOp.apply(this,arguments)};' +
+      'QP.setRequestHeader=function(qn3,qv3){try{if(this.__qaM==="GET"&&qaUrl(this.__qaU||"")){if(!this.__qaB)this.__qaB=[];this.__qaB.push([qn3,qv3]);return}}catch(_){qa.err++}return qSh.apply(this,arguments)};' +
+      "QP.send=function(){try{" +
+      "var qb=this.__qaB;" +
+      "if(qb){this.__qaB=null;" +
+      'var qt3="",qp3=0,qi3;' +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qaHdr(qb[qi3][0])){qp3=1;if(!qt3)qt3=qaTok(qb[qi3][0],qb[qi3][1])}}" +
+      'if(qt3){try{qOp.call(this,this.__qaM,qaAdd(this.__qaU,qt3),this.__qaA)}catch(_){qt3="";qa.err++}}' +
+      "if(qp3&&!qt3)qa.sk++;" +
+      "for(qi3=0;qi3<qb.length;qi3++){if(qt3&&qaHdr(qb[qi3][0])){qa.sw++;continue}try{qSh.call(this,qb[qi3][0],qb[qi3][1])}catch(_){qa.err++}}" +
+      "if(qt3)qa.xr++}" +
+      "}catch(_){qa.err++}" +
+      "return qSe.apply(this,arguments)};" +
+      "}}catch(_){qa.err++}" +
+      "}}catch(_){G.err++}}" +
       // JELA-703 (JELA-693 mitigation; upstream home-sections#269, drop this
       // if upstream fixes the key derivation): opt-in pinned pageHash for
       // /HomeScreen/Sections, default OFF via
@@ -3140,6 +3557,461 @@
       "return pF.call(W,pu,po)}}catch(_){G.err++}}" +
       "try{var PX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PX&&PX.open){var pO2=PX.open;" +
       'PX.open=function(pm2,pu2){var pa=arguments,pn=arguments.length;try{if(String(pm2||"").toUpperCase()==="GET"){var pr2=phRw(String(pu2||""));if(pr2!==String(pu2||"")){pa=[pm2,pr2];for(var pj2=2;pj2<pn;pj2++)pa.push(arguments[pj2])}}}catch(_){G.err++}return pO2.apply(this,pa)}}}catch(_){G.err++}' +
+      "}catch(_){G.err++}}" +
+      // JELA-724: in-flight GET coalescer for allowlisted API paths.
+      //
+      // Plugin Pages 2.4.11.0 (/PluginPages/inject.js) drives its sidebar
+      // from a MutationObserver whose `initialized` guard is tested ONCE per
+      // callback, at the top of mutationHandler — but populateSidebar() is
+      // called from INSIDE the mutationRecords.forEach / addedNodes.some
+      // walk, with no guard of its own. Every added node in the batch that
+      // first carries .mainDrawer-scrollContainer > .userMenuOptions
+      // therefore issues its own ApiClient.getJSON('PluginPages/User'). The
+      // JELA-720 census caught SIX identical GETs inside a 6 ms window on
+      // both cold boots — 12 round trips (getJSON sets X-Emby-Authorization,
+      // so each GET drags its own CORS preflight) for one 345-byte body that
+      // is byte-stable across all six responses and across both boots.
+      //
+      // Why nothing we already ship absorbs it:
+      //   - JELA-709's Access-Control-Max-Age cannot: all six preflights are
+      //     in flight before any of them returns, so there is no cached
+      //     preflight for five of them to hit.
+      //   - The JELA-51 api-warm store below is ONE-SHOT (chk() deletes the
+      //     slot it serves), so even with the full AWL enabled — which lists
+      //     /PluginPages/User — it would absorb request 1 and let 2..6 out.
+      // It needs true in-flight coalescing, the same shape HomeScreenSections
+      // does server-side (JELA-685); this does it client-side.
+      //
+      // Contract: concurrent identical GETs to an allowlisted path share ONE
+      // network request. Every caller — the leader included — gets its OWN
+      // Response synthesized from the leader's snapshotted status/headers/
+      // body, so a body is never consumed twice and no caller can drain
+      // another's. Nothing was cached in the JELA-724 shape: the slot was
+      // released the moment the leader's body was read, so a later GET always
+      // re-fetched. JELA-752 adds a bounded replay window on top of that —
+      // see change 4 below. A leader that rejects replays each waiter on the
+      // real network (worst case = today's behaviour).
+      //
+      // Allowlisted rather than global on purpose. The leader's body is
+      // snapshotted to text, so a global list would buffer arbitrary
+      // payloads; and GETs that differ only in headers (Range) must never
+      // share one response. For the same reason a Request object, a body, or
+      // an AbortSignal opts the call out entirely — we only coalesce a plain
+      // string-URL GET whose every parameter is in the URL.
+      //
+      // Field-tunable without a shell release:
+      // localStorage['jellyfin.shell.fetchCoalescePaths'] appends
+      // comma-separated paths (each must start with "/", 32 max).
+      // localStorage['jellyfin.shell.fetchCoalesceWindowMs'] sets the JELA-752
+      // replay window in ms (0..2000; 0 = in-flight only, the JELA-724 shape).
+      // Kill-switch: localStorage['jellyfin.shell.fetchCoalesceDisabled']='1'.
+      // Counters: window.__shellFC {on,n,w,lead,join,win,serve,rep,hdr,fl,err}.
+      // Installed BEFORE the api-warm patch below, so the warm store still
+      // gets first refusal and only its fallthrough reaches the coalescer.
+      // JELA-752: the SAME machinery, widened to the item-detail route.
+      //
+      // A CDP census of 5 detail opens (JELA-750, 4 primed profiles) found the
+      // detail route re-issuing 19-44% of its requests to the byte-identical
+      // URL, against a 4.4-5.8% baseline for the rest of the app. The worst
+      // offender is GET /Users/{u}/Items/{id} — FOUR concurrent copies of one
+      // 6.2-8.9 KB body on every open, all inside ~250 ms — and a series open
+      // adds SIX concurrent /JellyfinEnhanced/jellyseerr/user-status. Because
+      // every one is cross-origin the true cost is ~2x that (each duplicate
+      // drags its own preflight): one series open cost 73 requests / 690 KB.
+      //
+      // 29 of the 30 duplicate extras measured genuinely OVERLAP in flight, so
+      // an in-flight join collapses them. (This is the opposite of JELA-742,
+      // whose alias pair is 300-874 ms apart and explicitly NOT joinable.)
+      //
+      // Three changes to the JELA-724 shape, all of them measurement-driven:
+      //
+      //  1. Segment wildcards. The detail set is keyed by user and item id, so
+      //     a plain suffix list cannot express it. A pattern containing "*"
+      //     matches per SEGMENT against the tail of the path ("/Users/*/Items/*"),
+      //     which keeps the suffix semantics that make the list base-path safe.
+      //     "*" never matches an empty segment, so "/Users/*/Items/*" does not
+      //     also swallow the (different, and separately listed) "/Users/*/Items".
+      //
+      //  2. The key carries credentials + mode, not just the URL. The census
+      //     showed the SAME url fetched with credentials:"same-origin" and with
+      //     credentials unset (/System/Info/Public, /JellyfinEnhanced/version) —
+      //     those are the same mode, so the key normalises unset to the fetch
+      //     defaults ("same-origin"/"cors") and they still join. Mode is in the
+      //     key for the reverse reason: a no-cors fetch yields an OPAQUE
+      //     response, and handing that to a cors caller would be a silent
+      //     miscompare — the same request-mode collision JELA-707 hit in the
+      //     HTTP cache.
+      //
+      //  3. Conditional/ranged GETs opt out. Two callers may send the same URL
+      //     with different Range / If-None-Match / If-Modified-Since and get
+      //     legitimately different bodies (or a 304 only one of them can read),
+      //     so those never share a slot. Anything we cannot parse counts as
+      //     unsafe and passes through.
+      //
+      //  4. A bounded REPLAY WINDOW, because a pure in-flight join is
+      //     self-limiting. Measured: with the join on, the /Users/{u}/Items/{id}
+      //     responses get FASTER (152 -> 70 ms), so the surviving calls stop
+      //     overlapping at all (spans 0-70 / 78-139 / 217-274 ms) and the later
+      //     two can no longer be joined — a faster leader releases its slot
+      //     sooner, which is exactly why "concurrent today" does not mean
+      //     "collapsible to 1". A/B arm=on n=9 opens stalled at 4 extras per
+      //     movie open against an AC2 target of <=2. So the leader's snapshot
+      //     is now HELD in its slot for a short window after it settles
+      //     (default 400 ms; the whole duplicate burst spans ~274 ms) and
+      //     replayed to any later identical GET.
+      //
+      //     The staleness this buys is bounded three ways: only 2xx snapshots
+      //     are held (an opaque no-cors response has status 0 and is dropped
+      //     at once), the window is <= 2 s and is disabled entirely by setting
+      //     localStorage['jellyfin.shell.fetchCoalesceWindowMs']='0' (which
+      //     restores the exact JELA-724 behaviour), and ANY mutation flushes
+      //     the whole map — a non-GET/HEAD request over fetch OR over XHR, so
+      //     a "mark watched" POST followed by a re-read of /Users/*/Items/*
+      //     cannot be served the pre-mutation body. XHR is hooked here only
+      //     for that flush; joining XHR itself is out of scope.
+      //
+      // Not fixed here, deliberately: /Items/{id}/ThemeMedia is issued twice
+      // per open over XMLHttpRequest, not fetch (confirmed by an in-page
+      // transport probe), so a fetch-level join cannot see it. It is the single
+      // residual duplicate per open and is left for an XHR-level pass.
+      'if(!flg("jellyfin.shell.fetchCoalesceDisabled")&&!W.__shellFC&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
+      'var FCL=["/PluginPages/User","/Users/*/Items/*","/Users/*/Items","/Items/*/Similar","/JellyfinEnhanced/tag-cache/*","/JellyfinEnhanced/user-settings/*/settings.json","/JellyfinEnhanced/tmdb/*/*/reviews","/JellyfinEnhanced/jellyseerr/user-status","/Shows/*/Seasons","/Shows/NextUp","/LiveTv/Programs"];' +
+      'try{var fcx=String(localStorage.getItem("jellyfin.shell.fetchCoalescePaths")||"").replace(/\\s+/g,"").split(","),fci;for(fci=0;fci<fcx.length;fci++)if(fcx[fci].charAt(0)==="/"&&FCL.length<32)FCL.push(fcx[fci])}catch(_){}' +
+      // JELA-752 replay window, ms. Anything unparseable or out of range keeps
+      // the default; "0" restores the JELA-724 in-flight-only behaviour.
+      'var fcW=400;try{var fcwv=localStorage.getItem("jellyfin.shell.fetchCoalesceWindowMs");' +
+      'if(fcwv!==null&&fcwv!==""){fcwv=parseInt(fcwv,10);if(fcwv>=0&&fcwv<=2000)fcW=fcwv}}catch(_){}' +
+      "var FC=W.__shellFC={on:1,n:FCL.length,w:fcW,lead:0,join:0,win:0,serve:0,rep:0,hdr:0,fl:0,err:0},fcQ={},fcS={};" +
+      // Any mutation drops every held snapshot — see change 4 above. In-flight
+      // leaders are dropped from the map too; they still settle, and fcRel's
+      // identity check keeps them from evicting a slot they no longer own.
+      "var fcFl=function(){try{fcQ={};fcS={};FC.fl++}catch(_){FC.err++}};" +
+      // Precompute the matcher once: plain entries keep the JELA-724 suffix
+      // test, "*" entries become a segment array matched against the path tail.
+      'var FCP=[],fcb,fcp,fca;for(fcb=0;fcb<FCL.length;fcb++){fcp=FCL[fcb];if(fcp.indexOf("*")<0){FCP.push({w:0,p:fcp})}else{fca=fcp.split("/");if(fca[0]==="")fca=fca.slice(1);FCP.push({w:1,a:fca})}}' +
+      // A GET whose response varies by request header must never share a slot.
+      // Headers may arrive as a Headers instance, an array of pairs, or a plain
+      // object; anything we cannot walk is treated as unsafe (return 1).
+      "var fcRe=/^(range|if-none-match|if-modified-since)$/i;" +
+      "var fcUns=function(fo){try{if(!fo||!fo.headers)return 0;var fh=fo.headers,fb=0,fi3,fn3;" +
+      'if(Object.prototype.toString.call(fh)==="[object Array]"){for(fi3=0;fi3<fh.length;fi3++)if(fh[fi3]&&fcRe.test(String(fh[fi3][0])))fb=1;return fb}' +
+      'if(typeof fh.forEach==="function"){fh.forEach(function(fv3,fk3){if(fcRe.test(String(fk3)))fb=1});return fb}' +
+      "for(fn3 in fh)if(fcRe.test(fn3))fb=1;return fb}catch(_){return 1}};" +
+      'var fcK=function(u){var fh=u.indexOf("#");if(fh>=0)u=u.slice(0,fh);' +
+      'var fq=u.indexOf("?"),fp=fq<0?u:u.slice(0,fq),fbs=fp.split("/");' +
+      "for(var fi2=0;fi2<FCP.length;fi2++){var fe2=FCP[fi2];" +
+      "if(!fe2.w){var fs2=fe2.p;if(fp===fs2||fp.length>fs2.length&&fp.slice(-fs2.length)===fs2)return u;continue}" +
+      "var fa2=fe2.a;if(fbs.length<fa2.length)continue;var fof=fbs.length-fa2.length,fok=1,fj2;" +
+      'for(fj2=0;fj2<fa2.length;fj2++){var fx2=fa2[fj2],fy2=fbs[fof+fj2];if(fx2==="*"){if(!fy2){fok=0;break}continue}if(fx2!==fy2){fok=0;break}}' +
+      'if(fok)return u}return""};' +
+      "var fcSnap=function(fr){return fr.text().then(function(ft){var fhs={};" +
+      'try{fr.headers.forEach(function(fv,fn2){fhs[fn2]=fv})}catch(_){try{var fct=fr.headers.get("content-type");if(fct)fhs["content-type"]=fct}catch(__){}}' +
+      'return{s:fr.status,x:fr.statusText||"",h:fhs,b:ft}})};' +
+      "var fcMk=function(fd){var fst=fd.s||200;" +
+      "return new Response(fst===204||fst===205||fst===304?null:fd.b,{status:fst,statusText:fd.x,headers:fd.h})};" +
+      // Slot release. Only a 2xx snapshot is held, and only for fcW ms; every
+      // other outcome frees the slot at once, exactly as JELA-724 did. The
+      // fcQ[fkx]!==fex guard is what makes fcFl() safe: once a flush (or an
+      // earlier expiry) has replaced the map, this leader owns nothing and
+      // must not evict whoever does.
+      "var fcRel=function(fkx,fex,fd){try{if(fcQ[fkx]!==fex)return;" +
+      "if(!fcW||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
+      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fcW)}" +
+      "catch(_){FC.err++;try{delete fcQ[fkx]}catch(__){}}};" +
+      "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
+      'var fcm=fo&&fo.method?String(fo.method).toUpperCase():"GET";' +
+      'if(fcm!=="GET"&&fcm!=="HEAD"){fcFl()}' +
+      'else if(fcm==="GET"&&typeof fu==="string"&&!(fo&&(fo.body||fo.signal))){' +
+      "var fk=fcK(fu);" +
+      'if(fk&&fcUns(fo)){FC.hdr++;fk=""}' +
+      // (method, credentials, mode, full URL) — unset credentials/mode
+      // normalise to the fetch defaults so they join their explicit twins.
+      'if(fk)fk="GET "+(fo&&fo.credentials?String(fo.credentials):"same-origin")+" "+(fo&&fo.mode?String(fo.mode):"cors")+" "+fk;' +
+      "if(fk){var fe=fcQ[fk];" +
+      "if(fe){if(fcS[fk])FC.win++;else FC.join++;" +
+      "return fe.then(function(fd){FC.serve++;return fcMk(fd)},function(){FC.rep++;return fcF.call(W,fu,fo)})}" +
+      "FC.lead++;" +
+      "fe=fcQ[fk]=fcF.call(W,fu,fo).then(fcSnap).then(function(fd){fcRel(fk,fe,fd);return fd},function(fer){if(fcQ[fk]===fe)delete fcQ[fk];throw fer});" +
+      "return fe.then(function(fd){FC.serve++;return fcMk(fd)})}}" +
+      "}catch(_){FC.err++}" +
+      "return fcF.apply(W,arguments)};" +
+      // XHR is hooked ONLY so a non-GET over XHR flushes the held snapshots —
+      // the legacy apiclient does not send every mutation over fetch. Joining
+      // XHR GETs is deliberately out of scope (see ThemeMedia below).
+      "try{var FPX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(FPX&&FPX.open){var fxO=FPX.open;" +
+      'FPX.open=function(fxm){try{var fxv=String(fxm||"").toUpperCase();if(fxv!=="GET"&&fxv!=="HEAD")fcFl()}catch(_){FC.err++}' +
+      "return fxO.apply(this,arguments)}}}catch(_){FC.err++}" +
+      "}catch(_){G.err++}}" +
+      // JELA-757: play-path replay — stop the play chain re-downloading the
+      // item the detail page is already standing on, and stop /Intros gating
+      // PlaybackInfo.
+      //
+      // Pressing Play does not fan out. The JELA-756 census (n=4 clean
+      // samples, 2 profile lineages) measured FOUR strictly serial round
+      // trips between the click and the <video> element, each hop sent only
+      // after the previous one landed:
+      //
+      //   GET  /Users/{u}/Items/{id}/Intros
+      //     -> GET  /Users/{u}/Items/{id}          full item body
+      //       -> POST /Items/{id}/PlaybackInfo
+      //         -> GET  /videos/{id}/master.m3u8
+      //
+      // Click -> <video> measured 1,270 / 504 / 557 / 239 ms; the spread is
+      // server CPU, not a fixed cost. Serialisation proof (PB1, ms from
+      // click): Intros sent 6, ENDS 362 -> item sent 426, ends 479 ->
+      // PlaybackInfo sent 486. Same shape 4/4.
+      //
+      // Hop 2 is pure waste. main.jellyfin.bundle.js playbackManager
+      // playAfterBitrateDetect does
+      //   m = p.getItem(p.getCurrentUserId(), f||t.Id).then(e=>e.MediaStreams)
+      //   return Promise.all([s, u.getDeviceProfile(t), p.getCurrentUser(), m])
+      // — it downloads the ENTIRE item solely to read .MediaStreams, and it
+      // sits inside the Promise.all that gates PlaybackInfo, so PlaybackInfo
+      // cannot even be SENT until that redundant body lands. The detail page
+      // the user is standing on already has that item, MediaStreams included:
+      // across ONE detail-open + ONE play the same body is fetched 6-7 times
+      // (~314 KB for one 44.9 KB series title).
+      //
+      // Why the JELA-752 coalescer above cannot absorb it: its replay window
+      // is 400 ms (2 s ceiling) because a held snapshot is a staleness
+      // window. The play click is ~18 s after the detail open. A join can
+      // never reach that far, so this needs a different shape — not a longer
+      // window, but a window that opens only around a play click.
+      //
+      // Shape: a small ARMED replay store, installed OUTSIDE the coalescer so
+      // it gets first refusal on the two URLs it owns.
+      //
+      //  1. RECORD the item the user is STANDING ON. A 2xx GET of
+      //     /Users/*/Items/{id} (32-hex or dashed GUID id, no query — that is
+      //     exactly the getItem shape, and the id test is what keeps
+      //     /Users/*/Items/Latest|Resume|Root out) or of that item's /Intros
+      //     is snapshotted to text and kept, at most 8 entries, each expiring
+      //     after playReplayTtlMs (default 300 s). Recording alone changes no
+      //     behaviour. Gated on the id appearing in location.hash at REQUEST
+      //     time, because the first rig run showed why breadth is not free:
+      //     it recorded NINE item bodies — four of them home-row cards fetched
+      //     during boot — which both wasted four boot requests on their
+      //     intros prefetches and evicted the detail item from the store
+      //     before the play click could use it (srv:0). The detail route puts
+      //     the id in the hash before it fetches the body, so the hash test
+      //     keeps the store at the one item that matters.
+      //
+      //  2. SERVE each entry exactly ONCE, to whoever asks next, and only
+      //     after it has been settled for playReplayMinAgeMs (default 2 s).
+      //     That is the play chain by construction: the route gate means the
+      //     entry can only be the item the user is standing on, the min-age
+      //     floor hands the detail route's own concurrent burst back to
+      //     JELA-752 where it belongs, and the next reader after that is
+      //     playAfterBitrateDetect ~18 s later. The second ask gets the
+      //     network, so this can never become a general cache.
+      //
+      //  3. RE-OPEN the budget on a play click, as an enhancement only. A
+      //     capture-phase listener (window AND document) for
+      //     .btnPlay/.btnResume/.btnReplay/.btnShuffle or
+      //     data-action=play|resume|resumemixed|instantmix|shuffle clears
+      //     every live entry's replay budget, so a SECOND play in the same
+      //     dwell is served too.
+      //
+      //     This is deliberately not load-bearing. The design originally
+      //     served only inside a window opened by such a click; the rig came
+      //     back arm:0 ev:0 twice over — on this engine a capture-phase click
+      //     listener never fires, neither on document (wiped by the
+      //     document.write handoff) nor on window. Nor can the chain's own
+      //     /Intros GET stand in for it: it leads the chain on the cinema-mode
+      //     path but is absent entirely on the resume path, and one rig run
+      //     saw it only AFTER PlaybackInfo, as part of the failure ladder.
+      //     Hence the budget in 2, which depends on neither.
+      //
+      //  4. PREFETCH the intros off the critical path. Hop 1 is guarded by
+      //     upstream's enableCinemaMode(); it fired in 3/4 samples, returned
+      //     an EMPTY Items[] (89-114 B) and still cost a full serial RTT
+      //     (350 ms server-side worst case). Rather than cache an "intros are
+      //     empty" verdict — which is a guess about another item, and about
+      //     library config we do not own — recording an item body schedules
+      //     the REAL /Intros GET for that same item playReplayIntrosMs later
+      //     (default 1.5 s, so it never competes with the detail render),
+      //     capped at playReplayIntrosMax (12) per window. With the hash gate
+      //     above that is exactly ONE request per detail page opened, and it
+      //     buys back a whole serial RTT at play time. At play time the answer
+      //     is a genuine server response for the exact URL asked, at most one
+      //     dwell old. It replays the observed item GET's own init object, so
+      //     credentials/mode/auth headers match by construction and the key it
+      //     stores under is the one upstream will ask for; a GET with no
+      //     headers to replay is skipped rather than guessed at.
+      //
+      // Staleness is bounded the same three ways as JELA-752: only 2xx is
+      // held, entries expire, and ANY mutation over fetch OR XHR flushes the
+      // whole store, so a "mark watched" POST can never be followed by a
+      // replayed pre-mutation body. A miss — nothing recorded, expired,
+      // flushed, or a series whose Play button starts an EPISODE the detail
+      // route never fetched — falls through to the network untouched: worst
+      // case = today's chain.
+      //
+      // Field-tunable without a shell release, all with the same clamp-or-
+      // keep-the-default parse: jellyfin.shell.playReplayTtlMs (0..1800000;
+      // 0 disables recording, and so serving), playReplayMinAgeMs (0..30000),
+      // playReplayArmMs (0..30000; 0 disables only the click re-open, leaving
+      // one replay per entry), playReplayIntrosMs (0..60000),
+      // playReplayIntrosMax (0..64). playReplayFlushAll='1' restores the
+      // blanket JELA-752 mutation flush.
+      // Kill-switch: localStorage['jellyfin.shell.playReplayDisabled']='1'.
+      // Counters: window.__shellPA
+      // {on,t,w,d,m,a,cl,arm,ev,rec,ric,skip,srv,sri,pf,pfh,pfe,fl,fs,err};
+      // skip counts GETs of our shape that were off-route and so left
+      // untouched, fs counts mutations that did NOT flush, and cl counts every
+      // click the listener saw at all (cl:0 with a play that plainly happened
+      // is the signature of the wiped-listener trap).
+      'if(!flg("jellyfin.shell.playReplayDisabled")&&!W.__shellPA&&typeof W.fetch==="function"&&typeof Response==="function"){try{' +
+      'var paT=300000;try{var pa1=localStorage.getItem("jellyfin.shell.playReplayTtlMs");if(pa1!==null&&pa1!==""){pa1=parseInt(pa1,10);if(pa1>=0&&pa1<=1800000)paT=pa1}}catch(_){}' +
+      'var paW=6000;try{var pa2=localStorage.getItem("jellyfin.shell.playReplayArmMs");if(pa2!==null&&pa2!==""){pa2=parseInt(pa2,10);if(pa2>=0&&pa2<=30000)paW=pa2}}catch(_){}' +
+      'var paD=1500;try{var pa3=localStorage.getItem("jellyfin.shell.playReplayIntrosMs");if(pa3!==null&&pa3!==""){pa3=parseInt(pa3,10);if(pa3>=0&&pa3<=60000)paD=pa3}}catch(_){}' +
+      'var paM=12;try{var pa4=localStorage.getItem("jellyfin.shell.playReplayIntrosMax");if(pa4!==null&&pa4!==""){pa4=parseInt(pa4,10);if(pa4>=0&&pa4<=64)paM=pa4}}catch(_){}' +
+      // Minimum age before an entry may be replayed. This is the line between
+      // this change and JELA-752 above, and it is load-bearing: the detail
+      // route issues its item GET FOUR times inside ~250 ms, and without a
+      // floor those calls spend the single replay budget among themselves
+      // (call 2 served, call 3 re-records, call 4 served...) so whether the
+      // play click 18 s later finds a budget left comes down to parity. The
+      // coalescer owns the concurrent burst — that is what its 400 ms window
+      // is for — and this owns the long-gap re-read. They no longer overlap.
+      'var paA=2000;try{var pa5=localStorage.getItem("jellyfin.shell.playReplayMinAgeMs");if(pa5!==null&&pa5!==""){pa5=parseInt(pa5,10);if(pa5>=0&&pa5<=30000)paA=pa5}}catch(_){}' +
+      "var PA=W.__shellPA={on:1,t:paT,w:paW,d:paD,m:paM,a:paA,cl:0,arm:0,ev:0,rec:0,ric:0,skip:0,srv:0,sri:0,pf:0,pfh:0,pfe:0,fl:0,fs:0,err:0};" +
+      'var paQ={},paL=[],paP={},paCi="";' +
+      // A mutation that can touch an ITEM drops the whole store — see the
+      // staleness note above. paP goes with it, so a post-mutation re-record
+      // may prefetch again.
+      //
+      // Narrower than JELA-752's flush-on-anything, because the two guard
+      // different spans. Over a 400 ms join window "any mutation" is free;
+      // over an 18 s dwell it is fatal — the rig showed a third-party
+      // POST /JellyfinEnhanced/user-settings/{u}/settings.json landing
+      // mid-dwell and emptying the store every time, so the play chain always
+      // missed. So: flush on the paths that can change an item body or its
+      // UserData, and count the rest as skipped. Unknown paths flush, because
+      // a false flush costs one round trip and a missed one serves stale
+      // bytes — so a mutation we cannot read a URL for (a Request object,
+      // say) flushes too. jellyfin.shell.playReplayFlushAll='1' restores the blanket
+      // JELA-752 behaviour if this list ever proves too narrow in the field.
+      'var paFa=flg("jellyfin.shell.playReplayFlushAll");' +
+      'var paFx=["/Items","/PlayedItems","/FavoriteItems","/UserItems","/Sessions/Playing","/Users/"];' +
+      'var paFm=function(pw){try{if(paFa)return 1;pw=String(pw||"");if(!pw)return 1;' +
+      'var pq3=pw.indexOf("?");if(pq3>=0)pw=pw.slice(0,pq3);' +
+      "var pi3;for(pi3=0;pi3<paFx.length;pi3++)if(pw.indexOf(paFx[pi3])>=0)return 1;return 0}catch(_){return 1}};" +
+      "var paFl=function(pw){try{if(!paFm(pw)){PA.fs++;return}paQ={};paL=[];paP={};PA.fl++}catch(_){PA.err++}};" +
+      // Jellyfin item ids are Guids: 32 hex ("N" format, what the API emits)
+      // or the dashed form. Requiring one is what separates a real getItem
+      // URL from the named /Users/*/Items/<verb> endpoints.
+      "var paId=/^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;" +
+      // 0 = not ours, 1 = the full item body, 2 = that item's intros. Any
+      // query string disqualifies: getItem/getIntros send none, and the
+      // /Items/{id}?userId= alias is a different projection (JELA-742).
+      // Also parks the matched id in paCi for the route test below — read
+      // immediately by the one caller, which is the only call in flight.
+      'var paCl=function(pu2){paCi="";var ph2=pu2.indexOf("#");if(ph2>=0)pu2=pu2.slice(0,ph2);' +
+      'if(pu2.indexOf("?")>=0)return 0;var sg=pu2.split("/"),nn=sg.length;' +
+      'if(nn>=5&&sg[nn-2]==="Items"&&sg[nn-4]==="Users"&&paId.test(sg[nn-1])){paCi=sg[nn-1];return 1}' +
+      'if(nn>=6&&sg[nn-1]==="Intros"&&sg[nn-3]==="Items"&&sg[nn-5]==="Users"&&paId.test(sg[nn-2])){paCi=sg[nn-2];return 2}' +
+      "return 0};" +
+      // Only the item the user is STANDING ON is worth keeping. The first rig
+      // run recorded 9 item bodies — four of them home-row cards fetched
+      // during boot — and prefetched intros for all of them, which both wasted
+      // four boot requests and evicted the detail item from the store before
+      // the play click could use it (srv:0 with an 8-slot cap). The detail
+      // route puts the id in the hash (#!/details?id=<id>) before it fetches
+      // the body, so testing the hash at REQUEST time keeps the store at the
+      // one item that matters and makes the prefetch exactly one request per
+      // detail page opened. No hash match => record nothing, prefetch nothing,
+      // i.e. today's behaviour.
+      'var paHs=function(pid){try{return pid&&String(location.hash||"").indexOf(pid)>=0?1:0}catch(_){return 0}};' +
+      "var paSn=function(pr){return pr.text().then(function(pt){var ph={};" +
+      'try{pr.headers.forEach(function(pv,pn){ph[pn]=pv})}catch(_){try{var pct=pr.headers.get("content-type");if(pct)ph["content-type"]=pct}catch(__){}}' +
+      'return{s:pr.status,x:pr.statusText||"",h:ph,b:pt}})};' +
+      "var paMk=function(pd){var ps=pd.s||200;" +
+      "return new Response(ps===204||ps===205||ps===304?null:pd.b,{status:ps,statusText:pd.x,headers:pd.h})};" +
+      // Insertion-ordered, capped at 8, every entry self-expiring. The identity
+      // check is what makes paFl() safe: a timer whose entry has already been
+      // flushed or replaced must not evict whoever owns the key now.
+      //
+      // pd.u is the replay budget, and it is what makes this work AT ALL on
+      // the real engine. The design started out serving only inside a window
+      // opened by a play click; the rig then came back arm:0 ev:0 twice over —
+      // a capture-phase click listener never fires here, on document (wiped by
+      // the document.write handoff) OR on window. So an entry is instead
+      // replayable exactly ONCE, to whoever asks next. That is the play chain
+      // by construction: the route gate means the entry can only be the item
+      // the user is standing on, JELA-752 already collapses the detail route's
+      // own burst to one GET, and the very next reader of that URL is
+      // playAfterBitrateDetect. A click, when we do see one, re-opens the
+      // budget (paArm) so a second play in the same dwell is served too.
+      "var paPut=function(pk,pd){try{pd.u=1;if(!paQ[pk])paL.push(pk);paQ[pk]=pd;" +
+      "setTimeout(function(){try{if(paQ[pk]===pd)pd.u=0}catch(_){PA.err++}},paA);" +
+      "while(paL.length>8){var pv2=paL.shift();if(pv2!==pk)delete paQ[pv2]}" +
+      "setTimeout(function(){try{if(paQ[pk]===pd)delete paQ[pk]}catch(_){PA.err++}},paT)}catch(_){PA.err++}};" +
+      // Re-open every live entry for one more replay. This is now an
+      // ENHANCEMENT, not a prerequisite — see the "serve once per entry" note
+      // in paPut above — so a play click that we fail to see costs the second
+      // play of a dwell, never the first.
+      "var paArm=function(){try{if(!paW)return;PA.arm++;var pi4;" +
+      "for(pi4=0;pi4<paL.length;pi4++){var pn4=paQ[paL[pi4]];if(pn4)pn4.u=0}}catch(_){PA.err++}};" +
+      // Off-critical-path /Intros prefetch for an item we just recorded. Uses
+      // the item GET's OWN init (auth headers, credentials, mode) so the key
+      // it stores under is exactly the one upstream will ask for, and issues
+      // it through paF — the inner fetch — so it is never recorded twice nor
+      // mistaken for the play chain arming.
+      // paP is what stops a DOUBLE prefetch: the detail route issues its item
+      // GET several times over, so without a scheduled-set every one of them
+      // queues its own /Intros and they all find paQ[ik] still empty when they
+      // fire (the first rig run issued two).
+      "var paPre=function(pu2,po2,pk){try{if(PA.pf>=paM)return;if(!(po2&&po2.headers))return;" +
+      'var iu=pu2+"/Intros",ik=pk.slice(0,pk.length-pu2.length)+iu;if(paQ[ik]||paP[ik])return;paP[ik]=1;PA.pf++;' +
+      "setTimeout(function(){try{if(paQ[ik])return;" +
+      "paF.call(W,iu,po2).then(paSn).then(function(pd){if(pd.s>=200&&pd.s<300){paPut(ik,pd);PA.pfh++}else PA.pfe++},function(){PA.pfe++})" +
+      "}catch(_){PA.err++;PA.pfe++}},paD)}catch(_){PA.err++}};" +
+      "var paF=W.fetch;W.fetch=function(pu,po){try{" +
+      'var pm=po&&po.method?String(po.method).toUpperCase():"GET";' +
+      'if(pm!=="GET"&&pm!=="HEAD"){paFl(typeof pu==="string"?pu:(pu&&pu.url))}' +
+      'else if(pm==="GET"&&typeof pu==="string"&&!(po&&(po.body||po.signal))){' +
+      "var pc=paCl(pu);" +
+      // (method, credentials, mode, full URL), normalised to the fetch
+      // defaults exactly as the coalescer above does.
+      'if(pc){var pk="GET "+(po&&po.credentials?String(po.credentials):"same-origin")+" "+(po&&po.mode?String(po.mode):"cors")+" "+pu;' +
+      // Route test at REQUEST time — the hash can change while the body is in
+      // flight, and the question we are asking is "is this the page the user
+      // is on", not "was it still that page when the bytes landed".
+      "var phz=paHs(paCi);" +
+      // One replay per entry, to whoever asks next — pd.u in paPut above.
+      "var pe=paQ[pk];" +
+      "if(pe&&!pe.u){var pz=paMk(pe);pe.u=1;if(pc===1)PA.srv++;else PA.sri++;return Promise.resolve(pz)}" +
+      "if(paT&&phz)return paF.call(W,pu,po).then(function(pr){return paSn(pr).then(function(pd){" +
+      "if(pd.s>=200&&pd.s<300){paPut(pk,pd);if(pc===1){PA.rec++;paPre(pu,po,pk)}else PA.ric++}" +
+      "return paMk(pd)})});" +
+      "if(paT)PA.skip++}}" +
+      "}catch(_){PA.err++}" +
+      "return paF.apply(W,arguments)};" +
+      // XHR is hooked ONLY for the mutation flush, same as JELA-752.
+      "try{var PXA=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(PXA&&PXA.open){var paO=PXA.open;" +
+      'PXA.open=function(pxm,pxu){try{var pxv=String(pxm||"").toUpperCase();if(pxv!=="GET"&&pxv!=="HEAD")paFl(pxu)}catch(_){PA.err++}' +
+      "return paO.apply(this,arguments)}}}catch(_){PA.err++}" +
+      // Bound to WINDOW, not document. The shell hands off to jellyfin-web with
+      // document.write(), which implicitly calls document.open() and drops
+      // every listener registered on the document — the first rig run came
+      // back ev:0 for exactly that reason, and only the /Intros arm above
+      // saved it. Window listeners survive the handoff on M63 (the engine this
+      // ships to; cf. the JEL-66 note that Chrome 68+ is the one that wipes
+      // them), and a click reaches window last, so capture phase costs
+      // nothing extra. document is kept as a second registration for engines
+      // where the reverse holds, deduped on event identity so the two
+      // registrations cannot both count (and re-open) one click.
+      'try{var paBt=" btnPlay btnResume btnReplay btnShuffle ";' +
+      'var paAt=" play resume resumemixed instantmix shuffle ",paLe=null;' +
+      "var paCk=function(pv){try{if(pv&&pv===paLe)return;paLe=pv;PA.cl++;var nd=pv&&pv.target,dp=0;" +
+      'while(nd&&dp<8){var ca=nd.getAttribute?String(nd.getAttribute("data-action")||""):"";' +
+      'if(ca&&paAt.indexOf(" "+ca+" ")>=0){PA.ev++;paArm();return}' +
+      'var cn=typeof nd.className==="string"?nd.className:"";' +
+      'if(cn){var cs=cn.split(/\\s+/),ci;for(ci=0;ci<cs.length;ci++)if(cs[ci]&&paBt.indexOf(" "+cs[ci]+" ")>=0){PA.ev++;paArm();return}}' +
+      "nd=nd.parentNode;dp++}}catch(_){PA.err++}};" +
+      'if(W.addEventListener)W.addEventListener("click",paCk,true);' +
+      'if(document&&document.addEventListener)document.addEventListener("click",paCk,true)}catch(_){PA.err++}' +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
@@ -3303,6 +4175,262 @@
       "for(ui=0;ui<AWL.length;ui++)enq(AWL[ui]);" +
       "pump()" +
       "}" +
+      "}}catch(_){G.err++}}" +
+      // JELA-742 (opt-in, default OFF via
+      // localStorage['jellyfin.shell.aliasCoalesce']='1'; kill-switch
+      // 'jellyfin.shell.aliasCoalesceDisabled' reserved for the default-ON
+      // flip): collapse the two ALIAS PAIRS the home fetches twice per boot.
+      //
+      // The defect (JELA-741 captures w1/w2/w3, all three boots identical):
+      // the media bar fetches every slide item from BOTH /Items/{id} and
+      // /Users/{u}/Items/{id}, ~300-740 ms apart, and repeats the pair on the
+      // ~15.5 s rotation for as long as the home is on screen. Each carries
+      // its own CORS preflight, so one slide costs 4 requests. The boot pair
+      // lands at ~3,042 ms on a home whose last card change is ~5,663 ms —
+      // inside the fill window, where [[boot-concurrency-queueing]] says
+      // request COUNT, not bytes, sets latency. Same shape for the views
+      // pair: /UserViews?userId={u} and /Users/{u}/Views, 6,612 B each.
+      //
+      // Why serving one from the other is sound. Measured against the live
+      // server with the USER token the SPA actually holds (not a server API
+      // key — a bare /Items/{id} 400s without a user context, which is why
+      // the endpoint takes its user from the token):
+      //   /Items/{id}          22,962 / 22,806 / 65,798 B
+      //   /Users/{u}/Items/{id} 22,962 / 22,806 / 65,798 B   md5-identical
+      // and the CDP capture agrees — DECODED length matches on all 5 pairs of
+      // w3 (the small `encoded` deltas are header size, not body). The views
+      // pair differs in exactly one field, ChildCount, and that field is
+      // non-deterministic SERVER-SIDE: two consecutive calls to the SAME
+      // endpoint return different counts (measured n=3: Movies 6/5/3 on
+      // /UserViews alone), so coalescing loses no information that was not
+      // already noise.
+      //
+      // Scope is deliberately narrow — a key is derived ONLY for the four
+      // exact path shapes above, and only when the user id in the path/query
+      // matches the stored credential's. The residual query string (minus
+      // `userId` and the `_` cache-buster) is part of the key, so a caller
+      // that passes Fields=/other params never coalesces with one that does
+      // not — differing params mean differing bodies, and a non-matching key
+      // is simply today's path. Anything unrecognised returns "" and goes to
+      // the network untouched: worst case = today's boot.
+      //
+      // Entries are ONE-SHOT (a read deletes the slot, as apiWarm does) with a
+      // 10 s TTL — 13x the widest gap observed between siblings (740 ms) and
+      // comfortably under the 15.5 s rotation, so a slide's pair collapses but
+      // nothing survives to the next slide. That bounds staleness exposure to
+      // at most one served response per id. A token change flushes the store,
+      // so another user's data is never served. Bodies over 256 KiB are not
+      // stored (observed max 65,798 B) and the store is capped at 8 slots,
+      // FIFO — an entry whose sibling never arrives cannot accumulate. (Under
+      // the JELA-760 flag below the item shapes become multi-read on a longer
+      // TTL and the ring grows to 32; the views pair keeps this one-shot 10 s.)
+      //
+      // A sibling that asks while the first is still IN FLIGHT parks on it and
+      // is fed by the same response rather than issuing a second request; if
+      // that request errors, the parked caller replays on the network.
+      //
+      // Installed LAST in this body, so these patches wrap OUTSIDE the
+      // JELA-703 hssPin and JELA-51/685 apiWarm patches: this one sees the
+      // call first (to serve it) and still records the body whether it was
+      // answered by apiWarm's store or by the network. apiWarm's own prefetch
+      // XHRs (__awI) are skipped so the two mechanisms stay independent.
+      // One install per WINDOW (survives the document.write handoff).
+      //
+      // JELA-760 widens this same store into the series drill-down, behind its
+      // OWN flag localStorage['jellyfin.shell.itemCache']='1' (kill-switch
+      // 'jellyfin.shell.itemCacheDisabled'), so either mechanism can be flown
+      // without the other.
+      //
+      // The defect (JELA-759 capture, home -> series -> season -> episode and
+      // back out on a primed warm profile): 87 of the drill's 165 non-preflight
+      // requests (52.7%) go to a byte-identical URL, carrying 713,686 B — 40.7%
+      // of every byte the drill moves — against a 5.5% duplicate rate for the
+      // warm boot in the SAME capture. The drill refetches its own ancestors at
+      // every level: /Users/{u}/Items/{seriesId} x14 (x16 counting the alias),
+      // /Shows/{seriesId}/Episodes x4 (53.7 KB each — the single largest byte
+      // item in the drill), /Users/{u}/Items/{seasonId} x8,
+      // /Users/{u}/Items/{episodeId} x4, plus the per-route pollers that refire
+      // on every route change (tag-cache x9, user-settings x7,
+      // jellyseerr/user-status x6, NotifySync/Data x6). Every one is
+      // cross-origin, so each duplicate also buys a CORS preflight.
+      //
+      // Why this needs a CACHE and not another join. JELA-724/752's coalescer
+      // joins requests that are concurrent, and JELA-742's slots are one-shot
+      // because its siblings are 300-874 ms apart. The drill's re-reads are
+      // SECONDS TO TENS OF SECONDS apart and separated by route changes, so
+      // nothing is in flight to join and one shot covers one of fourteen. The
+      // drill shapes are therefore MULTI-READ with their own TTL: the slot
+      // survives every read until it ages out or a write retires it.
+      //
+      // Latency is explicitly NOT the target (JELA-759 measured hashChanged
+      // 62-253 ms, detailUp 512 ms — a null, as in JELA-750). The lever is
+      // request COUNT and wasted bytes; cf. [[boot-concurrency-queueing]].
+      //
+      // Counters: window.__shellACo {on,ic,rec,hit,miss,ev,err,mh,fl,sv}.
+      'var cAL=flg("jellyfin.shell.aliasCoalesce")&&!flg("jellyfin.shell.aliasCoalesceDisabled");' +
+      'var cIC=flg("jellyfin.shell.itemCache")&&!flg("jellyfin.shell.itemCacheDisabled");' +
+      "if((cAL||cIC)&&!W.__shellACo){try{" +
+      'var cC=null;try{var cc0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),cs0=cc0&&cc0.Servers&&cc0.Servers[0];if(cs0&&cs0.AccessToken&&cs0.UserId)cC={t:cs0.AccessToken,u:String(cs0.UserId).toLowerCase(),a:String(cs0.ManualAddress||cs0.LocalAddress||"")}}catch(_){}' +
+      'var cB="";try{cB=String(srv()||(cC&&cC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
+      "if(cC&&/^https?:\\/\\//.test(cB)){" +
+      "var co=W.__shellACo={on:1,ic:cIC?1:0,rec:0,hit:0,miss:0,ev:0,err:0,mh:0,fl:0,sv:0};" +
+      'var cTTL=10000;try{var ct0=parseInt(localStorage.getItem("jellyfin.shell.aliasCoalesceTtlMs")||"",10);if(ct0>=1000&&ct0<=60000)cTTL=ct0}catch(_){}' +
+      // JELA-760 TTLs. 30 s spans the drill's own re-reads (its longest step
+      // is 9.3 s and the whole six-step walk is ~30 s of wall clock) without
+      // outliving the visit; plugin config gets 60 s because it is read once
+      // per route change and only its own namespace can write it.
+      'var cITTL=30000;try{var ci0=parseInt(localStorage.getItem("jellyfin.shell.itemCacheTtlMs")||"",10);if(ci0>=1000&&ci0<=300000)cITTL=ci0}catch(_){}' +
+      'var cCTTL=60000;try{var cg0=parseInt(localStorage.getItem("jellyfin.shell.itemCacheCfgTtlMs")||"",10);if(cg0>=1000&&cg0<=600000)cCTTL=cg0}catch(_){}' +
+      // A drill touches a series, up to 4 seasons and their episodes plus the
+      // pollers, so the 8-slot alias ring would thrash; 32 covers the walk and
+      // is still bounded by the same 256 KiB body cap (largest observed body
+      // is the 53.7 KB episode list).
+      "var cSto={},cOrd=[],cMAX=cIC?32:8,cCAP=262144;" +
+      'var cBL=[cB];try{var cb2=String(cC.a||"").replace(/\\/+$/,"");if(cb2&&cb2!==cB)cBL.push(cb2)}catch(_){}' +
+      // cKey: URL -> alias key, or "" for "do not touch". Server-relative,
+      // user-checked, residual query sorted into the key.
+      'var cKey=function(u){try{u=String(u||"");' +
+      'for(var bi=0;bi<cBL.length;bi++){if(u.indexOf(cBL[bi]+"/")===0){u=u.slice(cBL[bi].length);break}}' +
+      'if(u.charAt(0)!=="/"||u.charAt(1)==="/")return"";' +
+      'var qi=u.indexOf("?"),pp=qi<0?u:u.slice(0,qi),qs=qi<0?"":u.slice(qi+1);' +
+      'var ps=qs?qs.split("&"):[],res=[],uid="",pi;' +
+      "for(pi=0;pi<ps.length;pi++){var nm=ps[pi].split(\"=\")[0];if(nm==='_')continue;" +
+      'if(nm.toLowerCase()==="userid"){try{uid=decodeURIComponent(ps[pi].slice(ps[pi].indexOf("=")+1)||"").toLowerCase()}catch(_){uid="?"}continue}' +
+      "res.push(ps[pi])}" +
+      'res.sort();var rq=res.join("&");' +
+      "var m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"I:"+m[2].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(uid&&uid!==cC.u)return"";return"I:"+m[1].toLowerCase()+"?"+rq}' +
+      "if(cAL){m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Views$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"V:?"+rq}' +
+      'if(pp==="/UserViews")return uid===cC.u?"V:?"+rq:""}' +
+      // JELA-760 drill shapes, armed only under itemCache so a JELA-742 fleet
+      // flip cannot pick them up. Same discipline as the alias keys above: the
+      // residual query (userId and the `_` buster removed, the rest sorted) is
+      // part of the key, so a caller asking for different Fields never reads
+      // another caller's projection, and an unrecognised path returns "" and
+      // goes to the network untouched.
+      "if(cIC){" +
+      "m=/^\\/Shows\\/([0-9a-fA-F]{32})\\/Episodes$/.exec(pp);" +
+      'if(m){if(uid&&uid!==cC.u)return"";return"E:"+m[1].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Items\\/([0-9a-fA-F]{32})\\/ThemeMedia$/.exec(pp);" +
+      'if(m){if(uid&&uid!==cC.u)return"";return"T:"+m[1].toLowerCase()+"?"+rq}' +
+      'if(pp==="/Shows/NextUp")return uid&&uid!==cC.u?"":"N:?"+rq;' +
+      // A C: key carries the PLUGIN ROOT it came from ("C:<root>/<what>?…") so
+      // cFl can retire one plugin's config without touching another's — see
+      // the invalidation note below.
+      "m=/^\\/JellyfinEnhanced\\/tag-cache\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m)return m[1].toLowerCase()===cC.u?"C:JellyfinEnhanced/tag?"+rq:"";' +
+      "m=/^\\/JellyfinEnhanced\\/user-settings\\/([0-9a-fA-F]{32})\\/([A-Za-z0-9._-]{1,64})$/.exec(pp);" +
+      'if(m)return m[1].toLowerCase()===cC.u?"C:JellyfinEnhanced/us/"+m[2]+"?"+rq:"";' +
+      'if(pp==="/JellyfinEnhanced/jellyseerr/user-status")return"C:JellyfinEnhanced/jsr?"+rq;' +
+      'if(pp==="/NotifySync/Data")return"C:NotifySync/data?"+rq}' +
+      'return""}catch(_){co.err++;return""}};' +
+      'var cTok=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===cC.t)}catch(_){return!1}};' +
+      // cGet consumes a ONE-SHOT slot: it is deleted, and the caller keeps the
+      // ref (an in-flight entry still feeds its parked waiter through that
+      // ref). A JELA-760 slot is MULTI-READ (e.m) and survives the read, so
+      // one recorded body answers the whole drill until its TTL expires or a
+      // write retires it. `mh` counts served multi-reads and `sv` the bytes
+      // they kept off the wire — read those, never a request count, to decide
+      // whether the cache fired (cf. [[jela742-alias-coalesce]]).
+      "var cGet=function(k){if(!k)return null;var e=cSto[k];if(!e)return null;" +
+      "if(!cTok()){cSto={};cOrd=[];return null}" +
+      "if(e.st===2||+new Date()>e.x){delete cSto[k];return null}" +
+      "if(!e.m)delete cSto[k];else if(e.st===1){co.mh++;co.sv+=e.t.length}" +
+      "co.hit++;return e};" +
+      // Which shapes are multi-read, and for how long. The alias/views pair
+      // keeps JELA-742's one-shot 10 s exactly as measured; everything JELA-760
+      // adds is multi-read.
+      'var cMul=function(k){if(!cIC)return 0;var p=k.charAt(0);return p==="I"||p==="E"||p==="N"||p==="T"||p==="C"?1:0};' +
+      'var cDur=function(k){if(!cIC)return cTTL;var p=k.charAt(0);if(p==="C")return cCTTL;return p==="V"?cTTL:cITTL};' +
+      "var cNew=function(k){if(!k||cSto[k])return null;" +
+      'var d=cDur(k),e={st:0,s:0,t:"",cb:[],m:cMul(k),d:d,x:+new Date()+d};cSto[k]=e;cOrd.push(k);co.miss++;' +
+      "while(cOrd.length>cMAX){var k0=cOrd.shift();if(cSto[k0]){delete cSto[k0];co.ev++}}return e};" +
+      "var cDone=function(e,ok,st,tx){try{if(!e||e.st!==0)return;" +
+      "if(ok&&tx&&tx.length<=cCAP){e.st=1;e.s=st||200;e.t=String(tx);e.x=+new Date()+(e.d||cTTL);co.rec++}else e.st=2;" +
+      "var cbs=e.cb;e.cb=[];for(var i=0;i<cbs.length;i++){try{cbs[i]()}catch(_){co.err++}}}catch(_){co.err++}};" +
+      // JELA-760 invalidation. A multi-read slot must retire when the body it
+      // holds can have changed, but a BLANKET non-GET flush is fatal over a
+      // drill dwell: JELA-757 measured a third-party
+      // POST /JellyfinEnhanced/user-settings/{u}/settings.json landing inside
+      // EVERY ~18 s dwell, which emptied that store on 3/3 runs. So the flush
+      // is CLASSED by namespace: a write under a plugin namespace retires only
+      // the C: config slots, and anything else — item writes, play-state
+      // writes, and every unrecognised path — retires the item slots and
+      // leaves config alone. Only writes that provably cannot touch an item
+      // body or its UserData are exempt outright. Unknown still flushes, so a
+      // shape we have not seen fails toward correctness.
+      //
+      // The config half is scoped one step further, to the WRITING PLUGIN'S
+      // ROOT. Replaying the JELA-759 capture through this shim showed why: the
+      // seven settings.json POSTs are all JellyfinEnhanced's, yet a root-blind
+      // config flush also retired NotifySync's slot — a different plugin, a
+      // different controller, a body the write cannot reach. Scoping recovers
+      // 16 of the drill's requests (78 -> 94 eliminated) and closes a real
+      // cross-plugin coupling. It stays conservative WITHIN a plugin: a
+      // JellyfinEnhanced write still retires every JellyfinEnhanced slot,
+      // because one plugin's endpoints can legitimately share state.
+      'var cFl=function(u){try{if(!cIC)return;var p=String(u||"");' +
+      'for(var fi=0;fi<cBL.length;fi++){if(p.indexOf(cBL[fi]+"/")===0){p=p.slice(cBL[fi].length);break}}' +
+      'var fq=p.indexOf("?");if(fq>=0)p=p.slice(0,fq);' +
+      "if(/^\\/(DisplayPreferences|QuickConnect|Sessions\\/Capabilities|Sessions\\/Viewing)/.test(p))return;" +
+      "var fm=/^\\/(JellyfinEnhanced|NotifySync|CustomTabs|MediaBar)\\//.exec(p);" +
+      'var fc=!!fm,fp=fm?"C:"+fm[1]+"/":"",n=0,k,no=[],oi;' +
+      "for(k in cSto){if(!Object.prototype.hasOwnProperty.call(cSto,k))continue;" +
+      "if(fc){if(k.indexOf(fp)===0){delete cSto[k];n++}}" +
+      'else if(k.charAt(0)!=="C"){delete cSto[k];n++}}' +
+      "if(n){co.fl+=n;for(oi=0;oi<cOrd.length;oi++)if(cSto[cOrd[oi]])no.push(cOrd[oi]);cOrd=no}" +
+      "}catch(_){co.err++}};" +
+      // fetch: serve a completed entry as a synthesized Response, park on an
+      // in-flight one, else record the real response off a clone().
+      'var cMk=null;try{if(typeof Response==="function")cMk=function(e){return new Response(e.s===204?null:e.t,{status:e.s||200,headers:{"Content-Type":"application/json"}})}}catch(_){}' +
+      'if(typeof W.fetch==="function"&&cMk){try{var cF=W.fetch;W.fetch=function(cu,cop){try{' +
+      'if(!(cop&&cop.method)||String(cop.method).toUpperCase()==="GET"){' +
+      'var ck=cKey(typeof cu==="string"?cu:String((cu&&cu.url)||""));' +
+      "if(ck){var ce=cGet(ck);" +
+      "if(ce){if(ce.st===1)return Promise.resolve(cMk(ce));" +
+      "var cF2=cF,car=arguments;return new Promise(function(rs){ce.cb.push(function(){" +
+      "if(ce.st===1){try{rs(cMk(ce));return}catch(_){}}rs(cF2.apply(W,car))})})}" +
+      "var cn=cNew(ck);if(cn){var cp=cF.apply(W,arguments);" +
+      "try{cp.then(function(r){try{" +
+      "if(r&&r.status>=200&&r.status<300)r.clone().text().then(function(tx){cDone(cn,1,r.status,tx)},function(){cDone(cn,0)});" +
+      "else cDone(cn,0)}catch(_){cDone(cn,0)}},function(){cDone(cn,0)})}catch(_){cDone(cn,0)}" +
+      "return cp}}}" +
+      'else{var cmm=String(cop.method).toUpperCase();if(cmm!=="HEAD")cFl(typeof cu==="string"?cu:String((cu&&cu.url)||""))}' +
+      "}catch(_){co.err++}" +
+      "return cF.apply(W,arguments)}}catch(_){co.err++}}" +
+      // XHR delivery: own-property shadows over the prototype accessors, then
+      // the three completion events (same shape as the apiWarm serve above).
+      "var cD=function(x,e){try{" +
+      "var df=function(n,v){try{Object.defineProperty(x,n,{configurable:!0,value:v})}catch(_){try{x[n]=v}catch(__){}}};" +
+      'df("readyState",4);df("status",e.s||200);df("statusText","OK");' +
+      'var rt="";try{rt=String(x.responseType||"")}catch(_){}' +
+      'if(rt===""||rt==="text")df("responseText",e.t);' +
+      'if(rt==="json"){var pj=null;try{pj=JSON.parse(e.t)}catch(_){}df("response",pj)}else df("response",e.t);' +
+      'df("getAllResponseHeaders",function(){return"content-type: application/json\\r\\n"});' +
+      'df("getResponseHeader",function(h){return String(h||"").toLowerCase()==="content-type"?"application/json":null});' +
+      'var evs=["readystatechange","load","loadend"];for(var ei=0;ei<evs.length;ei++){var fd=0;' +
+      'try{if(typeof Event==="function"&&x.dispatchEvent){x.dispatchEvent(new Event(evs[ei]));fd=1}}catch(_){}' +
+      'if(!fd){try{var h5=x["on"+evs[ei]];if(typeof h5==="function")h5.call(x,{type:evs[ei],target:x})}catch(_){co.err++}}}' +
+      "}catch(_){co.err++}};" +
+      "try{var CXP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(CXP&&CXP.open&&CXP.send){" +
+      "var cO=CXP.open,cS=CXP.send,cAb=CXP.abort;" +
+      'CXP.open=function(cm2,cu2){try{this.__acM=String(cm2||"").toUpperCase();this.__acU=String(cu2||"")}catch(_){}return cO.apply(this,arguments)};' +
+      "if(cAb)CXP.abort=function(){try{this.__acA=1}catch(_){}return cAb.apply(this,arguments)};" +
+      'CXP.send=function(){var cx=this;try{if(!cx.__awI&&cx.__acM==="GET"){var ck2=cKey(cx.__acU);' +
+      "if(ck2){var ce2=cGet(ck2);" +
+      "if(ce2){var cgo=function(){try{if(cx.__acA)return;if(ce2.st===1)cD(cx,ce2);else cS.call(cx)}catch(_){co.err++}};" +
+      "if(ce2.st===1)setTimeout(cgo,0);else ce2.cb.push(cgo);return}" +
+      "var cn2=cNew(ck2);" +
+      'if(cn2)cx.addEventListener("loadend",function(){try{' +
+      'var ok=cx.status>=200&&cx.status<300,tx="";' +
+      'if(ok){var rt2="";try{rt2=String(cx.responseType||"")}catch(_){}' +
+      'if(rt2===""||rt2==="text"){try{tx=String(cx.responseText||"")}catch(_){ok=0}}else ok=0}' +
+      "cDone(cn2,ok?1:0,cx.status,tx)}catch(_){cDone(cn2,0)}})}}" +
+      'else if(cx.__acM&&cx.__acM!=="GET"&&cx.__acM!=="HEAD")cFl(cx.__acU)}catch(_){co.err++}' +
+      "return cS.apply(cx,arguments)}}}catch(_){co.err++}" +
       "}}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );
@@ -3635,7 +4763,10 @@
         if (qc === 1)
           localStorage.setItem(TX_PFX + "ts:" + k, String(Date.now()));
       }
-    } catch (_) {}
+    } catch (_) {
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
+    }
   }
   function txGetStatic(url) {
     try {
@@ -3678,11 +4809,21 @@
   }
   // JEL-619: cap raised 262144 -> 2097152 (mirror of shell.js txSetStatic)
   // so the JSI channel aggregate can cache its transpile under txc:.
+  // JELA-748 (AC2): count localStorage writes that were SWALLOWED, so the
+  // fleet beacon can tell "the store stopped accepting writes" from "the
+  // store is working". Lockstep with shell.js txWriteLost.
+  function txWriteLost() {
+    try {
+      window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
+    } catch (_) {}
+  }
   function txSetStatic(url, body) {
     if (!(typeof body != "string" || body.length > 2097152))
       try {
         localStorage.setItem(TX_PFX + txKey(url), body);
-      } catch (_) {}
+      } catch (_) {
+        txWriteLost();
+      }
   }
   // ---- Config-epoch boot gate (JELA-59, parent JELA-57 WS-2) -------------
   //
@@ -5440,6 +6581,90 @@
       return html;
     }
   }
+  // JELA-707 (JELA-699 follow-up): defer the JellyfinEnhanced injection until
+  // after firstCard — the JELA-690-calibrated ring measured blocking JE's
+  // injection at firstCard −3,340 ms (p=0.0024); its ~197-request fan-out
+  // contends with the boot burst (latency tracks in-flight request count).
+  // Strip JE's <script src> tag(s) from the fetched index.html string (same
+  // choke point as rewriteFontThirdPartyCss — covers both write paths, cache
+  // stays pristine), park URLs on window.__shellJeDefer; the seed's
+  // paint-gated re-injector (buildSeedScript) restores them post-paint via
+  // the dynamic-interceptor pipeline. Lockstep with shell.js.
+  // Flag-dark: localStorage["jellyfin.shell.deferJe"]="1"; delay
+  // "jellyfin.shell.deferJeMs" (default 3000). Diag: window.__shellJeDefer.
+  function stripJeScriptsForDefer(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
+    } catch (_) {
+      return html;
+    }
+    var d = (window.__shellJeDefer = {
+      on: 1,
+      held: 0,
+      urls: [],
+      rel: 0,
+      inj: 0,
+      tRel: 0,
+      tInj: 0,
+    });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/jellyfinenhanced|jellyfin-enhanced/i.test(src)) return tag;
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
+  // JELA-716: the Media Bar plugin pins slideshowpure.js on cdn.jsdelivr.net
+  // in the server's /web/index.html, and that copy carries 13 optional-chaining
+  // sites — on engines whose parser predates `?.` (Tizen 5.0 / Chromium 63)
+  // the tag can never execute; the hero there is the vendored es2017 copy in
+  // the JS-Injector channel (JELA-115). The fetch + parse-fail is pure waste
+  // on the boot path, so drop the tag from the html STRING before either
+  // write path parses the markup (same choke point as the two helpers above;
+  // covers the JEL-1832 string fast path AND the DOMParser path, and runs
+  // after the index cache read so cached markup stays pristine). The probe
+  // must PARSE-test, not feature-test: engines that parse `?.` run the CDN
+  // copy and must keep the tag. The stylesheet <link> is NOT stripped — it
+  // is repointed by rewriteFontThirdPartyCss above.
+  //
+  // Kill switch: localStorage["jellyfin.shell.keepCdnMediaBarJs"]="1"
+  // restores the stock tag. Diag: window.__shellMbStrip = {on,held,urls}.
+  function stripDeadMediaBarJs(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.keepCdnMediaBarJs") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      new Function("void 0?" + ".x");
+      return html;
+    } catch (_) {}
+    var d = (window.__shellMbStrip = { on: 1, held: 0, urls: [] });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/cdn\.jsdelivr\.net\/[^"']*slideshowpure[^"']*\.js/i.test(src)) {
+            return tag;
+          }
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     var baseUrl = serverUrl + "/web/",
       babelNeededFlag = !1;
@@ -5618,7 +6843,13 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = rewriteFontThirdPartyCss(results[0], serverUrl),
+        // JELA-707: JE-defer strip after the font rewrite (same contract).
+        // JELA-716: then drop the parse-dead CDN media-bar tag.
+        var html = stripDeadMediaBarJs(
+            stripJeScriptsForDefer(
+              rewriteFontThirdPartyCss(results[0], serverUrl),
+            ),
+          ),
           upstreamCfg = results[1],
           fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
         if (fast) {

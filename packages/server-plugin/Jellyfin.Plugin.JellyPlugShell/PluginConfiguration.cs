@@ -91,6 +91,37 @@ public class PluginConfiguration : BasePluginConfiguration
     public int DiagMaxRings { get; set; } = 5000;
 
     /// <summary>
+    /// JELA-732: TTL, in seconds, of the private per-credential cache over
+    /// /HomeScreen/Section/{name} (the Home Screen Sections row CONTENTS,
+    /// which ship with no Cache-Control and no ETag and cost 1.4-2.2 s of
+    /// server query CPU per home load). Drives both the server-side memo and
+    /// the Cache-Control max-age handed to the TV. 0 disables the cache
+    /// entirely, same as DisableHomeScreenSectionCache.
+    ///
+    /// 30 s is the freshness ceiling that needs no invalidation hook:
+    /// ContinueWatchingNextUp is the one row where a stale answer is visible
+    /// (resume position), and it self-corrects inside one TTL. Raising this
+    /// past ~30 s wants a real "watched" invalidator first.
+    /// </summary>
+    public int HomeScreenSectionCacheSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// JELA-732 kill switch: pass every /HomeScreen/Section/{name} request
+    /// straight through, stamping no headers and storing nothing. Read per
+    /// request, so flipping it takes effect without a restart.
+    /// </summary>
+    public bool DisableHomeScreenSectionCache { get; set; }
+
+    /// <summary>
+    /// JELA-732 half-kill: keep the server-side memo but stop TVs holding the
+    /// body in their own HTTP cache (Cache-Control becomes private, no-cache,
+    /// so a repeat still costs a request but is answered by a 304 off the
+    /// body-hash ETag). The rollback for client-side staleness that a server
+    /// restart cannot clear.
+    /// </summary>
+    public bool HomeScreenSectionCacheServerOnly { get; set; }
+
+    /// <summary>
     /// JELA-141 (C5/WS-5): fleet default for the Lite canvas home. When any
     /// Lite*DefaultOn flag is true, /shell/manifest.json carries an additive
     /// `flagDefaults` map ({"jellyfin.shell.liteEnabled":"1", ...}); shells
@@ -118,4 +149,23 @@ public class PluginConfiguration : BasePluginConfiguration
     /// rides the JELA-152 real-panel gate. Same contract as LiteDefaultOn.
     /// </summary>
     public bool LiteSubsDefaultOn { get; set; }
+
+    /// <summary>
+    /// JELA-731 kill switch: stop answering
+    /// <c>GET /HomeScreen/Section/LatestShows</c> from the one-query fast path and
+    /// let Home Screen Sections' own 30-day window walk serve it again. Default
+    /// false (fast path on). The fast path already steps aside on its own whenever
+    /// it cannot reproduce the upstream row; this is the operator's override for
+    /// the case where it can, but should not — a row that looks wrong on a TV, or
+    /// an upstream release that changes what the section means.
+    /// </summary>
+    public bool DisableLatestShowsFastPath { get; set; }
+
+    /// JELA-709 kill switch: stop appending Access-Control-Max-Age to
+    /// approved CORS preflight responses. Default false (header on): the
+    /// header only lets a browser reuse a preflight verdict it already got,
+    /// for at most 600 s, and the filter never overwrites a max-age some
+    /// other layer set. Read per-response — flipping it needs no restart.
+    /// </summary>
+    public bool DisableCorsPreflightMaxAge { get; set; }
 }

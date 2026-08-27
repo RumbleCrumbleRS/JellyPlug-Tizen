@@ -149,6 +149,69 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">Home row cache</h2>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="HomeScreenSectionCacheSeconds" label="Home row cache TTL (seconds)" min="0" />
+                            <div class="fieldDescription">
+                                Private, per-user cache over /HomeScreen/Section/{name} — the Home Screen Sections
+                                row contents, which ship with no Cache-Control and no ETag and cost 1.4-2.2 s of
+                                server query time on every home load. 0 turns the cache off. Above ~30 s a stale
+                                Continue Watching resume position becomes visible, so leave it at 30 unless a
+                                watched-invalidation hook lands first.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="HomeScreenSectionCacheServerOnly" />
+                                <span>Server-side only (TVs must revalidate)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Keeps the server-side memo but stops TVs holding the rows in their own HTTP cache;
+                                a repeat still costs a request, answered by a 304. The rollback for client-side
+                                staleness, which a server restart cannot clear.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableHomeScreenSectionCache" />
+                                <span>Disable the home row cache</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Full kill switch: every request passes straight through, stamped with nothing.
+                                Read per request, so it takes effect without a server restart.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableLatestShowsFastPath" />
+                                <span>Disable the Latest Shows fast path</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Hands GET /HomeScreen/Section/LatestShows back to Home Screen Sections' own
+                                30-day window walk (54 queries / ~1.2 s of server time on this library).
+                                Leave off unless the row looks wrong.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">CORS preflight cache (JELA-709)</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableCorsPreflightMaxAge" />
+                                <span>Disable Access-Control-Max-Age on preflights</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch. By default the plugin appends Access-Control-Max-Age: 600 to every CORS
+                                preflight the server approves, letting a browser reuse the verdict instead of
+                                re-preflighting the same URL. The preflight cache is keyed on the full URL, so this
+                                saves the repeats only — measured at 5-8 of a TV boot's ~100 preflights. Takes effect
+                                without a restart; never overwrites a max-age another layer set.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">Boot diagnostics</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -194,6 +257,12 @@
                     { id: 'LiteDefaultOn', type: 'bool' },
                     { id: 'LiteNativeDefaultOn', type: 'bool' },
                     { id: 'LiteSubsDefaultOn', type: 'bool' },
+                    { id: 'HomeScreenSectionCacheSeconds', type: 'number' },
+                    { id: 'HomeScreenSectionCacheServerOnly', type: 'bool' },
+                    { id: 'DisableHomeScreenSectionCache', type: 'bool' },
+                    { id: 'DisableLatestShowsFastPath', type: 'bool' },
+
+                    { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];
