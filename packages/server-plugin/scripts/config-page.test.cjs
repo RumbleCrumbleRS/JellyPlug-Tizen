@@ -130,6 +130,7 @@ for (const prop of [
   "DisableDiagIngest",
   "DiagMaxRings",
   "DisableCorsPreflightMaxAge", // JELA-709 kill switch
+  "SectionWarmIntervalSeconds", // JELA-793 warmer interval / kill switch
 ]) {
   assert.ok(
     formIds.includes(prop),
