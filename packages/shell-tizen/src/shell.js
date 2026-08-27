@@ -23,6 +23,12 @@
     if (!window.__shellT0) window.__shellT0 = Date.now();
   } catch (_) {}
 
+  //@@SHELL_CORE:installLsWriteBehind@@
+
+  // JELA-751: arm the write-behind overlay before any cache body can be
+  // written this boot (the shell-core declaration above hoists).
+  installLsWriteBehind();
+
   // JEL-617: boot-phase ring. Persists per-boot launch→connect→login→home
   // wall-clock deltas (ms from __shellT0) so before/after baselines for the
   // JEL-616 rehaul can be read on-device without host tooling (Q60R blocks
@@ -1391,6 +1397,44 @@
       "    if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
+      // JELA-707: paint-gated re-injector for the JellyfinEnhanced script
+      // tag(s) that stripJeScriptsForDefer held out of the written markup
+      // (URLs parked on window.__shellJeDefer — Window survives the
+      // document.write handoff). Waits for __shellPaintGate.onPaint (which
+      // always eventually fires: paint/timeout/giveup), then a tunable
+      // settle delay ("jellyfin.shell.deferJeMs", default 3000 — firstCard
+      // is already behind us at onPaint; the delay keeps JE's fan-out off
+      // the row-fill window that follows it), then appends the original
+      // <script src> tags. append-then-set-src is JE's own load shape, so
+      // the JEL-407 src-setter interceptor routes the body through the
+      // same fetch+transpile+cache pipeline as any dynamic plugin script.
+      // async=false keeps multi-tag source order. "&amp;" is decoded
+      // because the URLs were captured as raw attribute text, not DOM.
+      // No-gate fallback injects at 20 s like the JELA-684 hold above.
+      // Diag: window.__shellJeDefer {on,held,urls,rel,inj,tRel,tInj}.
+      "  try{(function(){",
+      "    var J=window.__shellJeDefer;",
+      "    if(!J||!J.urls||!J.urls.length)return;",
+      "    var D=3000;",
+      '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferJeMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
+      "    function inj(){",
+      "      if(J.rel)return;",
+      "      J.rel=1;J.tInj=Date.now();",
+      "      for(var i=0;i<J.urls.length;i++){",
+      "        try{",
+      '          var s=document.createElement("script");',
+      "          s.async=false;",
+      '          s.setAttribute("data-shell-je-deferred","1");',
+      "          (document.head||document.documentElement).appendChild(s);",
+      '          s.src=String(J.urls[i]).replace(/&amp;/g,"&");',
+      "          J.inj++;",
+      "        }catch(_){}",
+      "      }",
+      "    }",
+      "    function rel(){if(J.tRel)return;J.tRel=Date.now();setTimeout(inj,D);}",
+      "    var pg=window.__shellPaintGate;",
+      "    if(pg&&pg.onPaint){pg.onPaint(rel);}else{setTimeout(inj,20000);}",
+      "  })();}catch(_){}",
       // JEL-1580 v60: synthetic AF self-test harness. Gated by either
       // localStorage `jellyfin.shell.afSelfTest=1` or url ?shellSelfTest=focus.
       // Injects a stub focusable, forces BODY focus, sets
@@ -1706,8 +1750,11 @@
       // of replaying a stale body. Behaviourally identical to the widget-
       // side txKey above (JEL-26 lockstep).
       '    function __txKey(s){var u=String(s||"");var i=u.indexOf("?");if(i<0)return u;var path=u.substring(0,i);var pairs=u.substring(i+1).split("&");var keep=[];var now=Date.now();for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5)continue;}keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      // JELA-748 (AC2): seed-side twin of txWriteLost — a swallowed
+      // localStorage write bumps the shared window counter reported as tx.qe.
+      "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
-      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){}}",
+      "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1731,7 +1778,7 @@
       // to the static-side cachedTranspile (see TX_PFX).
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
       // jellyfin-web jQuery bundle (`<script src>`) finishes evaluating on
@@ -3734,7 +3781,10 @@
       'var p="";try{p=String(wr.p||"")}catch(_){}' +
       "var cf=null;try{cf=wr.miniCssF||wr.k||null}catch(_){}" +
       'var CWI=["59258","en-us-json","84501","playAccessValidation-plugin","experimentalWarnings-plugin","htmlAudioPlayer-plugin","htmlVideoPlayer-plugin","photoPlayer-plugin","comicsPlayer-plugin","bookPlayer-plugin","youtubePlayer-plugin","backdropScreensaver-plugin","pdfPlayer-plugin","logoScreensaver-plugin","syncPlay-core-PlaybackCore","19907","syncPlay-core-Manager","syncPlay-ui-players-NoActivePlayer","syncPlay-plugin","45568","73233","32721","68603","69881","76542","4113","81954","home","home-html","hometab","node_modules.sortablejs","12011","24468"];' +
-      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
+      // JELA-716: media-bar css warms the JELA-710 self-hosted URL; the old
+      // root-relative /gh/ jsdelivr pin resolved against the server origin
+      // and 404ed on prod — a spurious warm every CWS boot.
+      'var CWS=["/web/themes/dark/theme.css","/web/blurhash.worker.bundle.js","/shell/fonts/mediabar-slideshowpure.css","/gh/n00bcodr/Jellyfin-Enhanced@main/css/ratings.css","/JellyfinEnhanced/js/enhanced/ui.js","/JellyfinEnhanced/js/enhanced/bookmarks-library.js","/JellyfinEnhanced/js/elsewhere/elsewhere.js","/JellyfinEnhanced/js/elsewhere/reviews.js","/JellyfinEnhanced/js/jellyseerr/collection-discovery.js","/JellyfinEnhanced/js/tags/genretags.js","/JellyfinEnhanced/js/tags/languagetags.js","/JellyfinEnhanced/js/tags/peopletags.js","/JellyfinEnhanced/js/tags/qualitytags.js","/JellyfinEnhanced/js/tags/ratingtags.js","/JellyfinEnhanced/js/tags/userreviewtags.js","/JellyfinEnhanced/js/arr/arr-links.js","/JellyfinEnhanced/js/jellyseerr/request-manager.js","/JellyfinEnhanced/js/jellyseerr/api.js","/JellyfinEnhanced/js/jellyseerr/jellyseerr.js","/JellyfinEnhanced/js/jellyseerr/ui.js","/JellyfinEnhanced/js/jellyseerr/modal.js","/JellyfinEnhanced/js/jellyseerr/more-info-modal.js","/JellyfinEnhanced/js/jellyseerr/hss-discovery-handler.js","/JellyfinEnhanced/js/jellyseerr/item-details.js","/JellyfinEnhanced/js/jellyseerr/issue-reporter.js","/JellyfinEnhanced/js/jellyseerr/seamless-scroll.js","/JellyfinEnhanced/js/jellyseerr/discovery-filter-utils.js","/JellyfinEnhanced/js/jellyseerr/network-discovery.js","/JellyfinEnhanced/js/jellyseerr/person-discovery.js","/JellyfinEnhanced/js/jellyseerr/genre-discovery.js","/JellyfinEnhanced/js/jellyseerr/tag-discovery.js"];' +
       "var ci,r2;" +
       "for(ci=0;ci<CWI.length;ci++){" +
       'try{if(wr.u){r2=wr.u(CWI[ci]);if(typeof r2==="string"&&r2.indexOf("undefined")<0)add(p+r2)}}catch(_){}' +
@@ -4000,6 +4050,151 @@
       "for(ui=0;ui<AWL.length;ui++)enq(AWL[ui]);" +
       "pump()" +
       "}" +
+      "}}catch(_){G.err++}}" +
+      // JELA-742 (opt-in, default OFF via
+      // localStorage['jellyfin.shell.aliasCoalesce']='1'; kill-switch
+      // 'jellyfin.shell.aliasCoalesceDisabled' reserved for the default-ON
+      // flip): collapse the two ALIAS PAIRS the home fetches twice per boot.
+      //
+      // The defect (JELA-741 captures w1/w2/w3, all three boots identical):
+      // the media bar fetches every slide item from BOTH /Items/{id} and
+      // /Users/{u}/Items/{id}, ~300-740 ms apart, and repeats the pair on the
+      // ~15.5 s rotation for as long as the home is on screen. Each carries
+      // its own CORS preflight, so one slide costs 4 requests. The boot pair
+      // lands at ~3,042 ms on a home whose last card change is ~5,663 ms —
+      // inside the fill window, where [[boot-concurrency-queueing]] says
+      // request COUNT, not bytes, sets latency. Same shape for the views
+      // pair: /UserViews?userId={u} and /Users/{u}/Views, 6,612 B each.
+      //
+      // Why serving one from the other is sound. Measured against the live
+      // server with the USER token the SPA actually holds (not a server API
+      // key — a bare /Items/{id} 400s without a user context, which is why
+      // the endpoint takes its user from the token):
+      //   /Items/{id}          22,962 / 22,806 / 65,798 B
+      //   /Users/{u}/Items/{id} 22,962 / 22,806 / 65,798 B   md5-identical
+      // and the CDP capture agrees — DECODED length matches on all 5 pairs of
+      // w3 (the small `encoded` deltas are header size, not body). The views
+      // pair differs in exactly one field, ChildCount, and that field is
+      // non-deterministic SERVER-SIDE: two consecutive calls to the SAME
+      // endpoint return different counts (measured n=3: Movies 6/5/3 on
+      // /UserViews alone), so coalescing loses no information that was not
+      // already noise.
+      //
+      // Scope is deliberately narrow — a key is derived ONLY for the four
+      // exact path shapes above, and only when the user id in the path/query
+      // matches the stored credential's. The residual query string (minus
+      // `userId` and the `_` cache-buster) is part of the key, so a caller
+      // that passes Fields=/other params never coalesces with one that does
+      // not — differing params mean differing bodies, and a non-matching key
+      // is simply today's path. Anything unrecognised returns "" and goes to
+      // the network untouched: worst case = today's boot.
+      //
+      // Entries are ONE-SHOT (a read deletes the slot, as apiWarm does) with a
+      // 10 s TTL — 13x the widest gap observed between siblings (740 ms) and
+      // comfortably under the 15.5 s rotation, so a slide's pair collapses but
+      // nothing survives to the next slide. That bounds staleness exposure to
+      // at most one served response per id. A token change flushes the store,
+      // so another user's data is never served. Bodies over 256 KiB are not
+      // stored (observed max 65,798 B) and the store is capped at 8 slots,
+      // FIFO — an entry whose sibling never arrives cannot accumulate.
+      //
+      // A sibling that asks while the first is still IN FLIGHT parks on it and
+      // is fed by the same response rather than issuing a second request; if
+      // that request errors, the parked caller replays on the network.
+      //
+      // Installed LAST in this body, so these patches wrap OUTSIDE the
+      // JELA-703 hssPin and JELA-51/685 apiWarm patches: this one sees the
+      // call first (to serve it) and still records the body whether it was
+      // answered by apiWarm's store or by the network. apiWarm's own prefetch
+      // XHRs (__awI) are skipped so the two mechanisms stay independent.
+      // One install per WINDOW (survives the document.write handoff).
+      // Counters: window.__shellACo {on,rec,hit,miss,ev,err}.
+      'if(flg("jellyfin.shell.aliasCoalesce")&&!flg("jellyfin.shell.aliasCoalesceDisabled")&&!W.__shellACo){try{' +
+      'var cC=null;try{var cc0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),cs0=cc0&&cc0.Servers&&cc0.Servers[0];if(cs0&&cs0.AccessToken&&cs0.UserId)cC={t:cs0.AccessToken,u:String(cs0.UserId).toLowerCase(),a:String(cs0.ManualAddress||cs0.LocalAddress||"")}}catch(_){}' +
+      'var cB="";try{cB=String(srv()||(cC&&cC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
+      "if(cC&&/^https?:\\/\\//.test(cB)){" +
+      "var co=W.__shellACo={on:1,rec:0,hit:0,miss:0,ev:0,err:0};" +
+      'var cTTL=10000;try{var ct0=parseInt(localStorage.getItem("jellyfin.shell.aliasCoalesceTtlMs")||"",10);if(ct0>=1000&&ct0<=60000)cTTL=ct0}catch(_){}' +
+      "var cSto={},cOrd=[],cMAX=8,cCAP=262144;" +
+      'var cBL=[cB];try{var cb2=String(cC.a||"").replace(/\\/+$/,"");if(cb2&&cb2!==cB)cBL.push(cb2)}catch(_){}' +
+      // cKey: URL -> alias key, or "" for "do not touch". Server-relative,
+      // user-checked, residual query sorted into the key.
+      'var cKey=function(u){try{u=String(u||"");' +
+      'for(var bi=0;bi<cBL.length;bi++){if(u.indexOf(cBL[bi]+"/")===0){u=u.slice(cBL[bi].length);break}}' +
+      'if(u.charAt(0)!=="/"||u.charAt(1)==="/")return"";' +
+      'var qi=u.indexOf("?"),pp=qi<0?u:u.slice(0,qi),qs=qi<0?"":u.slice(qi+1);' +
+      'var ps=qs?qs.split("&"):[],res=[],uid="",pi;' +
+      "for(pi=0;pi<ps.length;pi++){var nm=ps[pi].split(\"=\")[0];if(nm==='_')continue;" +
+      'if(nm.toLowerCase()==="userid"){try{uid=decodeURIComponent(ps[pi].slice(ps[pi].indexOf("=")+1)||"").toLowerCase()}catch(_){uid="?"}continue}' +
+      "res.push(ps[pi])}" +
+      'res.sort();var rq=res.join("&");' +
+      "var m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"I:"+m[2].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      'if(m){if(uid&&uid!==cC.u)return"";return"I:"+m[1].toLowerCase()+"?"+rq}' +
+      "m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Views$/.exec(pp);" +
+      'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"V:?"+rq}' +
+      'if(pp==="/UserViews")return uid===cC.u?"V:?"+rq:"";' +
+      'return""}catch(_){co.err++;return""}};' +
+      'var cTok=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===cC.t)}catch(_){return!1}};' +
+      // cGet consumes: the slot is deleted, the caller keeps the ref (an
+      // in-flight entry still feeds its parked waiter through that ref).
+      "var cGet=function(k){if(!k)return null;var e=cSto[k];if(!e)return null;" +
+      "if(!cTok()){cSto={};cOrd=[];return null}" +
+      "if(e.st===2||+new Date()>e.x){delete cSto[k];return null}" +
+      "delete cSto[k];co.hit++;return e};" +
+      "var cNew=function(k){if(!k||cSto[k])return null;" +
+      'var e={st:0,s:0,t:"",cb:[],x:+new Date()+cTTL};cSto[k]=e;cOrd.push(k);co.miss++;' +
+      "while(cOrd.length>cMAX){var k0=cOrd.shift();if(cSto[k0]){delete cSto[k0];co.ev++}}return e};" +
+      "var cDone=function(e,ok,st,tx){try{if(!e||e.st!==0)return;" +
+      "if(ok&&tx&&tx.length<=cCAP){e.st=1;e.s=st||200;e.t=String(tx);e.x=+new Date()+cTTL;co.rec++}else e.st=2;" +
+      "var cbs=e.cb;e.cb=[];for(var i=0;i<cbs.length;i++){try{cbs[i]()}catch(_){co.err++}}}catch(_){co.err++}};" +
+      // fetch: serve a completed entry as a synthesized Response, park on an
+      // in-flight one, else record the real response off a clone().
+      'var cMk=null;try{if(typeof Response==="function")cMk=function(e){return new Response(e.s===204?null:e.t,{status:e.s||200,headers:{"Content-Type":"application/json"}})}}catch(_){}' +
+      'if(typeof W.fetch==="function"&&cMk){try{var cF=W.fetch;W.fetch=function(cu,cop){try{' +
+      'if(!(cop&&cop.method)||String(cop.method).toUpperCase()==="GET"){' +
+      'var ck=cKey(typeof cu==="string"?cu:String((cu&&cu.url)||""));' +
+      "if(ck){var ce=cGet(ck);" +
+      "if(ce){if(ce.st===1)return Promise.resolve(cMk(ce));" +
+      "var cF2=cF,car=arguments;return new Promise(function(rs){ce.cb.push(function(){" +
+      "if(ce.st===1){try{rs(cMk(ce));return}catch(_){}}rs(cF2.apply(W,car))})})}" +
+      "var cn=cNew(ck);if(cn){var cp=cF.apply(W,arguments);" +
+      "try{cp.then(function(r){try{" +
+      "if(r&&r.status>=200&&r.status<300)r.clone().text().then(function(tx){cDone(cn,1,r.status,tx)},function(){cDone(cn,0)});" +
+      "else cDone(cn,0)}catch(_){cDone(cn,0)}},function(){cDone(cn,0)})}catch(_){cDone(cn,0)}" +
+      "return cp}}}" +
+      "}catch(_){co.err++}" +
+      "return cF.apply(W,arguments)}}catch(_){co.err++}}" +
+      // XHR delivery: own-property shadows over the prototype accessors, then
+      // the three completion events (same shape as the apiWarm serve above).
+      "var cD=function(x,e){try{" +
+      "var df=function(n,v){try{Object.defineProperty(x,n,{configurable:!0,value:v})}catch(_){try{x[n]=v}catch(__){}}};" +
+      'df("readyState",4);df("status",e.s||200);df("statusText","OK");' +
+      'var rt="";try{rt=String(x.responseType||"")}catch(_){}' +
+      'if(rt===""||rt==="text")df("responseText",e.t);' +
+      'if(rt==="json"){var pj=null;try{pj=JSON.parse(e.t)}catch(_){}df("response",pj)}else df("response",e.t);' +
+      'df("getAllResponseHeaders",function(){return"content-type: application/json\\r\\n"});' +
+      'df("getResponseHeader",function(h){return String(h||"").toLowerCase()==="content-type"?"application/json":null});' +
+      'var evs=["readystatechange","load","loadend"];for(var ei=0;ei<evs.length;ei++){var fd=0;' +
+      'try{if(typeof Event==="function"&&x.dispatchEvent){x.dispatchEvent(new Event(evs[ei]));fd=1}}catch(_){}' +
+      'if(!fd){try{var h5=x["on"+evs[ei]];if(typeof h5==="function")h5.call(x,{type:evs[ei],target:x})}catch(_){co.err++}}}' +
+      "}catch(_){co.err++}};" +
+      "try{var CXP=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;if(CXP&&CXP.open&&CXP.send){" +
+      "var cO=CXP.open,cS=CXP.send,cAb=CXP.abort;" +
+      'CXP.open=function(cm2,cu2){try{this.__acM=String(cm2||"").toUpperCase();this.__acU=String(cu2||"")}catch(_){}return cO.apply(this,arguments)};' +
+      "if(cAb)CXP.abort=function(){try{this.__acA=1}catch(_){}return cAb.apply(this,arguments)};" +
+      'CXP.send=function(){var cx=this;try{if(!cx.__awI&&cx.__acM==="GET"){var ck2=cKey(cx.__acU);' +
+      "if(ck2){var ce2=cGet(ck2);" +
+      "if(ce2){var cgo=function(){try{if(cx.__acA)return;if(ce2.st===1)cD(cx,ce2);else cS.call(cx)}catch(_){co.err++}};" +
+      "if(ce2.st===1)setTimeout(cgo,0);else ce2.cb.push(cgo);return}" +
+      "var cn2=cNew(ck2);" +
+      'if(cn2)cx.addEventListener("loadend",function(){try{' +
+      'var ok=cx.status>=200&&cx.status<300,tx="";' +
+      'if(ok){var rt2="";try{rt2=String(cx.responseType||"")}catch(_){}' +
+      'if(rt2===""||rt2==="text"){try{tx=String(cx.responseText||"")}catch(_){ok=0}}else ok=0}' +
+      "cDone(cn2,ok?1:0,cx.status,tx)}catch(_){cDone(cn2,0)}})}}}catch(_){co.err++}" +
+      "return cS.apply(cx,arguments)}}}catch(_){co.err++}" +
       "}}catch(_){G.err++}}" +
       "}catch(_){}})();"
     );
@@ -4279,7 +4474,19 @@
       // snippet channel (~1.2 MB) — 1 inlined from cache (zero fetch), 0
       // re-fetched, -1 channel absent/disabled. These make "measure fetch cost
       // separately" answerable per fielded boot without an sdb session.
+      // JELA-748 (AC2): priming state. ls = chars in use (key+value summed;
+      // -1 if the census threw), lk = key count, qe = swallowed localStorage
+      // writes this boot. ch/cm say "this boot ran un-primed"; ls/lk/qe say
+      // WHY — a store that is full or has stopped accepting writes reads
+      // identically to a working one otherwise. The census is O(store) and
+      // copies every value, so it runs ONCE, here, on the opt-in beacon path
+      // only (default OFF) and always after the home/card mark — never on a
+      // boot's critical path.
+      "function lsz(){try{var L=localStorage,n=L.length,t=0;for(var i=0;i<n;i++){var k=L.key(i);t+=k.length+(L.getItem(k)||'').length}return[t,n]}catch(_){return[-1,-1]}}" +
       "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,ch:W.__shellTxCacheHits||0,cm:W.__shellTxCacheMisses||0,jc:W.__shellJsiChannelCache==='hit'?1:(W.__shellJsiChannelCache==='miss'?0:-1),drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
+      // Census AFTER oid(), so the id key it may have just minted is counted,
+      // and in its own try so a census failure can never cost us the payload.
+      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0}catch(_){}" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
@@ -4669,6 +4876,17 @@
   // restores the fetch-every-boot behaviour.
   var TX_QUERY_TTL_MS = 864e5;
   var TX_REF_PFX = "@@shellref:";
+  // JELA-748 (AC2): count localStorage writes that were SWALLOWED. Every
+  // tx-cache writer soft-fails into catch(_){} so a boot never breaks on a
+  // full store — but that also makes "the store stopped accepting writes"
+  // indistinguishable from "the store is working" in the fleet beacon, where
+  // only ch/cm are visible. Bump at the point the write is finally lost, and
+  // report as tx.qe. Widget side and seed side share the window counter.
+  function txWriteLost() {
+    try {
+      window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
+    } catch (_) {}
+  }
   var PLUGIN_FETCH_CACHE_DISABLED_KEY =
     "jellyfin.shell.pluginFetchCacheDisabled";
   function pluginFetchCacheDisabled() {
@@ -4740,7 +4958,8 @@
           localStorage.setItem(TX_PFX + "ts:" + k, String(Date.now()));
       }
     } catch (_) {
-      /* quota — soft fail */
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
     }
   }
   // JEL-554 (v34): record first 10 missed URLs to expose static/dynamic
@@ -4804,7 +5023,8 @@
     try {
       localStorage.setItem(TX_PFX + txKey(url), body);
     } catch (_) {
-      /* quota — soft fail */
+      /* quota — soft fail (JELA-748: counted, not silent) */
+      txWriteLost();
     }
   }
 
@@ -7176,6 +7396,107 @@
       return html;
     }
   }
+  // JELA-707 (JELA-699 follow-up): defer the JellyfinEnhanced injection until
+  // after firstCard. JELA-699 ring A on the calibrated JELA-690 harness
+  // measured blocking JE's script injection at firstCard −3,340 ms
+  // [−4,589, −2,338], p=0.0024 (−41.7%) — the JE fan-out (197 requests /
+  // 3.2 MB on the capture that sized it) contends with the boot's own
+  // request burst, and boot latency tracks in-flight REQUEST COUNT
+  // (TTFB 194 ms below 25 concurrent → 2,789 ms at 125-149), so moving the
+  // fan-out off the pre-paint window is the lever. Do NOT remove JE — hold
+  // it: strip its <script src> tag(s) out of the fetched /web/index.html
+  // string before either write path parses the markup (same choke point as
+  // rewriteFontThirdPartyCss above — covers the JEL-1832 string fast path
+  // AND the DOMParser path, and runs after the index cache read so cached
+  // markup stays pristine), park the stripped URLs on
+  // window.__shellJeDefer (Window survives the document.write handoff),
+  // and let the seed's paint-gated re-injector (see buildSeedScript) put
+  // them back once __shellPaintGate.onPaint fires. The re-injected tags
+  // flow through the JEL-406/407 dynamic-script interceptors, so legacy
+  // engines still get the same transpile + JEL-557 cache treatment as the
+  // static walk. Nothing on the boot-to-home path consumes JE: its
+  // features (card tags, jellyseerr rows, shortcuts) decorate the home
+  // AFTER render, and JE's own loader already waits for auth before its
+  // module fan-out — deferring to paint+delay moves that start by seconds,
+  // not the features' existence.
+  //
+  // Flag-dark: opt in with localStorage["jellyfin.shell.deferJe"]="1"
+  // (post-paint delay tunable via "jellyfin.shell.deferJeMs", default 3000).
+  // Diag/counter (perf-protocol rule 4 — the ring's ON arm must prove the
+  // lever fired): window.__shellJeDefer = {on,held,urls,rel,inj,tRel,tInj}.
+  function stripJeScriptsForDefer(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
+    } catch (_) {
+      return html;
+    }
+    var d = (window.__shellJeDefer = {
+      on: 1,
+      held: 0,
+      urls: [],
+      rel: 0,
+      inj: 0,
+      tRel: 0,
+      tInj: 0,
+    });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/jellyfinenhanced|jellyfin-enhanced/i.test(src)) return tag;
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
+  // JELA-716: the Media Bar plugin pins slideshowpure.js on cdn.jsdelivr.net
+  // in the server's /web/index.html, and that copy carries 13 optional-chaining
+  // sites — on engines whose parser predates `?.` (Tizen 5.0 / Chromium 63)
+  // the tag can never execute; the hero there is the vendored es2017 copy in
+  // the JS-Injector channel (JELA-115). The fetch + parse-fail is pure waste
+  // on the boot path, so drop the tag from the html STRING before either
+  // write path parses the markup (same choke point as the two helpers above;
+  // covers the JEL-1832 string fast path AND the DOMParser path, and runs
+  // after the index cache read so cached markup stays pristine). The probe
+  // must PARSE-test, not feature-test: engines that parse `?.` run the CDN
+  // copy and must keep the tag. The stylesheet <link> is NOT stripped — it
+  // is repointed by rewriteFontThirdPartyCss above.
+  //
+  // Kill switch: localStorage["jellyfin.shell.keepCdnMediaBarJs"]="1"
+  // restores the stock tag. Diag: window.__shellMbStrip = {on,held,urls}.
+  function stripDeadMediaBarJs(html) {
+    try {
+      if (localStorage.getItem("jellyfin.shell.keepCdnMediaBarJs") === "1") {
+        return html;
+      }
+    } catch (_) {}
+    try {
+      new Function("void 0?" + ".x");
+      return html;
+    } catch (_) {}
+    var d = (window.__shellMbStrip = { on: 1, held: 0, urls: [] });
+    try {
+      var out = String(html).replace(
+        /<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["'][^>]*>\s*<\/script>/gi,
+        function (tag, src) {
+          if (!/cdn\.jsdelivr\.net\/[^"']*slideshowpure[^"']*\.js/i.test(src)) {
+            return tag;
+          }
+          d.held++;
+          d.urls.push(src);
+          return "";
+        },
+      );
+      return d.held ? out : html;
+    } catch (_) {
+      return html;
+    }
+  }
   function loadRemoteWebClient(serverUrl) {
     // JELA-67: opt-in Lite canvas home — when it boots from the LS byte
     // cache, the SPA below never loads this boot (OK/Back hands off).
@@ -7406,7 +7727,14 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
-        var html = rewriteFontThirdPartyCss(results[0], serverUrl);
+        // JELA-707: JE-defer strip runs after the font rewrite, same
+        // string-level contract (both write paths covered, cache pristine).
+        // JELA-716: then drop the parse-dead CDN media-bar tag.
+        var html = stripDeadMediaBarJs(
+          stripJeScriptsForDefer(
+            rewriteFontThirdPartyCss(results[0], serverUrl),
+          ),
+        );
         var upstreamCfg = results[1];
         // JEL-1832: warm-boot fast path skips DOMParser+outerHTML
         // (~200-500 ms on Chromium 56) when caches are primed.
