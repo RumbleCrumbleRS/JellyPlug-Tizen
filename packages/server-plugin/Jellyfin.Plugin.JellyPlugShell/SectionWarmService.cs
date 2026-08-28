@@ -57,7 +57,7 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// per pass is enough.</para>
 ///
 /// <para><b>What does not hold is the other half of that claim.</b> This originally also
-/// concluded that warming one section carries the other three. JELA-798 re-measured it on
+/// concluded that one warmed section was enough for all four rows. JELA-798 re-measured it on
 /// production and it does not replicate: LatestShows goes properly warm (0.8-1.6x its own
 /// warm median) while LatestMovies stays at 4-13x and ContinueWatchingNextUp at 6-11x. The
 /// carry is partial — they sit below the 8-9x a warmerless box pays — but partial is not
@@ -312,8 +312,8 @@ public sealed class SectionWarmService : IDisposable
     /// away. Returns the number of cards built, 0 when this user can see no movie library.
     /// </summary>
     /// <remarks>
-    /// <para><b>Why a second row at all.</b> JELA-793 shipped on "warming one section
-    /// carries the other three". Re-measured on production 2026-08-28 with the warmer on
+    /// <para><b>Why a second row at all.</b> JELA-793 shipped on the finding that one
+    /// warmed section was enough for all four rows. Re-measured on production 2026-08-28 with the warmer on
     /// at 30 s, gate-D-clean 450 s+ quiet windows, concurrent fan-out, <c>no-store</c>,
     /// each arm against its own in-window warm median: LatestShows 346 ms / <b>1.61x</b>,
     /// LatestMovies 2,677 ms / <b>13.3x</b>. The carry is partial, not whole.</para>

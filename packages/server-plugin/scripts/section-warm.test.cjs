@@ -38,6 +38,15 @@
  *   C2. Still read-only. It builds an in-memory row and discards it; nothing
  *      it does is observable as a change.
  *
+ *   C3. JELA-798: the movies half, off by default. JELA-793 shipped believing
+ *      one warmed row carried the other three; re-measured, LatestShows goes
+ *      warm (1.6x) while LatestMovies stays at 13.3x. The rotation was the
+ *      cheap suspect and is not the cause — at a 110 s lap LatestMovies is
+ *      still 4.25x, and a USER-LESS /Items Movie control probe read 9,573 ms
+ *      against a 7.9 ms warm median in the same burst, which no rotation
+ *      setting can explain. So the pins here defend a second ROW against
+ *      being replaced by a faster rotation or by the cheaper user-less scan.
+ *
  *   D. It cannot pile up or take the host down. Overlapping passes are
  *      skipped rather than queued, and an unhandled exception on a timer
  *      callback would kill the process, so the callback body is wrapped.
@@ -132,13 +141,34 @@ assert.ok(
   /Interlocked\.Increment\(ref _userCursor\)/.test(svc),
   "users must be walked round-robin, one per pass",
 );
-// Pinned as "no loop in this file at all" rather than "no loop over a variable
-// named users": the first version of this assertion matched the identifier, and
-// a seeded mutation that looped over the expression directly walked straight
-// through it. There is no loop here today, so the strong form costs nothing.
+// Pinned as "no loop at all" rather than "no loop over a variable named users":
+// the first version of this assertion matched the identifier, and a seeded
+// mutation that looped over the expression directly walked straight through it.
+//
+// JELA-798 added WarmMovieRow, which legitimately loops — over the user's movie
+// LIBRARIES, and over the cards it builds. Neither is a loop over users. Rather
+// than weaken the strong form to something a mutation can walk through again,
+// cut that one method out and keep the strong form over everything else; the
+// method is then pinned separately, below, as not touching the user list at all.
+const MOVIE_ROW_START = svc.indexOf("private static int WarmMovieRow(");
+const MOVIE_ROW_END = svc.indexOf(
+  "/// Picks the user this pass warms on behalf of",
+);
 assert.ok(
-  !/\bforeach\b|\bfor\s*\(|\bwhile\s*\(/.test(svc),
+  MOVIE_ROW_START > 0 && MOVIE_ROW_END > MOVIE_ROW_START,
+  "WarmMovieRow must sit between its own signature and NextUser's doc comment — the loop pin below is scoped by those markers and silently widens if either moves",
+);
+const movieRow = svc.slice(MOVIE_ROW_START, MOVIE_ROW_END);
+const outsideMovieRow =
+  svc.slice(0, MOVIE_ROW_START) + svc.slice(MOVIE_ROW_END);
+assert.ok(
+  !/\bforeach\b|\bfor\s*\(|\bwhile\s*\(/.test(outsideMovieRow),
   "a warm pass must not loop over users — that is 11x the cost to redo the same shared work",
+);
+// The scoping is only safe while the carve-out cannot itself become a user walk.
+assert.ok(
+  !/GetUsersIds|_userCursor|NextUser\(/.test(movieRow),
+  "the movies half must warm for the ONE user the pass already picked — it must not reach the user list",
 );
 assert.strictEqual(
   (svc.match(/LatestShowsFastPath\.TryBuild\(/g) || []).length,
@@ -165,6 +195,69 @@ assert.ok(
 assert.ok(
   /Limit\s*=\s*ProbeLimit/.test(svc) && /ProbeLimit\s*=\s*200/.test(svc),
   "the fallback probe must be bounded by an explicit row limit",
+);
+
+// ---- C3. the JELA-798 movies half --------------------------------------------
+
+// Same shape as A: an auto-property with no initializer is false for a bool, so
+// the plugin ships with this off and the flip is an operator action.
+const movieDecl =
+  /public\s+bool\s+SectionWarmMovieRow\s*\{\s*get;\s*set;\s*\}\s*(=[^;]*;)?/.exec(
+    config,
+  );
+assert.ok(movieDecl, "PluginConfiguration.SectionWarmMovieRow is missing");
+assert.ok(
+  !movieDecl[1],
+  `SectionWarmMovieRow must default to false (off); found initializer '${movieDecl[1]}'`,
+);
+// Read per pass off the live configuration, like the interval — not captured at
+// Start(), which would make the kill switch need a restart to take effect.
+assert.ok(
+  /Plugin\.Instance\?\.Configuration\.SectionWarmMovieRow\s*==\s*true/.test(
+    svc,
+  ),
+  "the movies half must read its flag per pass, so it is its own kill switch",
+);
+
+// The same trap as C, one row along: the cheap version of the movies half is the
+// user-less scan this file ALREADY runs on its fallback path, and JELA-793
+// measured that family at ~0% of the win. It has to build the row — the
+// user-scoped query plus a DTO with images per card, which is where the
+// expensive cold state actually is.
+assert.ok(
+  /dtoService\.GetBaseItemDto\(/.test(movieRow) &&
+    /LatestShowsFastPath\.SectionDtoOptions\(\)/.test(movieRow),
+  "the movies half must resolve DTOs with the section's own image options — a cheaper shape is the measured-null version",
+);
+assert.ok(
+  /new InternalItemsQuery\(user\)/.test(movieRow),
+  "the movies half must be user-scoped — a user-less scan was measured at ~0% of the win",
+);
+assert.ok(
+  /EnableTotalRecordCount\s*=\s*false/.test(movieRow),
+  "the movies half must not ask for a total record count",
+);
+assert.ok(
+  /Limit\s*=\s*MovieRowLimit/.test(movieRow) &&
+    /MovieRowLimit\s*=\s*16/.test(svc),
+  "the movies half must be bounded by an explicit row limit",
+);
+
+// The numbers that rule out the cheaper fix have to travel with the code, or the
+// next person will reach for the rotation — it is genuinely the cheaper lever and
+// it is genuinely not the cause. 4.25x is LatestMovies at a 110 s lap, where
+// every user is fresher than the ~60 s decay time; 9,573 is the user-less
+// /Items Movie control probe against a 7.9 ms warm median, which is the reading
+// that no rotation setting can explain.
+assert.ok(
+  /4\.25x/.test(svc) && /9,573/.test(svc),
+  "SectionWarmService must carry the measurements that rule out a faster rotation, or it will be reintroduced as the fix",
+);
+// JELA-793's "one section carries the other three" is now false and must not be
+// left asserted anywhere: it is the sentence that would justify deleting this.
+assert.ok(
+  !/carries the other three/.test(svc),
+  "the disproved 'one section carries the other three' claim must not survive in the source",
 );
 
 // ---- C2. still read-only -----------------------------------------------------
@@ -248,6 +341,16 @@ assert.ok(
 assert.ok(
   /about a minute/.test(page),
   "the settings page must say how fast the penalty comes back, or an operator will set an interval that never helps",
+);
+// JELA-798: the movies half is inert unless the interval is non-zero, which is
+// the one way to switch it on and see nothing happen.
+assert.ok(
+  /id="SectionWarmMovieRow"/.test(page),
+  "the movies half must be switchable from the dashboard",
+);
+assert.ok(
+  /\{ id: 'SectionWarmMovieRow', type: 'bool' \}/.test(page),
+  "a field the page renders but never loads or saves reads as a working switch that does nothing",
 );
 
 console.log("section-warm.test.cjs: all pins hold");
