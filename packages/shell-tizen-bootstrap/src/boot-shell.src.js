@@ -3733,6 +3733,9 @@
       // the default; "0" restores the JELA-724 in-flight-only behaviour.
       'var fcW=400;try{var fcwv=localStorage.getItem("jellyfin.shell.fetchCoalesceWindowMs");' +
       'if(fcwv!==null&&fcwv!==""){fcwv=parseInt(fcwv,10);if(fcwv>=0&&fcwv<=2000)fcW=fcwv}}catch(_){}' +
+      'var fcWL=15000;try{var fclv=localStorage.getItem("jellyfin.shell.fetchCoalesceDeltaWindowMs");' +
+      'if(fclv!==null&&fclv!==""){fclv=parseInt(fclv,10);if(fclv>=0&&fclv<=300000)fcWL=fclv}}catch(_){}' +
+      "var fcDR=/\\/JellyfinEnhanced\\/tag-cache\\//;" +
       "var FC=W.__shellFC={on:1,n:FCL.length,w:fcW,lead:0,join:0,win:0,serve:0,rep:0,hdr:0,fl:0,err:0},fcQ={},fcS={};" +
       // Any mutation drops every held snapshot — see change 4 above. In-flight
       // leaders are dropped from the map too; they still settle, and fcRel's
@@ -3767,8 +3770,9 @@
       // earlier expiry) has replaced the map, this leader owns nothing and
       // must not evict whoever does.
       "var fcRel=function(fkx,fex,fd){try{if(fcQ[fkx]!==fex)return;" +
-      "if(!fcW||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
-      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fcW)}" +
+      "var fww=fcW?(fcDR.test(fkx)?fcWL:fcW):0;" +
+      "if(!fww||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
+      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fww)}" +
       "catch(_){FC.err++;try{delete fcQ[fkx]}catch(__){}}};" +
       "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
       'var fcm=fo&&fo.method?String(fo.method).toUpperCase():"GET";' +
@@ -4064,6 +4068,56 @@
       "nd=nd.parentNode;dp++}}catch(_){PA.err++}};" +
       'if(W.addEventListener)W.addEventListener("click",paCk,true);' +
       'if(document&&document.addEventListener)document.addEventListener("click",paCk,true)}catch(_){PA.err++}' +
+      'if(flg("jellyfin.shell.searchGate")&&!W.__shellSG&&typeof Promise==="function"){try{' +
+      'var sgMs=800;try{var sgv=localStorage.getItem("jellyfin.shell.searchGateMs");' +
+      'if(sgv!==null&&sgv!==""){sgv=parseInt(sgv,10);if(sgv>=0&&sgv<=5000)sgMs=sgv}}catch(_){}' +
+      'var SG=W.__shellSG={on:1,ms:sgMs,n:0,fn:0,xn:0,rel:0,sup:0,ab:0,drop:0,err:0,t:""},sgQ=[],sgT=null,sgL=null;' +
+      "var sgRe=/[?&][Ss]earch[Tt]erm=([^&]*)/;" +
+      'var SGL=["/Items","/Persons","/Artists"];' +
+      'try{var sgp=String(localStorage.getItem("jellyfin.shell.searchGatePaths")||"").replace(/\\s+/g,"").split(","),sgi;' +
+      'for(sgi=0;sgi<sgp.length;sgi++)if(sgp[sgi].charAt(0)==="/"&&SGL.length<16)SGL.push(sgp[sgi])}catch(_){}' +
+      'var sgOk=function(su){try{var sh=su.indexOf("#");if(sh>=0)su=su.slice(0,sh);' +
+      'var sq2=su.indexOf("?");if(sq2<0)return 0;var sp=su.slice(0,sq2),si2;' +
+      "for(si2=0;si2<SGL.length;si2++){var ss=SGL[si2];" +
+      "if(sp===ss||sp.length>ss.length&&sp.slice(-ss.length)===ss)return 1}return 0}catch(_){return 0}};" +
+      'var sgAb=function(){var se;try{se=new DOMException("The user aborted a request.","AbortError")}catch(_){se=new Error("The user aborted a request.");se.name="AbortError"}return se};' +
+      'var sgEv=function(){var se;try{se=new Event("abort")}catch(_){try{se=document.createEvent("Event");se.initEvent("abort",!1,!1)}catch(__){se=null}}return se};' +
+      "var sgSup=function(){try{var sq=sgQ,si3,se2;sgQ=[];" +
+      "for(si3=0;si3<sq.length;si3++){se2=sq[si3];if(se2.t===sgL)sgQ.push(se2);else{SG.sup++;se2.j()}}}catch(_){SG.err++}};" +
+      "var sgGo=function(){sgT=null;try{var sq=sgQ,si4,se2;sgQ=[];" +
+      "for(si4=0;si4<sq.length;si4++){se2=sq[si4];if(se2.t===sgL){SG.rel++;se2.r()}else{SG.sup++;se2.j()}}}catch(_){SG.err++}};" +
+      "var sgAdd=function(st,sr,sj){if(st!==sgL){sgL=st;SG.t=st.slice(0,40);sgSup()}" +
+      "var se3={t:st,r:sr,j:sj};sgQ.push(se3);" +
+      "if(sgT)clearTimeout(sgT);sgT=setTimeout(sgGo,sgMs);return se3};" +
+      'if(typeof W.fetch==="function"){var sgF=W.fetch;W.fetch=function(su,so){try{' +
+      'var sgm=so&&so.method?String(so.method).toUpperCase():"GET";' +
+      'if(sgm==="GET"&&typeof su==="string"&&!(so&&so.body)&&sgOk(su)){var sgx=sgRe.exec(su);' +
+      "if(sgx&&sgQ.length<64){SG.n++;SG.fn++;" +
+      "if(so&&so.signal&&so.signal.aborted){SG.ab++;return Promise.reject(sgAb())}" +
+      "return new Promise(function(sres,srej){var sen=sgAdd(sgx[1]," +
+      "function(){sres(sgF.call(W,su,so))},function(){srej(sgAb())});" +
+      'try{if(so&&so.signal&&typeof so.signal.addEventListener==="function")so.signal.addEventListener("abort",function(){try{var sk=sgQ.indexOf(sen);if(sk>=0){sgQ.splice(sk,1);SG.ab++;srej(sgAb())}}catch(_){SG.err++}})}catch(_){SG.err++}' +
+      "})}" +
+      "if(sgx)SG.drop++}" +
+      "}catch(_){SG.err++}" +
+      "return sgF.apply(W,arguments)}}" +
+      "try{var SPX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;" +
+      "if(SPX&&SPX.open&&SPX.send){var sgO=SPX.open,sgS=SPX.send,sgA=SPX.abort;" +
+      'SPX.open=function(sm2,su2){try{this.__sgM=String(sm2||"").toUpperCase();this.__sgU=String(su2||"")}catch(_){SG.err++}' +
+      "return sgO.apply(this,arguments)};" +
+      "SPX.send=function(sb){var sx=this;try{" +
+      'if(sx.__sgM==="GET"&&sb==null&&sgOk(sx.__sgU)){var sgx2=sgRe.exec(sx.__sgU);' +
+      "if(sgx2&&sgQ.length<64){SG.n++;SG.xn++;var sar=arguments;" +
+      "sx.__sgE=sgAdd(sgx2[1],function(){sx.__sgE=null;sgS.apply(sx,sar)}," +
+      "function(){sx.__sgE=null;var sev=sgEv();if(sev)try{sx.dispatchEvent(sev)}catch(_){SG.err++}});" +
+      "return}" +
+      "if(sgx2)SG.drop++}" +
+      "}catch(_){SG.err++}return sgS.apply(sx,arguments)};" +
+      "if(sgA)SPX.abort=function(){var sx=this;try{if(sx.__sgE){var sk2=sgQ.indexOf(sx.__sgE);" +
+      "if(sk2>=0)sgQ.splice(sk2,1);sx.__sgE=null;SG.ab++;" +
+      "var sev2=sgEv();if(sev2)try{sx.dispatchEvent(sev2)}catch(_){SG.err++}}}catch(_){SG.err++}" +
+      "return sgA.apply(sx,arguments)}}}catch(_){SG.err++}" +
+      "}catch(_){SG.err++}}" +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
