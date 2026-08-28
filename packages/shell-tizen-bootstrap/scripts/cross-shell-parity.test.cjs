@@ -209,8 +209,12 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-725: re-pinned — both shells gained the jp725 YouTube IFrame API
     // stub (identical block; it short-circuits the media bar's awaited
     // loadYouTubeAPI so boot never touches the www.youtube.com origin).
-    retail: "596abeab25faeb0d",
-    boot: "b7301631b9fa73ca",
+    // JELA-799: re-pinned — both seeds gained the (a) generation sweep
+    // (__TXGENK/__txGenOn/__txVerTok/__txFam/__txGenRec, plus the
+    // __txGenRec call in __txSet's query arm), byte-identical in the two
+    // shells; only the surrounding buildSeedScript stays divergent.
+    retail: "ff101dbf93a607fd",
+    boot: "c0b5e4b7336bb4fd",
   },
   {
     name: "buildDiagSeedScript",

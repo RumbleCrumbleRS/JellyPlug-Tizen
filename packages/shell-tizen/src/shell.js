@@ -1862,6 +1862,43 @@
       "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
+      // JELA-799 (a): proactive generation sweep for SEED-WRITTEN
+      // version-keyed slots. __txKey deliberately KEEPS a ?v=<version> token
+      // (only 12-14 digit epoch busters are stripped), so every plugin
+      // version bump writes a brand-new key and ORPHANS the previous one:
+      // the seed maintains no index, and the widget-side one-generation
+      // cleanup (txRecordQuerySlot's "vqk:") only ever runs for URLs the
+      // WIDGET fetched. Census of an aged rig profile (JELA-797): 3 vqk:
+      // entries against 163 plain slots / 1,882,682 chars, essentially all
+      // carrying ?v=<plugin version>. One JellyfinEnhanced bump therefore
+      // lays a fresh ~1.84M-char generation on top of the old one — enough
+      // on its own to pin a 3.67M-char store at the 5,242,880 UTF-16 code
+      // unit quota, after which the ONLY eviction is __txPrune firing
+      // REACTIVELY out of __txSet's quota catch, 10 keys at a time.
+      // Fix: a per-FAMILY index ("gqk:"), the family being the key with its
+      // version-ish tokens removed. Keying on the family rather than the
+      // bare path keeps concurrent NON-version generations of one path
+      // distinct (/HomeScreen/x.js?v=<ver>&c=1 vs &c=2 are two families, not
+      // one slot the two thrash over). A write whose family already points
+      // at a DIFFERENT key drops that key (and its "ts:" sibling) BEFORE the
+      // new body is stored, so the space is freed proactively instead of at
+      // quota. Class-1 URLs (epoch buster only) have family === key and are
+      // skipped entirely — nothing to sweep, no index cost. Content-
+      // addressed "txc:" bodies are deliberately NOT dropped here: they are
+      // keyed by SOURCE HASH, so a byte-identical body legitimately survives
+      // a version bump and dropping it could kill a live entry. Reaching
+      // those is JELA-799 (b)'s LRU work.
+      // Flag-dark: localStorage["jellyfin.shell.txGenSweep"]="1" enables it,
+      // "jellyfin.shell.txGenSweepDisabled"="1" is the kill switch. QA
+      // counter: window.__shellTxGenDrop (diag beacon "gd=").
+      '    var __TXGENK="jellyfin.shell.txGenSweep";',
+      '    function __txGenOn(){try{return localStorage.getItem(__TXGENK)==="1"&&localStorage.getItem(__TXGENK+"Disabled")!=="1";}catch(_){return false;}}',
+      // Version-ish token test — lockstep with __txQC's `pin` arm below and
+      // with the widget-side txQueryClass: >=15-digit ticks, a dotted a.b.c
+      // version, or a long hex hash.
+      "    function __txVerTok(v){return /^[0-9]{15,}$/.test(v)||/^\\d+(\\.\\d+){2,}/.test(v)||(/^[0-9a-fA-F]{12,}$/.test(v)&&/[a-fA-F]/.test(v));}",
+      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      '    function __txGenRec(k){if(!__txGenOn())return;try{var f=__txFam(k);if(f===k)return;var fk=__TXPFX+"gqk:"+f;var prev=null;try{prev=localStorage.getItem(fk);}catch(_){}if(prev===k)return;if(prev){try{localStorage.removeItem(__TXPFX+prev);}catch(_){}try{localStorage.removeItem(__TXPFX+"ts:"+prev);}catch(_){}try{var m=__txLru();if(m[prev]!=null){delete m[prev];__txPersistLru(m);}}catch(_){}try{window.__shellTxGenDrop=(window.__shellTxGenDrop||0)+1;}catch(_){}}localStorage.setItem(fk,k);}catch(_){__qeB();}}',
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1885,7 +1922,7 @@
       // to the static-side cachedTranspile (see TX_PFX).
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
       // jellyfin-web jQuery bundle (`<script src>`) finishes evaluating on
@@ -5480,7 +5517,11 @@
       "var p={id:oid(),ring:ring,tx:{skip:W.__shellTxSkipCount||0,done:W.__shellTxDoCount||0,ch:W.__shellTxCacheHits||0,cm:W.__shellTxCacheMisses||0,jc:W.__shellJsiChannelCache==='hit'?1:(W.__shellJsiChannelCache==='miss'?0:-1),drop:{ok:d.ok?1:0,h:d.h||0,m:d.m||0,r:d.r||0,f:d.f||0}}};" +
       // Census AFTER oid(), so the id key it may have just minted is counted,
       // and in its own try so a census failure can never cost us the payload.
-      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0}catch(_){}" +
+      // JELA-799: gd = version generations swept by the seed sweep, ps =
+      // keys evicted by the widget-side pruner. Both read 0 with the flags
+      // dark, and together with ls/lk/qe they say whether a fielded store is
+      // recycling its version-keyed slots or just accreting them.
+      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0;p.tx.gd=W.__shellTxGenDrop||0;p.tx.ps=W.__shellTxPruneStatic||0}catch(_){}" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
@@ -5881,6 +5922,105 @@
       window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
     } catch (_) {}
   }
+  // JELA-799 (b): make content-addressed `txc:` bodies reachable by the
+  // pruner. The seed's __txPrune evicts the 10 LRU-oldest keys from the
+  // shared "shell.txLru<TX_VER>" map — but ONLY __txGet/__txSet (the seed's
+  // dynamic pipeline) ever populate that map. txSetStatic and
+  // txRecordQuerySlot never touch it, so a txc: body can never be evicted no
+  // matter how large or how cold. On the JELA-797 census rig the single
+  // biggest key in the store was shell.tx1t1at4s:txc:<hash> at 901,582
+  // chars = 24.5% of the whole store, permanently unprunable, while the
+  // pruner dropped small seed entries around it. txSetStatic's own quota
+  // catch made it worse: it counted the lost write and gave up, with no
+  // prune-and-retry like __txSet has.
+  // Fix: track BODY keys in the same map (never the tiny "@@shellref:"
+  // POINTER keys — an evicted pointer with a live body is a leak, whereas an
+  // evicted body with a live pointer is already a self-healing miss), touch
+  // them on a static hit, and give txSetStatic __txSet's prune-and-retry.
+  // The touch is coarse — a stamp under an hour old is left alone — so a
+  // hit-heavy boot does not rewrite the whole map JSON once per read.
+  // Flag-dark: localStorage["jellyfin.shell.txLruStatic"]="1" enables it,
+  // "jellyfin.shell.txLruStaticDisabled"="1" is the kill switch. With the
+  // flag off the map never gains a txc: entry, so the seed-side pruner
+  // behaves exactly as it does today. QA counter:
+  // window.__shellTxPruneStatic (diag beacon "ps=").
+  var TX_LRU_KEY = "shell.txLru" + TX_VER;
+  var TX_LRU_STATIC_KEY = "jellyfin.shell.txLruStatic";
+  var TX_LRU_TOUCH_MS = 36e5;
+  function txLruStaticOn() {
+    try {
+      return (
+        localStorage.getItem(TX_LRU_STATIC_KEY) === "1" &&
+        localStorage.getItem(TX_LRU_STATIC_KEY + "Disabled") !== "1"
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+  function txLruRead() {
+    try {
+      var v = localStorage.getItem(TX_LRU_KEY);
+      return v ? JSON.parse(v) : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  function txLruWrite(m) {
+    try {
+      localStorage.setItem(TX_LRU_KEY, JSON.stringify(m));
+    } catch (_) {
+      txWriteLost();
+    }
+  }
+  function txLruTouch(k) {
+    if (!txLruStaticOn()) return;
+    try {
+      var m = txLruRead();
+      var now = Date.now();
+      if (m[k] && now - m[k] < TX_LRU_TOUCH_MS) return;
+      m[k] = now;
+      txLruWrite(m);
+    } catch (_) {}
+  }
+  // Drop a key the caller just removed from the store, so the pruner does
+  // not spend its 10-key budget on removeItem() no-ops for dead entries
+  // (which sort OLDEST and would therefore go first).
+  function txLruForget(k) {
+    if (!txLruStaticOn()) return;
+    try {
+      var m = txLruRead();
+      if (m[k] == null) return;
+      delete m[k];
+      txLruWrite(m);
+    } catch (_) {}
+  }
+  // Widget-side twin of the seed's __txPrune: drop the 10 LRU-oldest tracked
+  // keys. Returns true only when something was actually removed, so the
+  // caller retries a failed write only when there is fresh room for it.
+  function txPruneStatic() {
+    try {
+      var m = txLruRead();
+      var keys = Object.keys(m);
+      if (!keys.length) return false;
+      keys.sort(function (a, b) {
+        return m[a] - m[b];
+      });
+      var n = Math.min(keys.length, 10);
+      for (var i = 0; i < n; i++) {
+        try {
+          localStorage.removeItem(TX_PFX + keys[i]);
+        } catch (_) {}
+        delete m[keys[i]];
+      }
+      txLruWrite(m);
+      try {
+        window.__shellTxPruneStatic = (window.__shellTxPruneStatic || 0) + n;
+      } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
   var PLUGIN_FETCH_CACHE_DISABLED_KEY =
     "jellyfin.shell.pluginFetchCacheDisabled";
   function pluginFetchCacheDisabled() {
@@ -5938,7 +6078,12 @@
         prev = JSON.parse(localStorage.getItem(pathKey) || "null");
       } catch (_) {}
       if (prev) {
-        if (prev.c && prev.c !== ck) localStorage.removeItem(TX_PFX + prev.c);
+        if (prev.c && prev.c !== ck) {
+          localStorage.removeItem(TX_PFX + prev.c);
+          // JELA-799 (b): the body is gone — stop the LRU from carrying a
+          // dead key that would sort oldest and waste a prune slot.
+          txLruForget(prev.c);
+        }
         if (prev.k && prev.k !== k) {
           localStorage.removeItem(TX_PFX + prev.k);
           localStorage.removeItem(TX_PFX + "ts:" + prev.k);
@@ -5988,8 +6133,14 @@
       var v = localStorage.getItem(TX_PFX + k);
       // JEL-619: deref a version-slot pointer to its content-addressed body.
       // A pruned/absent target reads as a miss (self-healing refetch).
-      if (v != null && v.lastIndexOf(TX_REF_PFX, 0) === 0)
-        v = localStorage.getItem(TX_PFX + v.substring(TX_REF_PFX.length));
+      // JELA-799 (b): `bk` is the key the BODY actually lives under — the
+      // deref target for a pointer, otherwise k itself. That is the key the
+      // LRU tracks; the pointer is left untracked on purpose.
+      var bk = k;
+      if (v != null && v.lastIndexOf(TX_REF_PFX, 0) === 0) {
+        bk = v.substring(TX_REF_PFX.length);
+        v = localStorage.getItem(TX_PFX + bk);
+      }
       if (v == null) {
         var miss = window.__shellTxCacheMissUrlsStatic;
         if (!miss) {
@@ -5997,10 +6148,15 @@
           window.__shellTxCacheMissUrlsStatic = miss;
         }
         if (miss.length < 10) miss.push(url);
-      } else if (u.indexOf("?") >= 0) {
+      } else {
+        // JELA-799 (b): a static hit is the ONLY recency signal a txc: body
+        // ever gets — without it every content-addressed body looks eternally
+        // cold and would prune first once it becomes prunable at all.
+        txLruTouch(bk);
         // JEL-619: download-skip telemetry (a query-bearing hit means a
         // plugin re-download was avoided this boot).
-        window.__shellQvHits = (window.__shellQvHits || 0) + 1;
+        if (u.indexOf("?") >= 0)
+          window.__shellQvHits = (window.__shellQvHits || 0) + 1;
       }
       return v;
     } catch (_) {
@@ -6012,14 +6168,29 @@
   // (above the old cap it re-Babel'd EVERY boot). Quota pressure is bounded
   // by txRecordQuerySlot's one-generation-per-path cleanup; a failing
   // setItem still soft-fails to the fetch-every-boot behaviour.
+  // JELA-799 (b): prune-and-retry on quota, mirroring __txSet. The retry is
+  // gated on txPruneStatic() actually having evicted something — with the
+  // flag off (empty static LRU tracking) it returns false and this collapses
+  // to the pre-799 "count the lost write and give up" path.
   function txSetStatic(url, body) {
     if (typeof body !== "string" || body.length > 2097152) return;
+    var k = txKey(url);
     try {
-      localStorage.setItem(TX_PFX + txKey(url), body);
+      localStorage.setItem(TX_PFX + k, body);
+      txLruTouch(k);
+      return;
     } catch (_) {
-      /* quota — soft fail (JELA-748: counted, not silent) */
-      txWriteLost();
+      /* quota — fall through to prune-and-retry */
     }
+    if (txLruStaticOn() && txPruneStatic()) {
+      try {
+        localStorage.setItem(TX_PFX + k, body);
+        txLruTouch(k);
+        return;
+      } catch (_) {}
+    }
+    /* quota — soft fail (JELA-748: counted, not silent) */
+    txWriteLost();
   }
 
   // ---- Config-epoch boot gate (JELA-59, parent JELA-57 WS-2) -------------
@@ -6109,10 +6280,18 @@
         // so every query-bearing plugin body refetches with a fresh buster.
         // Content-addressed txc: bodies stay — they only serve through a
         // matching source hash, so they cannot go stale.
+        // JELA-799 (a): the seed's per-family "gqk:" index is the same kind
+        // of pointer for seed-written slots (value = the version key, not
+        // JSON), so a scripts-component change drops that generation too
+        // instead of leaving a stale index behind. Unconditional: with the
+        // sweep flag off no gqk: key exists, so this is a no-op.
         var drop = [];
+        var dropG = [];
         for (var i = 0; i < localStorage.length; i++) {
           var k = localStorage.key(i);
-          if (k && k.lastIndexOf(TX_PFX + "vqk:", 0) === 0) drop.push(k);
+          if (!k) continue;
+          if (k.lastIndexOf(TX_PFX + "vqk:", 0) === 0) drop.push(k);
+          else if (k.lastIndexOf(TX_PFX + "gqk:", 0) === 0) dropG.push(k);
         }
         for (var j = 0; j < drop.length; j++) {
           var vq = null;
@@ -6123,6 +6302,15 @@
           if (vq && vq.k) {
             localStorage.removeItem(TX_PFX + vq.k);
             localStorage.removeItem(TX_PFX + "ts:" + vq.k);
+          }
+        }
+        for (var g = 0; g < dropG.length; g++) {
+          var gq = localStorage.getItem(dropG[g]);
+          localStorage.removeItem(dropG[g]);
+          if (gq) {
+            localStorage.removeItem(TX_PFX + gq);
+            localStorage.removeItem(TX_PFX + "ts:" + gq);
+            txLruForget(gq);
           }
         }
       }

@@ -240,6 +240,10 @@ const WIN = () => ({
   // tell an un-primed boot from a store that is refusing the writes that
   // would prime it. ls/lk are a live census of the (fake) store; qe is 0
   // here because nothing swallowed a write.
+  // JELA-799: gd/ps ride the same census try-block — gd = version
+  // generations the seed sweep dropped, ps = keys the widget pruner evicted.
+  // Both are 0 here (and on any fielded boot with the flags dark), which is
+  // exactly what makes them a usable flip signal.
   let expectChars = 0;
   for (const [k, v] of env.store) expectChars += k.length + String(v).length;
   assert.deepStrictEqual(p.tx, {
@@ -252,6 +256,8 @@ const WIN = () => ({
     ls: expectChars,
     lk: env.store.size,
     qe: 0,
+    gd: 0,
+    ps: 0,
   });
   assert.ok(p.tx.ls > 0 && p.tx.lk > 0, "census must report a non-empty store");
   assert.strictEqual(p.ver, "1.0.75");

@@ -1541,6 +1541,22 @@
       "    function __qeB(){try{window.__shellLsQuotaErr=(window.__shellLsQuotaErr||0)+1;}catch(_){}}",
       "    function __txLru(){try{var v=localStorage.getItem(__TXLRUKEY);return v?JSON.parse(v):{};}catch(_){return{};}}",
       "    function __txPersistLru(m){try{localStorage.setItem(__TXLRUKEY,JSON.stringify(m));}catch(_){__qeB();}}",
+      // JELA-799 (a): proactive generation sweep for seed-written
+      // version-keyed slots (mirror of shell.js — see the full rationale
+      // there). __txKey KEEPS a ?v=<version> token, so a plugin version bump
+      // orphans the previous key and nothing on the seed side ever sweeps
+      // it; the widget's "vqk:" cleanup only covers URLs the WIDGET fetched.
+      // A per-FAMILY index ("gqk:", family = the key with version-ish tokens
+      // removed) drops the previous generation BEFORE the new body is
+      // stored. Class-1 keys (family === key) are skipped; content-addressed
+      // "txc:" bodies are never dropped here (JELA-799 (b) reaches those).
+      // Flag-dark: jellyfin.shell.txGenSweep='1' / ...txGenSweepDisabled='1'.
+      '    var __TXGENK="jellyfin.shell.txGenSweep";',
+      '    function __txGenOn(){try{return localStorage.getItem(__TXGENK)==="1"&&localStorage.getItem(__TXGENK+"Disabled")!=="1";}catch(_){return false;}}',
+      // Version-ish token test — lockstep with __txQC's `pin` arm.
+      "    function __txVerTok(v){return /^[0-9]{15,}$/.test(v)||/^\\d+(\\.\\d+){2,}/.test(v)||(/^[0-9a-fA-F]{12,}$/.test(v)&&/[a-fA-F]/.test(v));}",
+      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      '    function __txGenRec(k){if(!__txGenOn())return;try{var f=__txFam(k);if(f===k)return;var fk=__TXPFX+"gqk:"+f;var prev=null;try{prev=localStorage.getItem(fk);}catch(_){}if(prev===k)return;if(prev){try{localStorage.removeItem(__TXPFX+prev);}catch(_){}try{localStorage.removeItem(__TXPFX+"ts:"+prev);}catch(_){}try{var m=__txLru();if(m[prev]!=null){delete m[prev];__txPersistLru(m);}}catch(_){}try{window.__shellTxGenDrop=(window.__shellTxGenDrop||0)+1;}catch(_){}}localStorage.setItem(fk,k);}catch(_){__qeB();}}',
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
@@ -1557,7 +1573,7 @@
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       "    var __jqRe=/\\bjQuery\\b|(?:^|[^A-Za-z0-9_$.])\\$\\s*\\(/;",
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
@@ -4786,7 +4802,12 @@
         prev = JSON.parse(localStorage.getItem(pathKey) || "null");
       } catch (_) {}
       if (prev) {
-        if (prev.c && prev.c !== ck) localStorage.removeItem(TX_PFX + prev.c);
+        if (prev.c && prev.c !== ck) {
+          localStorage.removeItem(TX_PFX + prev.c);
+          // JELA-799 (b): the body is gone — stop the LRU from carrying a
+          // dead key that would sort oldest and waste a prune slot.
+          txLruForget(prev.c);
+        }
         if (prev.k && prev.k !== k) {
           localStorage.removeItem(TX_PFX + prev.k);
           localStorage.removeItem(TX_PFX + "ts:" + prev.k);
@@ -4828,15 +4849,24 @@
       } else {
         k = txKey(u);
       }
+      // JELA-799 (b): `bk` is the key the BODY actually lives under — the
+      // deref target for a pointer, otherwise k. That is what the LRU
+      // tracks; the pointer is left untracked on purpose.
       var v = localStorage.getItem(TX_PFX + k);
-      if (v != null && v.lastIndexOf(TX_REF_PFX, 0) === 0)
-        v = localStorage.getItem(TX_PFX + v.substring(TX_REF_PFX.length));
+      var bk = k;
+      if (v != null && v.lastIndexOf(TX_REF_PFX, 0) === 0) {
+        bk = v.substring(TX_REF_PFX.length);
+        v = localStorage.getItem(TX_PFX + bk);
+      }
       if (v == null) {
         var miss = window.__shellTxCacheMissUrlsStatic;
         (miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
           miss.length < 10 && miss.push(url));
-      } else if (u.indexOf("?") >= 0) {
-        window.__shellQvHits = (window.__shellQvHits || 0) + 1;
+      } else {
+        // A static hit is the ONLY recency signal a txc: body ever gets.
+        txLruTouch(bk);
+        if (u.indexOf("?") >= 0)
+          window.__shellQvHits = (window.__shellQvHits || 0) + 1;
       }
       return v;
     } catch (_) {
@@ -4853,13 +4883,102 @@
       window.__shellLsQuotaErr = (window.__shellLsQuotaErr || 0) + 1;
     } catch (_) {}
   }
-  function txSetStatic(url, body) {
-    if (!(typeof body != "string" || body.length > 2097152))
-      try {
-        localStorage.setItem(TX_PFX + txKey(url), body);
-      } catch (_) {
-        txWriteLost();
+  // JELA-799 (b): mirror of shell.js — LRU-track content-addressed `txc:`
+  // bodies so the seed's __txPrune can actually reach them (it only ever saw
+  // keys __txGet/__txSet wrote, which is why a 901,582-char txc: body was
+  // permanently unprunable on the JELA-797 census rig), and give txSetStatic
+  // __txSet's prune-and-retry. Only BODY keys are tracked, never the tiny
+  // "@@shellref:" pointers. Flag-dark: jellyfin.shell.txLruStatic='1' /
+  // ...txLruStaticDisabled='1'.
+  var TX_LRU_KEY = "shell.txLru" + TX_VER;
+  var TX_LRU_STATIC_KEY = "jellyfin.shell.txLruStatic";
+  var TX_LRU_TOUCH_MS = 36e5;
+  function txLruStaticOn() {
+    try {
+      return (
+        localStorage.getItem(TX_LRU_STATIC_KEY) === "1" &&
+        localStorage.getItem(TX_LRU_STATIC_KEY + "Disabled") !== "1"
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+  function txLruRead() {
+    try {
+      var v = localStorage.getItem(TX_LRU_KEY);
+      return v ? JSON.parse(v) : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  function txLruWrite(m) {
+    try {
+      localStorage.setItem(TX_LRU_KEY, JSON.stringify(m));
+    } catch (_) {
+      txWriteLost();
+    }
+  }
+  function txLruTouch(k) {
+    if (!txLruStaticOn()) return;
+    try {
+      var m = txLruRead();
+      var now = Date.now();
+      if (m[k] && now - m[k] < TX_LRU_TOUCH_MS) return;
+      m[k] = now;
+      txLruWrite(m);
+    } catch (_) {}
+  }
+  function txLruForget(k) {
+    if (!txLruStaticOn()) return;
+    try {
+      var m = txLruRead();
+      if (m[k] == null) return;
+      delete m[k];
+      txLruWrite(m);
+    } catch (_) {}
+  }
+  function txPruneStatic() {
+    try {
+      var m = txLruRead();
+      var keys = Object.keys(m);
+      if (!keys.length) return false;
+      keys.sort(function (a, b) {
+        return m[a] - m[b];
+      });
+      var n = Math.min(keys.length, 10);
+      for (var i = 0; i < n; i++) {
+        try {
+          localStorage.removeItem(TX_PFX + keys[i]);
+        } catch (_) {}
+        delete m[keys[i]];
       }
+      txLruWrite(m);
+      try {
+        window.__shellTxPruneStatic = (window.__shellTxPruneStatic || 0) + n;
+      } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function txSetStatic(url, body) {
+    if (typeof body !== "string" || body.length > 2097152) return;
+    var k = txKey(url);
+    try {
+      localStorage.setItem(TX_PFX + k, body);
+      txLruTouch(k);
+      return;
+    } catch (_) {
+      /* quota — fall through to prune-and-retry */
+    }
+    if (txLruStaticOn() && txPruneStatic()) {
+      try {
+        localStorage.setItem(TX_PFX + k, body);
+        txLruTouch(k);
+        return;
+      } catch (_) {}
+    }
+    txWriteLost();
   }
   // ---- Config-epoch boot gate (JELA-59, parent JELA-57 WS-2) -------------
   //
@@ -4948,10 +5067,18 @@
         // so every query-bearing plugin body refetches with a fresh buster.
         // Content-addressed txc: bodies stay — they only serve through a
         // matching source hash, so they cannot go stale.
+        // JELA-799 (a): the seed's per-family "gqk:" index is the same kind
+        // of pointer for seed-written slots (value = the version key, not
+        // JSON), so a scripts-component change drops that generation too
+        // instead of leaving a stale index behind. Unconditional: with the
+        // sweep flag off no gqk: key exists, so this is a no-op.
         var drop = [];
+        var dropG = [];
         for (var i = 0; i < localStorage.length; i++) {
           var k = localStorage.key(i);
-          if (k && k.lastIndexOf(TX_PFX + "vqk:", 0) === 0) drop.push(k);
+          if (!k) continue;
+          if (k.lastIndexOf(TX_PFX + "vqk:", 0) === 0) drop.push(k);
+          else if (k.lastIndexOf(TX_PFX + "gqk:", 0) === 0) dropG.push(k);
         }
         for (var j = 0; j < drop.length; j++) {
           var vq = null;
@@ -4962,6 +5089,15 @@
           if (vq && vq.k) {
             localStorage.removeItem(TX_PFX + vq.k);
             localStorage.removeItem(TX_PFX + "ts:" + vq.k);
+          }
+        }
+        for (var g = 0; g < dropG.length; g++) {
+          var gq = localStorage.getItem(dropG[g]);
+          localStorage.removeItem(dropG[g]);
+          if (gq) {
+            localStorage.removeItem(TX_PFX + gq);
+            localStorage.removeItem(TX_PFX + "ts:" + gq);
+            txLruForget(gq);
           }
         }
       }

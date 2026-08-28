@@ -96,11 +96,22 @@ function compileWidget(src, label) {
     "txRecordQuerySlot",
     "txGetStatic",
     "txSetStatic",
+    // JELA-799 (b): the static tx-cache functions now touch the shared LRU
+    // map — lift the helpers or txSetStatic/txGetStatic reference-error.
+    "txWriteLost",
+    "txLruStaticOn",
+    "txLruRead",
+    "txLruWrite",
+    "txLruTouch",
+    "txLruForget",
+    "txPruneStatic",
   ]
     .map((n) => extractFnDecl(src, n, label))
     .join("\n");
   const prelude =
     'var TX_PFX="tx:";var TX_QUERY_TTL_MS=864e5;var TX_REF_PFX="@@shellref:";' +
+    'var TX_LRU_KEY="txlru";var TX_LRU_STATIC_KEY="jellyfin.shell.txLruStatic";' +
+    "var TX_LRU_TOUCH_MS=36e5;" +
     'var PLUGIN_FETCH_CACHE_DISABLED_KEY="jellyfin.shell.pluginFetchCacheDisabled";';
   // eslint-disable-next-line no-new-func
   return new Function(
@@ -125,13 +136,20 @@ function compileSeed(src, label) {
     "__txLru",
     "__txPersistLru",
     "__txPrune",
+    // JELA-799 (a): __txSet now records the version generation before it
+    // writes — lift the sweep helpers or query-bearing sets reference-error.
+    "__txGenOn",
+    "__txVerTok",
+    "__txFam",
+    "__txGenRec",
     "__txGet",
     "__txSet",
   ]
     .map((n) => liftSeedFn(src, n, label))
     .join("\n");
   const prelude =
-    'var __TXPFX="tx:";var __TXLRUKEY="txlru";var __TXREF="@@shellref:";';
+    'var __TXPFX="tx:";var __TXLRUKEY="txlru";var __TXREF="@@shellref:";' +
+    'var __TXGENK="jellyfin.shell.txGenSweep";';
   // eslint-disable-next-line no-new-func
   return new Function(
     "localStorage",
