@@ -51,12 +51,20 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// 21</b>, against an in-window warm reference of 146 / 158 / 184 / 16</description></item>
 /// </list>
 ///
-/// <para>So the pass builds the row. Two further results are what make that affordable,
-/// and both are load-bearing enough that changing either invalidates the cost model:
-/// warming <b>one</b> section carries the other three, and warming <b>one</b> user carries
-/// the rest of the household — warming as user Test left a fan-out issued as user Matt
-/// reading 148 / 124 / 135 / 15 ms. The expensive cold state is the shared item, DTO and
-/// image work; the per-user part is small.</para>
+/// <para>So the pass builds the row. Warming <b>one</b> user carries the rest of the
+/// household — warming as user Test left a fan-out issued as user Matt reading
+/// 148 / 124 / 135 / 15 ms — so the per-user part of the cold state is small and one user
+/// per pass is enough.</para>
+///
+/// <para><b>What does not hold is the other half of that claim.</b> This originally also
+/// concluded that one warmed section was enough for all four rows. JELA-798 re-measured it on
+/// production and it does not replicate: LatestShows goes properly warm (0.8-1.6x its own
+/// warm median) while LatestMovies stays at 4-13x and ContinueWatchingNextUp at 6-11x. The
+/// carry is partial — they sit below the 8-9x a warmerless box pays — but partial is not
+/// warm. The cold state is shared per KIND, not across kinds, and a faster user rotation
+/// cannot reach it; see <c>WarmMovieRow</c> for the control probe that proves that and for
+/// the opt-in second row (<see cref="PluginConfiguration.SectionWarmMovieRow"/>) that
+/// closes the movies half.</para>
 ///
 /// <para><b>Why a plain timer and not an <c>IScheduledTask</c>.</b> This plugin already
 /// owns two scheduled tasks, so the task route was the obvious one — and it is the wrong
@@ -88,6 +96,13 @@ public sealed class SectionWarmService : IDisposable
     /// for per window and the first probe size <see cref="LatestShowsFastPath"/> uses.
     /// </summary>
     internal const int ProbeLimit = 200;
+
+    /// <summary>
+    /// Cards built per movie library on the JELA-798 movies half. 16 is the row length
+    /// the home sections use, and the row length is what decides how many DTOs and how
+    /// much image resolution the pass does — which is the work being warmed.
+    /// </summary>
+    internal const int MovieRowLimit = 16;
 
     private readonly ILogger<SectionWarmService> _logger;
     private readonly Stopwatch _sinceLastPass = new();
@@ -222,10 +237,12 @@ public sealed class SectionWarmService : IDisposable
         // row got ALL of it: 140/141/172/21 ms against an in-window warm reference of
         // 146/158/184/16.
         //
-        // And it is one row, not four. Warming LatestShows alone carries LatestMovies,
-        // ContinueWatchingNextUp and BecauseYouWatched with it — which is what makes this
-        // affordable, and what keeps the warmer free of any dependency on a third-party
-        // plugin's internals or on a stored credential to call its routes over loopback.
+        // This used to claim that one row carries all four. JELA-798 re-measured it and it
+        // does not: with the warmer on and healthy, LatestShows lands at 0.8-1.6x its own
+        // warm median while LatestMovies is still at 4-13x. The carry is partial, not
+        // whole. What survives is the cheaper half of the claim — one USER carries the
+        // household — and what does not is one SECTION carrying the others. See
+        // WarmMovieRow below for the measurement that separates those two.
         var built = LatestShowsFastPath.TryBuild(userId.Value, userManager, libraryManager, dtoService);
 
         // TryBuild returns null when it cannot prove it reproduces the upstream row —
@@ -237,6 +254,15 @@ public sealed class SectionWarmService : IDisposable
         {
             Probe(libraryManager, BaseItemKind.Episode);
             Probe(libraryManager, BaseItemKind.Movie);
+        }
+
+        // JELA-798. Read per pass so the flag is its own kill switch, and read AFTER the
+        // shows half so switching it on can only ever add work to a pass that was already
+        // going to happen.
+        int? movies = null;
+        if (Plugin.Instance?.Configuration.SectionWarmMovieRow == true)
+        {
+            movies = WarmMovieRow(userId.Value, userManager, libraryManager, dtoService);
         }
 
         stopwatch.Stop();
@@ -252,17 +278,133 @@ public sealed class SectionWarmService : IDisposable
         {
             _loggedFirstPass = true;
             _logger.LogInformation(
-                "section warm active: first pass built {Rows} rows in {Elapsed} ms",
+                "section warm active: first pass built {Rows} rows, {Movies} in {Elapsed} ms",
                 rows?.ToString(CultureInfo.InvariantCulture) ?? "no (fell back to item scans)",
+                MoviesDescription(movies),
                 LastPassMs.ToString("0.0", CultureInfo.InvariantCulture));
             return;
         }
 
         _logger.LogDebug(
-            "section warm pass {Pass}: {Rows} rows in {Elapsed} ms",
+            "section warm pass {Pass}: {Rows} rows, {Movies} in {Elapsed} ms",
             passes,
             rows?.ToString(CultureInfo.InvariantCulture) ?? "no (fell back to item scans)",
+            MoviesDescription(movies),
             LastPassMs.ToString("0.0", CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Names the movies half in the pass log. It has three outcomes an operator has to be
+    /// able to tell apart — switched off, on but with nothing to build (no movie library
+    /// this user can see), and on and building — because the middle one looks exactly
+    /// like the first at the wire and exactly like the third in the configuration.
+    /// </summary>
+    private static string MoviesDescription(int? movies) => movies switch
+    {
+        null => "movies off",
+        0 => "movies on (no movie library for this user)",
+        _ => movies.Value.ToString(CultureInfo.InvariantCulture) + " movie cards",
+    };
+
+    /// <summary>
+    /// JELA-798: does the Latest Movies row's work — the user-scoped ordered movie query
+    /// per movie library, then a DTO with images for each card — and throws the result
+    /// away. Returns the number of cards built, 0 when this user can see no movie library.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why a second row at all.</b> JELA-793 shipped on the finding that one
+    /// warmed section was enough for all four rows. Re-measured on production 2026-08-28 with the warmer on
+    /// at 30 s, gate-D-clean 450 s+ quiet windows, concurrent fan-out, <c>no-store</c>,
+    /// each arm against its own in-window warm median: LatestShows 346 ms / <b>1.61x</b>,
+    /// LatestMovies 2,677 ms / <b>13.3x</b>. The carry is partial, not whole.</para>
+    ///
+    /// <para><b>Why not just rotate faster,</b> which is the cheaper fix and was tried
+    /// first. At <c>SectionWarmIntervalSeconds = 10</c> — a 110 s lap over the 11 users,
+    /// so every user is fresher than the ~60 s decay time — LatestMovies still came in at
+    /// 1,122 ms against a 264 ms warm median, <b>4.25x</b>, over the 3x bar. It could not
+    /// have been the rotation: the same burst carried a user-less
+    /// <c>/Items?IncludeItemTypes=Movie&amp;Limit=1</c> control probe, which has no user
+    /// for a rotation to be stale for, and in the 30 s arm that probe read <b>9,573 ms
+    /// against a 7.9 ms warm median</b> while its Episode twin read 1,366 ms. Nothing in
+    /// the pass touches movies, for any user, at any interval.</para>
+    ///
+    /// <para><b>Why the row and not the query.</b> The user-less movie scan
+    /// <see cref="Probe"/> already runs on the fallback path and JELA-793 measured that
+    /// family at ~0% of the win; adding a user to it got ~40%; building the row got 100%.
+    /// The expensive cold state is the DTO and image work, which is why this asks for
+    /// <see cref="LatestShowsFastPath.SectionDtoOptions"/> rather than a cheaper shape.</para>
+    ///
+    /// <para><b>What this deliberately does not do.</b> It does not try to reproduce
+    /// <c>LatestMoviesSection</c>'s row. A warmer is not a fast path: nothing it builds is
+    /// ever served, so it needs to touch the same substrate, not return the same answer.
+    /// That is what keeps it free of the reflection into a third-party plugin's internals
+    /// that <see cref="LatestShowsFastPath"/> needs in order to be allowed to serve —
+    /// and it is why <c>ContinueWatchingNextUp</c> and <c>BecauseYouWatched</c> are still
+    /// not warmed here. Those rows are not "latest N of a kind"; their substrate is
+    /// per-user playstate that no kind-ordered query reaches.</para>
+    /// </remarks>
+    private static int WarmMovieRow(
+        Guid userId,
+        IUserManager userManager,
+        ILibraryManager libraryManager,
+        IDtoService dtoService)
+    {
+        var user = userManager.GetUserById(userId);
+        if (user is null)
+        {
+            return 0;
+        }
+
+        // Permission-filtered by GetChildren(user, ...), the same way LatestShowsFastPath
+        // enumerates the TV libraries — a warm pass must not read a library this user
+        // cannot see, both because it is the wrong substrate and because it is the wrong
+        // thing for a background job to be doing on someone's behalf.
+        var movieFolders = libraryManager.GetUserRootFolder()
+            .GetChildren(user, true)
+            .OfType<Folder>()
+            .Where(x => (x as ICollectionFolder)?.CollectionType == CollectionType.movies)
+            .ToArray();
+
+        if (movieFolders.Length == 0)
+        {
+            return 0;
+        }
+
+        var dtoOptions = LatestShowsFastPath.SectionDtoOptions();
+        var built = 0;
+
+        foreach (var folder in movieFolders)
+        {
+            var page = folder.GetItems(new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Movie },
+
+                // DateCreated, because "latest movies" is latest ADDED — unlike the shows
+                // row, which upstream orders by premiere date.
+                OrderBy = new[] { (ItemSortBy.DateCreated, SortOrder.Descending) },
+                Limit = MovieRowLimit,
+                IsVirtualItem = false,
+                Recursive = true,
+                ParentId = folder.Id,
+
+                // A warmer has even less use for a count than upstream does, and it costs
+                // a second pass over the same filtered set.
+                EnableTotalRecordCount = false,
+
+                DtoOptions = dtoOptions,
+            });
+
+            foreach (var item in page.Items)
+            {
+                // The return value is the point being discarded, not the call: this is
+                // where the image resolution happens, and the image resolution is the
+                // expensive cold state.
+                dtoService.GetBaseItemDto(item, dtoOptions, user);
+                built++;
+            }
+        }
+
+        return built;
     }
 
     /// <summary>

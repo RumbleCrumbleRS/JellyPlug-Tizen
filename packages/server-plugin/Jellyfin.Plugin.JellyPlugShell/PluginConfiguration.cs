@@ -200,6 +200,35 @@ public class PluginConfiguration : BasePluginConfiguration
     public int SectionWarmIntervalSeconds { get; set; }
 
     /// <summary>
+    /// JELA-798: also build the Latest Movies row on each warm pass. Default
+    /// false, and it does nothing at all unless
+    /// <see cref="SectionWarmIntervalSeconds"/> is non-zero. Read per pass, so
+    /// it is its own kill switch and needs no restart.
+    ///
+    /// JELA-793 shipped on the finding that "warming one section carries the
+    /// other three". Re-measured on production 2026-08-28, that does not
+    /// replicate: with the warmer on and healthy, LatestShows comes in at
+    /// 0.8-1.6x its own warm median while LatestMovies sits at 4-13x. The
+    /// carry is partial, not whole.
+    ///
+    /// The cheap suspect was the user rotation — one user per pass over 11
+    /// users at 30 s means a boot lands 0-330 s into that user's staleness —
+    /// and it is not the cause. Dropping the interval to 10 s (a 110 s lap,
+    /// every user fresh) left LatestMovies at 4.25x. It cannot be the cause,
+    /// because a user-less <c>/Items?IncludeItemTypes=Movie&amp;Limit=1</c>
+    /// control probe carries no user for the rotation to reach and was cold in
+    /// the same burst at 9.6 s against a 7.9 ms warm median.
+    ///
+    /// So the residual is per-SECTION, not per-user: the pass does the episode
+    /// item/DTO/image work and nothing ever does the movie equivalent. Hence a
+    /// second row rather than a faster rotation. It is the row build and not
+    /// the query that matters — JELA-793 measured the user-less movie scan
+    /// (which this warmer still runs on its fallback path) as worth ~0%, a
+    /// user-scoped scan as ~40%, and the full row build as ~100%.
+    /// </summary>
+    public bool SectionWarmMovieRow { get; set; }
+
+    /// <summary>
     /// JELA-723 kill switch: stop stamping Cache-Control/Vary on the three
     /// third-party plugin client scripts (/NotifySync/client.js,
     /// /GetAvatar/ClientScript, /PluginPages/inject.js). Read per-response, so
