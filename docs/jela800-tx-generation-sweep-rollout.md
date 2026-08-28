@@ -239,3 +239,56 @@ after a channel deploy.
 Rollback is a **remover**, not a delete: dropping the seeder leaves every TV that
 already latched the key still ON (JELA-789). A rollback entry must write the kill
 switch (`…Disabled='1'`) or set the flag to `'0'`.
+
+## Flip executed — 2026-08-28
+
+Board approved on JELA-800 (interaction `e6e96c64`, accepted 19:21Z). The publish
+half was already satisfied: **JELA-798's release published server-plugin
+1.0.39.0**, and `16bac5a` is an ancestor of the publish commit `99aa755`, so the
+799 shell rode along. Verified by SHA, never by version number:
+
+```sh
+curl -s "$JELLYFIN_URL/shell/shell.min.js" | sha1sum   # 42f5a2d2… == origin/main
+curl -s "$JELLYFIN_URL/shell/shell.min.js" | grep -c txGenSweep   # 1
+GET /Plugins                                          # JellyPlug Shell 1.0.39.0 Active
+```
+
+Both seeders appended to the JSI channel, **saved twice**, each POST preceded by
+a fresh GET + re-run of the patcher (the POST replaces _all_ entries), and
+verified in the **served** bundle rather than the config JSON:
+
+```sh
+curl -s "$JELLYFIN_URL/JavaScriptInjector/public.js" | grep -c jp799aseed   # 1
+curl -s "$JELLYFIN_URL/JavaScriptInjector/public.js" | grep -c jp799bseed   # 1
+```
+
+### Two-boot proof, fresh profile, live channel, **prod** `/shell/`
+
+|                                      | boot 1                          | boot 2          |
+| ------------------------------------ | ------------------------------- | --------------- |
+| flags read back                      | `txGenSweep=1`, `txLruStatic=1` | same            |
+| `gqk:` index entries                 | **152**                         | **152**         |
+| LRU keys / `txc:` tracked / pointers | 154 / **0** / 0                 | 161 / **3** / 0 |
+| `domCards`                           | 247                             | 279             |
+
+**(a) engages on the SAME boot; (b) needs the NEXT one.** Both flags are read
+from `localStorage` per call, not once at startup, so the seeder arming mid-boot
+is enough for the seed's `__txSet` — which keeps running after the channel
+executes — to build the index immediately. The `txSetStatic` writes for the
+`txc:` bodies, by contrast, are the shell's own transpile of the static plugin
+scripts and have all happened _before_ the channel runs on a cold boot. Do not
+read `lruTxc=0` on a first boot as "the (b) flip failed".
+
+**A channel deploy purges the tx cache — never run one during an arm.** An
+earlier proof read `gqk=152` on boot 1 and `gqk=0` on boot 2, which looks exactly
+like "the index does not survive a warm boot". It was self-inflicted: the second
+seeder was POSTed while that boot was in flight, which changed the scripts
+component hash and fired `ceInvalidate` — whose sweep JELA-799 deliberately
+extended to drop `gqk:` entries. `txKeys` 314 → 8, `plain` 157 → 4, `lru` 152 → 0
+in the same reading, i.e. the whole cache went, not just the index. The re-run
+above, with the channel left alone, holds `gqk=152` across both boots.
+
+Kill switches, per TV: `jellyfin.shell.txGenSweep='0'` or
+`jellyfin.shell.txGenSweepDisabled='1'`; likewise `txLruStatic`. Fleet rollback
+must be a **remover** — deleting the seeder leaves every TV that already latched
+the key still ON.
