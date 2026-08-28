@@ -12,28 +12,28 @@ load < 6).
 
 ## Headline
 
-| | result |
-|---|---|
-| **Warm-boot hit rate** | **12 / 12 = 100 %**, Wilson 95 % CI **[75.7 %, 100 %]** |
-| Miss rate upper bound (rule of three) | **≤ 25 %** |
-| `__shellACo.err` | **0 in 12/12** |
-| Cards rendered | 247–279 (treatment), 247–279 (control) — no regression |
-| **Prize per warm boot** | **1 request, ~1.55 KB** — *not* the 2 requests 778 quoted |
+|                                       | result                                                    |
+| ------------------------------------- | --------------------------------------------------------- |
+| **Warm-boot hit rate**                | **12 / 12 = 100 %**, Wilson 95 % CI **[75.7 %, 100 %]**   |
+| Miss rate upper bound (rule of three) | **≤ 25 %**                                                |
+| `__shellACo.err`                      | **0 in 12/12**                                            |
+| Cards rendered                        | 247–279 (treatment), 247–279 (control) — no regression    |
+| **Prize per warm boot**               | **1 request, ~1.55 KB** — _not_ the 2 requests 778 quoted |
 
 ## The prize is 1 request on a warm TV, not 2
 
 778 counted the saving as `1 GET + 1 CORS preflight = 2 requests`. That is
 correct only on a **cold** profile, which is the only kind its ring ever booted.
 
-| | views-pair URLs | preflights |
-|---|---|---|
-| cold arming boot (n=2) | no `api_key` | **2** |
-| every warm boot (n=20) | `…?api_key=…` | **0** |
+|                        | views-pair URLs | preflights |
+| ---------------------- | --------------- | ---------- |
+| cold arming boot (n=2) | no `api_key`    | **2**      |
+| every warm boot (n=20) | `…?api_key=…`   | **0**      |
 
 `jp788seed` (JELA-788 queryAuth, live) is itself a shell-seed-read flag, so it
 arms on a TV's **second** boot and moves the credential from the `Authorization`
-header into the query string. A GET with no custom header is a CORS *simple
-request*, so there is no preflight left for aliasCoalesce to save. On any TV
+header into the query string. A GET with no custom header is a CORS _simple
+request_, so there is no preflight left for aliasCoalesce to save. On any TV
 that has booted twice — i.e. effectively the whole fleet — the second views
 request is a **bare GET, and that single GET is the whole prize**.
 
@@ -42,7 +42,7 @@ Measured size of the `/UserViews` GET the treatment arm never issues:
 
 This is the same lesson as 778's own, one level up: **a sibling flip can take
 half of your lever's prize before you get to quote it.** Re-measure the prize
-in the arm that matches the fleet's *current* state, not the state at merge.
+in the arm that matches the fleet's _current_ state, not the state at merge.
 
 ## Do NOT raise `aliasCoalesceTtlMs`
 
@@ -69,11 +69,11 @@ shapes to the same string, and the recomputed keys were **identical in 8/8**
 counter arithmetic refutes that. A `V:` slot costs exactly **+1 `rec`, +1
 `miss`** — this run pins it:
 
-| arm | `rec` | `miss` | `hit` |
-|---|---|---|---|
-| control (no `V:` keying) | 10 | 11 | 0 |
-| treatment, views hit | 11 | 12 | 1 |
-| treatment, TTL expiry *would* read | 12 | 13 | 0 |
+| arm                                | `rec` | `miss` | `hit` |
+| ---------------------------------- | ----- | ------ | ----- |
+| control (no `V:` keying)           | 10    | 11     | 0     |
+| treatment, views hit               | 11    | 12     | 1     |
+| treatment, TTL expiry _would_ read | 12    | 13     | 0     |
 
 `w1` read **`rec=11 miss=12 hit=0`** — exactly **one** `V:` slot created, while
 both views GETs went out. A TTL expiry deletes the stale slot and then creates a
@@ -112,11 +112,11 @@ A died 4/4 at low load once it aged in; fresh profile B ran 9/9 clean.
 
 The store is dominated by the shell's own transpile cache, not by app data:
 
-| key | bytes |
-|---|---|
-| `shell.tx1t1at4s:txc:…` | 901,582 |
-| `jellyfin.shell.bundlePatchState` | 497,795 |
-| `jellyfin.shell.hsbShellBody` | 240,607 |
+| key                                          | bytes        |
+| -------------------------------------------- | ------------ |
+| `shell.tx1t1at4s:txc:…`                      | 901,582      |
+| `jellyfin.shell.bundlePatchState`            | 497,795      |
+| `jellyfin.shell.hsbShellBody`                | 240,607      |
 | `shell.tx1t1at4s:<per-plugin-script>` × ~200 | 33–78 K each |
 
 Any multi-boot rig on one profile must watch `localStorage` size and start a
