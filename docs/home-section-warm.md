@@ -136,6 +136,43 @@ day and about **0.5% of one core**. Overlapping passes are skipped rather than
 queued, so a box that is already struggling cannot have the warmer pile onto
 it.
 
+## What it actually bought — production acceptance, 2026-08-28
+
+Measured after the flip with the kill switch as the only variable, arms
+interleaved, every arm carrying its **own** in-window warm reference (median of
+three immediate repeats) so no ratio leans on a baseline from another window.
+Quiet windows gated on `/Sessions` (gate D) rather than on a `sleep`, all probes
+`Cache-Control: no-store`, `userId` as a GUID, all rows HTTP 200, the three
+sections fired concurrently:
+
+| arm                          | quiet |          LatestShows |         LatestMovies | ContinueWatchingNextUp |
+| ---------------------------- | ----: | -------------------: | -------------------: | ---------------------: |
+| OFF (control), cold-position | 488 s | 2,652 ms / **9.07x** | 2,497 ms / **7.94x** |       3,697 ms / 8.75x |
+| ON, cold-position            | 458 s |   339 ms / **1.48x** | 1,223 ms / **5.34x** |       2,412 ms / 6.89x |
+| ON, cold-position            | 304 s |   189 ms / **0.81x** |   673 ms / **2.75x** |       1,589 ms / 4.10x |
+
+The first `LatestShows` of a quiet morning goes from **2,652 ms to 189–339 ms**.
+Idle cost is unmeasurable: the JELA-692 gate B median read 1.33/1.36 ms with the
+warmer running against 1.33–1.50 ms with it disabled, and gate A stayed
+all-tasks-Idle throughout, which is the timer-not-`IScheduledTask` decision
+holding at a 30 s cadence.
+
+**Two things this measurement corrected, both worth knowing before changing the
+warmer.**
+
+_One section does not carry the other three._ The A/B that chose this design
+concluded it did. It does not replicate: `LatestShows` is the row that goes
+properly warm, while `LatestMovies` sits at 2.75–5.34x and
+`ContinueWatchingNextUp` at 4.10–6.89x. Partial carry is real — those rows are
+well under the control's 8–9x — but the shared substrate is not the whole story.
+
+_The spread between the two ON arms is the user rotation, not noise._
+`NextUser` warms one user per pass, so at 30 s over 11 users any given user is
+warmed once every 5.5 minutes and a boot lands somewhere in 0–330 s of that
+user's staleness. The 673 ms arm landed early in the cycle; the 1,223 ms arm
+landed late. Anyone tempted to add work per pass should first measure whether
+shortening the rotation is what closes the gap.
+
 ## Running the measurement again
 
 Everything above is reproducible with the harnesses in the JELA-793 issue
@@ -148,6 +185,17 @@ keeps them out of the tracked tree). Two rules that are not optional:
    sequence is genuinely "the first request after quiet"; the ones behind it
    measure a box the first one already warmed. A booting TV fires them
    together, so the probe must too.
+3. **`userId` must be the GUID from `/Users`.** A username model-binds to a
+   `Guid` and returns HTTP 400 — and the 400 still returns a cold-vs-warm
+   `x-response-time-ms` (610 ms cold, 1.3 ms warm), so a probe pointed at a
+   name produces a whole timing table that measures ASP.NET's validation path.
+   Print the status and the body size on every row; a real `LatestShows` row is
+   ~18.6 KB and the 400 body is 247 B.
+4. **Hold a gate-D-clean quiet window** — no other client on the box, _and_ no
+   requests from your own harness — for at least 450 s. A concurrent boot rig
+   fanning out the home rows keeps the substrate warm and turns the control arm
+   into a null; JELA-692's gate B cannot see it. See
+   `docs/perf-measurement-protocol.md`.
 
 Related: `docs/latest-shows-row-cost.md` (JELA-731),
 `docs/homescreen-section-cache.md` (JELA-732),

@@ -272,6 +272,84 @@ Every gate B run now appends to `$JELA692_LOG` (default
 gate blocks is "when did this start, and did it ramp or step?", and that file
 is the only thing that can answer it.
 
+## Gate D — is anybody else driving the box? (JELA-793)
+
+Gates A–C answer "is the server busy with work it started itself, and is the
+harness busy". Neither answers **"is another agent's boot rig hammering the
+exact subsystem I am about to time"** — and on 2026-08-28 that difference
+invalidated a full acceptance run.
+
+Gate B read a clean median **1.50 ms** while a concurrent Tizen boot rig was
+booting the shell against the same production server every ~60 s. Every boot
+fans out the home rows, so the library-query substrate — the whole thing under
+test — was being held warm by somebody else. `/System/Info` never touches that
+path, so the pre-flight is blind to it by construction, not by accident.
+
+The check is `GET /Sessions`: block if any session's `LastActivityDate` falls
+inside the quiet window. Probes issued with an API key and no device open no
+session, so a harness cannot trip its own gate. The rig shows up as
+`Test | Jellyfin for Tizen` and `Test | JellyPlug`.
+
+**Gate D on its own is not enough.** An arm that finds gate D clear at t=0 is
+still measuring a box _your own previous arm_ warmed seconds earlier — a control
+that cannot go cold, which is how a 1.05x null got produced at 17:56Z that day.
+The wait must require both: gate D clear **and** at least one full quiet window
+elapsed since this arm's own last request.
+
+And the reason any of it was caught: **the arms were interleaved and the control
+was read.** A treatment-only capture read 1.0x in the contaminated window and
+would have been published as a pass. The control reading 1.0x _too_ is the
+signal that the window was worthless.
+
+```bash
+#!/usr/bin/env bash
+# Gate D -- no other client has touched this server inside the quiet window.
+#   ./quietgate.sh [seconds]     0 = clear, 1 = someone else is driving the box
+set -uo pipefail
+WINDOW="${1:-300}"
+AUTH="MediaBrowser Token=\"$JELLYFIN_API_KEY\""
+curl -sf -H "Authorization: $AUTH" "$JELLYFIN_URL/Sessions" | WINDOW="$WINDOW" python3 -c '
+import sys, json, os, datetime
+win = int(os.environ["WINDOW"])
+now = datetime.datetime.now(datetime.timezone.utc)
+busy = []
+for s in json.load(sys.stdin):
+    raw = (s.get("LastActivityDate") or "").rstrip("Z")
+    if not raw:
+        continue
+    raw = raw[:26]                      # trim .NET 7-digit fractional seconds
+    try:
+        t = datetime.datetime.fromisoformat(raw).replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        continue
+    age = (now - t).total_seconds()
+    if age <= win:
+        busy.append((age, s.get("UserName"), s.get("Client"), bool(s.get("NowPlayingItem"))))
+if busy:
+    print("D. other clients ..... BLOCKED - %d session(s) active in the last %ds" % (len(busy), win))
+    for age, user, client, playing in sorted(busy):
+        print("     %-14s %-22s %5.0fs ago%s" % (user, client, age, "  PLAYING" if playing else ""))
+    sys.exit(1)
+print("D. other clients ..... clear (no session activity in the last %ds)" % win)
+' || exit 1
+```
+
+## A timing without an HTTP status beside it is not evidence (JELA-793)
+
+`GET /HomeScreen/Section/{name}?userId=<username>` returns **HTTP 400** —
+`userId` model-binds to a `Guid`, so a username never reaches a section handler.
+What makes that a measurement hazard rather than an obvious mistake is that the
+400 **still carries `x-response-time-ms`, and it still varies cold-vs-warm**:
+610 ms on a cold box, 1.3 ms warm. A probe script pointed at a username produces
+a complete, plausible, internally-consistent timing table in which every number
+is ASP.NET's validation path.
+
+Two habits close it, and they are cheap:
+
+- Print **HTTP status and body size on every probe row**, and flag any non-200.
+  A real `LatestShows` row is ~18.6 KB; the 400 body is 247 B.
+- Take user ids from `GET /Users`, never from a display name.
+
 ## Checklist before you publish a perf claim
 
 - [ ] Arms interleaved, order shuffled, seed recorded.
@@ -281,6 +359,9 @@ is the only thing that can answer it.
 - [ ] loadavg recorded per boot and under the gate.
 - [ ] No other ring ran concurrently.
 - [ ] Server scheduled tasks all Idle at boot time.
+- [ ] Gate D clear: no other client active on the server inside the quiet
+      window, and the arm held its own quiet window too.
+- [ ] Every probe row carries an HTTP status and a body size, and they are 200s.
 - [ ] Ring-vs-DOM card counts agree.
 - [ ] A known-size injected delay has been recovered by this harness since the
       last change to it.
