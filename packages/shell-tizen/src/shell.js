@@ -4439,6 +4439,29 @@
       // the default; "0" restores the JELA-724 in-flight-only behaviour.
       'var fcW=400;try{var fcwv=localStorage.getItem("jellyfin.shell.fetchCoalesceWindowMs");' +
       'if(fcwv!==null&&fcwv!==""){fcwv=parseInt(fcwv,10);if(fcwv>=0&&fcwv<=2000)fcW=fcwv}}catch(_){}' +
+      // JELA-758: a SECOND, much longer window for pure DELTA POLLS.
+      //
+      // /JellyfinEnhanced/tag-cache/{u}?since=<ts> is the only exact-URL
+      // duplicate on the search route — a JELA-756 census of three typed
+      // six-character queries found it NINE times per session in 3/3 samples,
+      // every one carrying the byte-identical `since=` cursor (the plugin
+      // never advances it), so all nine ask the server the same question and
+      // get the same answer. The bursts are ~700 ms apart, not concurrent, so
+      // neither the JELA-724 in-flight join nor the JELA-752 400 ms replay
+      // window can see them: by the time poll N+1 arrives, poll N's slot is
+      // long gone.
+      //
+      // Kept as a separate knob rather than raising fcW because the two are
+      // different bets. fcW is a duplicate-burst absorber and its staleness is
+      // measured in one render frame; this is a poll damper whose staleness is
+      // "how late may a tag edit appear on screen". 15 s is well inside the
+      // plugin's own refresh cadence, and every bound that makes fcW safe
+      // still applies unchanged: 2xx only, and ANY mutation over fetch or XHR
+      // flushes the whole map. Setting fetchCoalesceWindowMs='0' disables this
+      // too, so that key still restores the exact JELA-724 behaviour.
+      'var fcWL=15000;try{var fclv=localStorage.getItem("jellyfin.shell.fetchCoalesceDeltaWindowMs");' +
+      'if(fclv!==null&&fclv!==""){fclv=parseInt(fclv,10);if(fclv>=0&&fclv<=300000)fcWL=fclv}}catch(_){}' +
+      "var fcDR=/\\/JellyfinEnhanced\\/tag-cache\\//;" +
       "var FC=W.__shellFC={on:1,n:FCL.length,w:fcW,lead:0,join:0,win:0,serve:0,rep:0,hdr:0,fl:0,err:0},fcQ={},fcS={};" +
       // Any mutation drops every held snapshot — see change 4 above. In-flight
       // leaders are dropped from the map too; they still settle, and fcRel's
@@ -4472,9 +4495,12 @@
       // fcQ[fkx]!==fex guard is what makes fcFl() safe: once a flush (or an
       // earlier expiry) has replaced the map, this leader owns nothing and
       // must not evict whoever does.
+      // JELA-758: delta-poll paths hold for fcWL instead of fcW, but only while
+      // fcW itself is enabled — "0" must keep meaning "no replay at all".
       "var fcRel=function(fkx,fex,fd){try{if(fcQ[fkx]!==fex)return;" +
-      "if(!fcW||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
-      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fcW)}" +
+      "var fww=fcW?(fcDR.test(fkx)?fcWL:fcW):0;" +
+      "if(!fww||!(fd.s>=200&&fd.s<300)){delete fcQ[fkx];return}" +
+      "fcS[fkx]=1;setTimeout(function(){try{if(fcQ[fkx]===fex){delete fcQ[fkx];delete fcS[fkx]}}catch(_){FC.err++}},fww)}" +
       "catch(_){FC.err++;try{delete fcQ[fkx]}catch(__){}}};" +
       "var fcF=W.fetch;W.fetch=function(fu,fo){try{" +
       'var fcm=fo&&fo.method?String(fo.method).toUpperCase():"GET";' +
@@ -4770,6 +4796,134 @@
       "nd=nd.parentNode;dp++}}catch(_){PA.err++}};" +
       'if(W.addEventListener)W.addEventListener("click",paCk,true);' +
       'if(document&&document.addEventListener)document.addEventListener("click",paCk,true)}catch(_){PA.err++}' +
+      // JELA-758 (opt-in, default OFF): search fan-out idle gate.
+      //
+      // Typing ONE six-character query on the search route costs 55-68
+      // requests and 0.6-1.6 MB (JELA-756 census, n=3, warm primed profiles,
+      // 700 ms keystroke cadence). A whole warm boot on the same rig is
+      // 311-320 requests, so typing a single word is ~18-22% of a boot and it
+      // repeats on every search.
+      //
+      // The cost is NOT the last query — it is every PREFIX on the way to it.
+      // Upstream's search chunk debounces at well under a TV keystroke gap, so
+      // each accepted prefix pays a full five-request fan-out (/Items limit=800
+      // across 13 item types, /Persons, /Artists, two differently-filtered
+      // /Items limit=100, plus an injected plugin's /Users/{u}/Items). Measured
+      // byte split for "matrix": searchTerm=m cost 1,386,089 B, and searchTerm=
+      // matr / matri / matrix cost 89 / 89 / 90 B each. 81% of the session's
+      // bytes were spent on the ONE-character prefix — a query the user never
+      // asked for and never saw. "batman" split the same way (1,387,156 B on
+      // "b"). The shorter the prefix the more it matches, so the waste is
+      // front-loaded onto exactly the terms with no information in them.
+      //
+      // Upstream does pass an AbortSignal, but aborting a request already on
+      // the wire does not un-send it: across the three samples exactly ONE of
+      // the superseded fan-outs was actually cancelled (net::ERR_ABORTED), and
+      // it was cancelled after the server had already done the work. Every
+      // other stale prefix completed in full and was thrown away. The fix has
+      // to happen BEFORE the request is issued, which is what this does.
+      //
+      // Contract: a GET to an allowlisted search path whose URL carries a
+      // searchTerm/SearchTerm parameter is HELD, not sent. Arrival of any
+      // request bearing a DIFFERENT term marks the held ones stale and settles
+      // them at once; the survivors go to the network once no new term has
+      // appeared for searchGateMs. So a word costs one fan-out instead of one
+      // per accepted prefix, and the fan-out that runs is the one the user
+      // actually typed.
+      //
+      // BOTH transports are gated, and that is the whole ballgame. The ticket
+      // reads as a fetch problem because upstream's source passes an
+      // AbortSignal, but @jellyfin/sdk issues these through axios, whose
+      // adapter on this engine is XMLHttpRequest. An in-page transport probe
+      // over one typed word caught 20/20 of the limit=800 sweep, both
+      // limit=100 reads, /Persons and /Artists on XHR and ZERO on fetch; only
+      // the injected plugin's /Users/{u}/Items uses fetch. A fetch-only gate
+      // measured as a clean null on the rig — 5 limit=800 sweeps in both arms.
+      //
+      // Stale requests are rejected with an AbortError rather than resolved
+      // with a synthetic empty body ON PURPOSE. Abort is a path upstream
+      // already drives and already handles (it attaches its own signal and we
+      // measured it firing); an empty 200 is not — it would render "no
+      // results" for a prefix that has plenty, so the rows would blink empty
+      // between keystrokes. This gate only makes the app's own cancellation
+      // happen a few hundred ms earlier, on our side of the socket.
+      //
+      // Deliberately NOT done here: clamping upstream's limit=800. It reads
+      // like the obvious byte lever and it is a trap — the same shape as the
+      // JELA-754 candidateLimit regression. Replaying the worst measured
+      // response (searchTerm=ma, 461,334 B) shows the server returned only
+      // 282 items, so limit=800 truncates nothing today; and because the page
+      // partitions that one array by Type in JavaScript, the types are
+      // INTERLEAVED (Movie first appears at index 40 and last at index 281,
+      // BoxSet last at 269). Any clamp below the true result count therefore
+      // deletes whole item types off the tail of the list rather than
+      // shortening each row. The bytes are per-item weight, not row count:
+      // ImageBlurHashes alone is 27.2% of that body and no query parameter
+      // exposed to the client suppresses it (JELA-754 reached the same wall).
+      // Gating the prefixes removes three of those four responses outright,
+      // which is the same saving with none of the truncation risk.
+      //
+      // Installed AFTER the coalescer above so it wraps OUTSIDE it: a stale
+      // prefix is dropped before it can occupy a coalescer slot. Field-tunable
+      // via localStorage['jellyfin.shell.searchGateMs'] (0..5000, default 800;
+      // 0 keeps the supersede-and-drop behaviour but releases on the next
+      // tick). Counters: window.__shellSG {on,ms,n,rel,sup,ab,drop,err,t}.
+      'if(flg("jellyfin.shell.searchGate")&&!W.__shellSG&&typeof Promise==="function"){try{' +
+      'var sgMs=800;try{var sgv=localStorage.getItem("jellyfin.shell.searchGateMs");' +
+      'if(sgv!==null&&sgv!==""){sgv=parseInt(sgv,10);if(sgv>=0&&sgv<=5000)sgMs=sgv}}catch(_){}' +
+      'var SG=W.__shellSG={on:1,ms:sgMs,n:0,fn:0,xn:0,rel:0,sup:0,ab:0,drop:0,err:0,t:""},sgQ=[],sgT=null,sgL=null;' +
+      "var sgRe=/[?&][Ss]earch[Tt]erm=([^&]*)/;" +
+      // PATH-scoped, not "any URL with a search term". /Genres?SearchTerm=
+      // is JELA-738's bulk genre-name read: eight lookups with FIXED terms
+      // ("Action", "Comedy", ...) issued together, so a term-only rule reads
+      // each as a new query, supersedes the previous seven, and leaves only
+      // the last genre resolved. Measured on the rig before this list existed.
+      // Suffix-matched, so "/Items" also covers "/Users/{u}/Items".
+      'var SGL=["/Items","/Persons","/Artists"];' +
+      'try{var sgp=String(localStorage.getItem("jellyfin.shell.searchGatePaths")||"").replace(/\\s+/g,"").split(","),sgi;' +
+      'for(sgi=0;sgi<sgp.length;sgi++)if(sgp[sgi].charAt(0)==="/"&&SGL.length<16)SGL.push(sgp[sgi])}catch(_){}' +
+      'var sgOk=function(su){try{var sh=su.indexOf("#");if(sh>=0)su=su.slice(0,sh);' +
+      'var sq2=su.indexOf("?");if(sq2<0)return 0;var sp=su.slice(0,sq2),si2;' +
+      "for(si2=0;si2<SGL.length;si2++){var ss=SGL[si2];" +
+      "if(sp===ss||sp.length>ss.length&&sp.slice(-ss.length)===ss)return 1}return 0}catch(_){return 0}};" +
+      'var sgAb=function(){var se;try{se=new DOMException("The user aborted a request.","AbortError")}catch(_){se=new Error("The user aborted a request.");se.name="AbortError"}return se};' +
+      'var sgEv=function(){var se;try{se=new Event("abort")}catch(_){try{se=document.createEvent("Event");se.initEvent("abort",!1,!1)}catch(__){se=null}}return se};' +
+      "var sgSup=function(){try{var sq=sgQ,si3,se2;sgQ=[];" +
+      "for(si3=0;si3<sq.length;si3++){se2=sq[si3];if(se2.t===sgL)sgQ.push(se2);else{SG.sup++;se2.j()}}}catch(_){SG.err++}};" +
+      "var sgGo=function(){sgT=null;try{var sq=sgQ,si4,se2;sgQ=[];" +
+      "for(si4=0;si4<sq.length;si4++){se2=sq[si4];if(se2.t===sgL){SG.rel++;se2.r()}else{SG.sup++;se2.j()}}}catch(_){SG.err++}};" +
+      "var sgAdd=function(st,sr,sj){if(st!==sgL){sgL=st;SG.t=st.slice(0,40);sgSup()}" +
+      "var se3={t:st,r:sr,j:sj};sgQ.push(se3);" +
+      "if(sgT)clearTimeout(sgT);sgT=setTimeout(sgGo,sgMs);return se3};" +
+      'if(typeof W.fetch==="function"){var sgF=W.fetch;W.fetch=function(su,so){try{' +
+      'var sgm=so&&so.method?String(so.method).toUpperCase():"GET";' +
+      'if(sgm==="GET"&&typeof su==="string"&&!(so&&so.body)&&sgOk(su)){var sgx=sgRe.exec(su);' +
+      "if(sgx&&sgQ.length<64){SG.n++;SG.fn++;" +
+      "if(so&&so.signal&&so.signal.aborted){SG.ab++;return Promise.reject(sgAb())}" +
+      "return new Promise(function(sres,srej){var sen=sgAdd(sgx[1]," +
+      "function(){sres(sgF.call(W,su,so))},function(){srej(sgAb())});" +
+      'try{if(so&&so.signal&&typeof so.signal.addEventListener==="function")so.signal.addEventListener("abort",function(){try{var sk=sgQ.indexOf(sen);if(sk>=0){sgQ.splice(sk,1);SG.ab++;srej(sgAb())}}catch(_){SG.err++}})}catch(_){SG.err++}' +
+      "})}" +
+      "if(sgx)SG.drop++}" +
+      "}catch(_){SG.err++}" +
+      "return sgF.apply(W,arguments)}}" +
+      "try{var SPX=W.XMLHttpRequest&&W.XMLHttpRequest.prototype;" +
+      "if(SPX&&SPX.open&&SPX.send){var sgO=SPX.open,sgS=SPX.send,sgA=SPX.abort;" +
+      'SPX.open=function(sm2,su2){try{this.__sgM=String(sm2||"").toUpperCase();this.__sgU=String(su2||"")}catch(_){SG.err++}' +
+      "return sgO.apply(this,arguments)};" +
+      "SPX.send=function(sb){var sx=this;try{" +
+      'if(sx.__sgM==="GET"&&sb==null&&sgOk(sx.__sgU)){var sgx2=sgRe.exec(sx.__sgU);' +
+      "if(sgx2&&sgQ.length<64){SG.n++;SG.xn++;var sar=arguments;" +
+      "sx.__sgE=sgAdd(sgx2[1],function(){sx.__sgE=null;sgS.apply(sx,sar)}," +
+      "function(){sx.__sgE=null;var sev=sgEv();if(sev)try{sx.dispatchEvent(sev)}catch(_){SG.err++}});" +
+      "return}" +
+      "if(sgx2)SG.drop++}" +
+      "}catch(_){SG.err++}return sgS.apply(sx,arguments)};" +
+      "if(sgA)SPX.abort=function(){var sx=this;try{if(sx.__sgE){var sk2=sgQ.indexOf(sx.__sgE);" +
+      "if(sk2>=0)sgQ.splice(sk2,1);sx.__sgE=null;SG.ab++;" +
+      "var sev2=sgEv();if(sev2)try{sx.dispatchEvent(sev2)}catch(_){SG.err++}}}catch(_){SG.err++}" +
+      "return sgA.apply(sx,arguments)}}}catch(_){SG.err++}" +
+      "}catch(_){SG.err++}}" +
       "}catch(_){G.err++}}" +
       // JELA-51 (JELA-41 WS-5, opt-in, default OFF): home-sections API data
       // prefetch + SPA intercept. localStorage['jellyfin.shell.apiWarm']='1'
