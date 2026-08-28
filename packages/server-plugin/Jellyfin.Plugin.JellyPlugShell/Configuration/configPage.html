@@ -200,10 +200,25 @@
                                 query path, not in any one section, and the row cache above cannot help because
                                 its TTL expires long before the first boot of the day. This rebuilds one home
                                 row in the background, for one user at a time, to hold that state open —
-                                measured, that is enough to keep all four rows and every user fast. 0 turns it
-                                off. The penalty comes back within about a minute of idle — none at 30 s, 2.6x
-                                at 60 s, 7.6x at 5 min — so an interval above 60 buys very little and 30 is the
-                                tested setting. Roughly 0.5% of one CPU core.
+                                one user is enough to keep every user fast. 0 turns it off. The penalty comes
+                                back within about a minute of idle — none at 30 s, 2.6x at 60 s, 7.6x at 5 min
+                                — so an interval above 60 buys very little and 30 is the tested setting.
+                                Roughly 0.5% of one CPU core.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="SectionWarmMovieRow" />
+                                <span>Warm the Latest Movies row as well</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Does nothing unless the interval above is non-zero. One warmed row does not
+                                carry the others as well as it first appeared: measured on this server, Latest
+                                Shows goes properly warm while Latest Movies still answers its first request
+                                4-13x slower than its own warm speed. Shortening the interval does not fix that
+                                — the missing work is per row, not per user — so this does the Latest Movies
+                                row's queries and artwork in the background too. Roughly doubles the warmer,
+                                i.e. about 1% of one CPU core.
                             </div>
                         </div>
                     </div>
@@ -294,6 +309,7 @@
                     { id: 'DisableHomeScreenSectionCache', type: 'bool' },
                     { id: 'DisableLatestShowsFastPath', type: 'bool' },
                     { id: 'SectionWarmIntervalSeconds', type: 'number' },
+                    { id: 'SectionWarmMovieRow', type: 'bool' },
 
                     { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
                     { id: 'DisablePluginScriptCacheHeaders', type: 'bool' },
