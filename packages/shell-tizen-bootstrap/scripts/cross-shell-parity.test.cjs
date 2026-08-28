@@ -206,8 +206,11 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-753 + JELA-737: re-pinned — merged seed carries both the
     // home-resume controller cache and the settle-gated bitrate-ladder
     // release (identical blocks in both shells).
-    retail: "c3636f8402f70544",
-    boot: "d2cd9a470c3e5301",
+    // JELA-725: re-pinned — both shells gained the jp725 YouTube IFrame API
+    // stub (identical block; it short-circuits the media bar's awaited
+    // loadYouTubeAPI so boot never touches the www.youtube.com origin).
+    retail: "596abeab25faeb0d",
+    boot: "b7301631b9fa73ca",
   },
   {
     name: "buildDiagSeedScript",

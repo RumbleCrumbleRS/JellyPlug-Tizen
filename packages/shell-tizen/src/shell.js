@@ -1207,6 +1207,42 @@
       // iframe src setter/setAttribute intercepts and the one-shot
       // cap() stay armed from t0 (essential guard).
       '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;window.__shellYtCaps=0;function isYt(s){s=s||"";return s.indexOf("youtube")>-1||s.indexOf("youtu.be")>-1||s.indexOf("/embed/")>-1;}try{var P=HTMLIFrameElement.prototype,D=Object.getOwnPropertyDescriptor(P,"src");if(D&&D.set){Object.defineProperty(P,"src",{configurable:true,enumerable:D.enumerable,get:function(){return D.get.call(this);},set:function(v){if(isYt(""+v)){try{D.set.call(this,"about:blank");}catch(_){}return;}D.set.call(this,v);}});}var SA=P.setAttribute;P.setAttribute=function(n,v){if(n&&(""+n).toLowerCase()==="src"&&isYt(""+v)){try{return SA.call(this,"src","about:blank");}catch(_){return;}}return SA.apply(this,arguments);};}catch(_){}function cap(){var a=document.getElementsByTagName("iframe");for(var i=a.length-1;i>=0;i--){var s=a[i].getAttribute("src")||a[i].src||"";if(isYt(s)){try{a[i].parentNode.removeChild(a[i]);window.__shellYtCaps++;}catch(_){}}}}cap();function __armCap(){cap();try{var mo=new MutationObserver(cap);mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["src"]});}catch(_){}try{setInterval(cap,400);}catch(_){}}var pg=window.__shellPaintGate;if(pg&&pg.onApi){pg.onApi(__armCap);}else{__armCap();}})();}catch(_){}',
+      // JELA-725 (jp725): satisfy the YouTube IFrame API locally instead of
+      // fetching it, so boot stops touching the www.youtube.com origin.
+      //
+      // The media bar's `loadYouTubeAPI()` is awaited UNCONDITIONALLY in its
+      // init chain, ahead of slidesInit():
+      //   initJellyfinData(async()=>{ await initLocalization();
+      //                               await loadYouTubeAPI(); slidesInit(); })
+      // and its body opens with
+      //   if(window.YT&&window.YT.Player){resolve(window.YT);return}
+      // before it ever creates the <script src="…/iframe_api"> tag. So merely
+      // having window.YT.Player defined by seed time short-circuits it: the
+      // promise resolves synchronously, the tag is never inserted, and a whole
+      // origin (DNS + TCP + TLS + 2 requests / 13 KiB, measured at 3,657 ms in
+      // the JELA-720 census) leaves the pre-firstCard window. This is strictly
+      // FASTER than the ticket's suggested "defer the fetch": deferring would
+      // push slidesInit() later, while resolving instantly pulls it earlier.
+      // Nothing is merely postponed — the request is never made at all.
+      //
+      // Why a no-op Player cannot regress trailers ON TIZEN: YouTube trailer
+      // playback is already impossible on this fleet, two independent ways.
+      // (1) The media bar only derives a videoId under `jpQmNative()`, an
+      //     iframe contentWindow.queueMicrotask probe that is native only on
+      //     Chrome >= 71 — false on Tizen 5.0 / M63 — so videoId stays null,
+      //     `new YT.Player()` is never constructed, and getSkipSegments() is
+      //     never reached. (2) JEL-238/484 above blanks every youtube iframe
+      //     src to about:blank on Tizen, so even the real API could not load a
+      //     player. The stub is therefore only ever consumed by the awaited
+      //     resolve, never by a playback path.
+      // That reasoning holds exactly while the JEL-238 cap is armed, so this
+      // block stands down whenever the cap is disabled — if someone turns the
+      // cap off to debug trailers, they get the real API back along with it.
+      // Content-pattern based, no plugin name (plugin-agnostic-shell.test.cjs).
+      // Enable (flag-dark): localStorage["jellyfin.shell.ytApiStub"]="1".
+      // Kill switch: localStorage["jellyfin.shell.ytApiStubDisabled"]="1".
+      // Diag: window.__shellYtApiStub (1 when the stub was installed).
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytApiStub")!=="1")return;if(localStorage.getItem("jellyfin.shell.ytApiStubDisabled")==="1")return;if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;if(window.YT&&window.YT.Player)return;function P(){}var n=["playVideo","pauseVideo","stopVideo","seekTo","mute","unMute","setVolume","destroy","loadVideoById","cueVideoById","addEventListener","removeEventListener","setPlaybackQuality"];for(var i=0;i<n.length;i++){P.prototype[n[i]]=function(){};}P.prototype.getPlayerState=function(){return -1;};P.prototype.getCurrentTime=function(){return 0;};P.prototype.getVolume=function(){return 0;};P.prototype.isMuted=function(){return true;};window.YT={loaded:1,Player:P,PlayerState:{UNSTARTED:-1,ENDED:0,PLAYING:1,PAUSED:2,BUFFERING:3,CUED:5}};window.__shellYtApiStub=1;var f=window.onYouTubeIframeAPIReady;if(typeof f==="function"){try{f();}catch(_){}}})();}catch(_){}',
       // JELA-686 (JELA-679/P2): persist the bitrate detection across boots.
       //
       // jellyfin-apiclient's detectBitrate DOES have a cache, with a sane
