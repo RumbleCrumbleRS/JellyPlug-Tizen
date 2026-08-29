@@ -14,19 +14,55 @@ JELA-802 issue thread rather than committed — an on-device QA harness under
 (`tooling/ci/check-no-debug-evidence.sh`) rejects, same convention as
 [JELA-718](./jela718-panel-warm-cache-procedure.md).
 
-## Status as of 2026-08-28
+## Status as of 2026-08-29 — CONFIRMED on the panel
 
-**Not yet run — the Q60R was off-network.** A full `192.168.86.0/24` sweep found
-26 live hosts and **zero** answering `:8001`, `:8002`, `:9197` or `:26101`. This
-is not the stale docker-bridge blocker: the LAN is genuinely routable from the
-container (gateway `:80` → 200; an unused address gives `No route to host`
-immediately; the dev PC `.38` RSTs and serves `:8080`). A Samsung panel that
-answers nothing on `:8001` is powered off or off Wi-Fi. Re-run when it is on.
+**Run and PASSED** on the Q60R (`192.168.86.249`, `QN82Q60RAFXZA`), serving prod
+`shell.min.js?v=3ec5c49f…44b226`. No rollback.
 
-Everything that does **not** need the panel was verified instead — see
+One profile, key `removeItem`'d first. Five reads over 90 s while the panel sat
+in Lite gave `searchGate=null` with **both sibling controls also null**. At the
+Lite→SPA handoff all three appear together:
+
+```
+t=0…90s   searchGate=null  queryAuth=null  pageCache=null   cards=0    ls=257
+  << Lite -> SPA handoff >>
+post+10   searchGate="1"   queryAuth="1"   pageCache="1"    cards=279  ls=279
+```
+
+Next boot, key present at shell load (which is what `flg()` reads):
+`__shellSG = {on:1, ms:800, n:0, rel:0, sup:0, ab:0, drop:0, err:0}`.
+
+**AC1 PASS** (seeder writes the key on a real panel), **AC2 PASS** (gate arms on
+the next boot). The optional typing slice is **not proven** — see the caveat
+under [Acceptance](#acceptance).
+
+The earlier off-panel work is retained below — see
 [Off-panel evidence](#off-panel-evidence-verified-2026-08-28).
 
 ## Read this before you interpret anything
+
+**THE JSI CHANNEL ONLY RUNS AFTER THE LITE→SPA HANDOFF.** This is the single step
+that decides whether the whole test works, and omitting it cost a full run on
+2026-08-29. The shell is Lite-native and never loads the SPA on its own, so
+`public.js` — and therefore every seeder in it — never executes until something
+drives the handoff. Dispatch a synthetic Back keydown (`keyCode`/`which` 10009,
+→ `app.onBack` → `toSpa`) **after Lite is up (~45 s), never at CDP attach**: at
+attach the Lite app has not installed a key listener yet, the dispatch lands
+nowhere, and there is no retry. Then poll for the SPA before reading anything.
+
+Two traps in reading that transition:
+
+- `toSpa` uses `document.write`, so **`location.href` stays `file:///index.html`**
+  — a `file://` href is _not_ evidence the handoff failed. Watch `cards > 0`,
+  `document.body.innerHTML.length` (≈ 29 KB Lite → ≈ 1.68 MB SPA), and
+  `location.hash` becoming `#/home`.
+- Because it is `document.write` into the same document, the SPA stays on the
+  **`file://` origin**. A top-frame `localStorage` read is therefore correct;
+  there is no iframe/origin split to work around.
+
+A run that skips the handoff reports every key null — ours _and_ both controls —
+which is the `INCONCLUSIVE` row of the table below. That row is a **harness**
+verdict, not a jp758 one. Do not roll back on it.
 
 **The flag engages on the NEXT boot, not the boot the seeder runs on.** The shell
 reads the key with `flg()` (strict `=== "1"`) inside `instantHomeBody`, which runs
@@ -80,12 +116,29 @@ exactly like the old no-route blocker but means "wrong IP".
 2. `window.__shellSG && window.__shellSG.on === 1` — **on boot 2**
 3. (optional) six-character query → per-keystroke slice `[0,0,0,0,0,N]`
 
+> **AC3 could not be driven from CDP, and its raw numbers are a trap.** Setting
+> `el.value` and dispatching a synthetic `input` event does **not** register with
+> the SPA's React-managed search input, so the app never searches. The 2026-08-29
+> run produced `[0,0,0,0,0,4]` — which looks exactly like the predicted collapse —
+> while the gate's own counters read `n:0, sup:0, drop:0`, i.e. the gate saw zero
+> search requests. The `+4` was unrelated traffic.
+>
+> **Read the feature's own counters before believing a request-count shape.** If
+> AC3 is wanted for real it needs the native value setter
+> (`Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set`) or
+> genuine remote-key input. The gate's behaviour is already covered by AC1–AC5 on
+> the JELA-112 rig; this document's question is the seeder's last mile.
+
 ### Panel handling rules that this driver encodes
 
 - Close the app with the **Samsung REST** verb
   (`DELETE :8001/api/v2/applications/JelShellTV.Jellyfin`), never the sdb
   `0 kill` verb. `0 kill` has flipped this panel from workable to hard de-auth
   mid-session, and a power cycle is only a probabilistic fix.
+- **`shell 0 debug <appid>` _launches_ the app.** If the app is already running it
+  returns an **empty string** with no inspector port, and the driver dies with a
+  bare `no inspector port: ""` that reads like a transport wedge. Always
+  REST-close first, on every attach — including re-attaches later in the same run.
 - Re-run `sdb connect` **between** `shell 0 debug` and `forward` — the debug call
   kills the sdb server, so the forward otherwise fails `target not found`.
 - Bound `0 debug` with a timeout. Its failure mode is an indefinite **hang**, not
