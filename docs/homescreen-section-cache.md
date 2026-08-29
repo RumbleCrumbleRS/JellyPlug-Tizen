@@ -135,6 +135,37 @@ operator-tunable.
   instantiation cannot exercise pipeline order, which is the whole point of this
   filter; JEL-141 bars the harness itself from `tooling/`, so it lives in the
   JELA-732 issue thread.
-- Prod acceptance (a second boot on the JELA-112 rig, `ContinueWatchingNextUp`
-  freshness on a real resume) needs the plugin released and installed — tracked
-  separately.
+- Prod acceptance of the **server memo** half — JELA-733, on the JELA-112 rig:
+  `X-JellyPlug-Section-Cache: hit`, byte-identical bodies 15/15, −1,278 ms of
+  server work removed from a second boot.
+
+### Panel acceptance of the CLIENT half (JELA-794, Q60R, 2026-08-29)
+
+The rig cannot test HTTP caching at all (JELA-689), so the `private, max-age=TTL`
+half was unproven until it ran on the real Tizen 5.0 panel over sdb + CDP.
+Gate on `Network.responseReceived.fromDiskCache`; `requestServedFromCache` never
+fires on M63.
+
+**The TV does replay section responses from its own cache across an app restart.**
+Same four section urls, cache cleared in boot A, app closed and relaunched, then
+re-requested ~21 s later:
+
+|                                                    | boot A (cache cleared)                | boot B (after restart)                              |
+| -------------------------------------------------- | ------------------------------------- | --------------------------------------------------- |
+| `/HomeScreen/Section/*` ×4                         | `fromDiskCache=false`, 2,779–3,459 ms | **`fromDiskCache=true`, 19–25 ms, 0 B on the wire** |
+| `/web/*.bundle.js` (positive control, `immutable`) | network                               | `fromDiskCache=true`                                |
+| `/web/index.html` (negative control, `no-store`)   | network                               | network                                             |
+
+A natural SPA boot reproduces it unassisted: 2 of 5 section requests came back
+`fromDiskCache` with `encodedDataLength=0`.
+
+**Staleness cannot outlive the TTL on the device.** Resume position mutated
+server-side, then the same url polled from the panel: the panel served the stale
+body from its client cache for 27.1 s and picked up the change at **31.8 s**
+against a 30 s `max-age` — one TTL, not two. `HomeScreenSectionCacheServerOnly`
+is therefore not needed.
+
+**Cache-key trap.** The client cache only hits when boot N+1 requests a
+**byte-identical url**. The shell's queryAuth rewrite appends `&api_key=<token>`,
+so a replay that omits it is a different key and reads as a false
+"the TV did not cache" null. Reproduce the shell's exact url, not just its path.
