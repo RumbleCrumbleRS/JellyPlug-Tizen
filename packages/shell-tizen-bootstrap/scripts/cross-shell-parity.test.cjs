@@ -213,8 +213,10 @@ const INTENTIONAL_DIVERGENCES = [
     // (__TXGENK/__txGenOn/__txVerTok/__txFam/__txGenRec, plus the
     // __txGenRec call in __txSet's query arm), byte-identical in the two
     // shells; only the surrounding buildSeedScript stays divergent.
-    retail: "ff101dbf93a607fd",
-    boot: "c0b5e4b7336bb4fd",
+    // JELA-761: re-pinned — both seeds also gained the UserDataChanged
+    // gate shim (identical block; divergence reasons unchanged).
+    retail: "e4410e36e834d95c",
+    boot: "c0438b3359fcc27b",
   },
   {
     name: "buildDiagSeedScript",

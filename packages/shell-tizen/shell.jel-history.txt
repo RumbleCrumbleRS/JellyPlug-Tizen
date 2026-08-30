@@ -7,6 +7,83 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 
 *JEL-3 Jellyfin Tizen browser-shell prototype , milestone M1).
 *JEL-2 Architecture (per roadmap section 3
+*JEL-407 the src-setter interceptor routes the body through the
+*JEL-1580 v60: synthetic AF self-test harness. Gated by either
+*JEL-623 the self-test depends on the now-gated 600ms auto-
+*JEL-1779 Tizen 5.5 first-boot hits NotSupportedError when web
+*JEL-727 v47: Tizen 5.0 (Chrome 56) ships a buggy
+*JEL-567 v43: pin the "SyntaxError: Unexpected end of JSON input"
+*JEL-406 Dynamic-script intercept . Server plugins like JellyfinEnhan
+*JEL-184 never intercept cross-origin third-party scripts. The
+*JEL-131 like a browser. Mirrors the primer's same-origin guard.
+*JEL-554 v32): same pre-check as static transpileLegacyScripts.
+*JEL-26 keep this seed-side pre-check in lockstep with the widget-si
+*JEL-417 this seed regex is a PRE-check (gates needsTx -> maybeTransp
+*JEL-621 pre-lowered drop consumption in the dynamic pipelines. The
+*JEL-178 byte-lockstep with the widget-side txFnv1a (same fnv1a the
+*JEL-1034 the static lazy path. Without this, a boot whose STATIC
+*JEL-557 cache transpiled plugin bodies in localStorage so warm cold
+*JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
+*JEL-1150 TX_VER is derived from babel inputs at widget parse time
+*JEL-178 drop ONLY the per-load epoch-ms cache-buster (JE's
+*JEL-26 side txKey above lockstep).
+*JEL-619 version-keyed plugin fetch caching in the DYNAMIC pipeline
+*JEL-554 v34): record the first 10 missed src URLs alongside the
+*JEL-405 dynamic-injection paths inline plugin bodies via textContent
+*JEL-557 cache short-circuit before network fetch.
+*JEL-554 v32): only call babel.transform when the body actually
+*JEL-621 __txResolve tries the server's pre-lowered drop first
+*JEL-557 v36): intercept telemetry. v33 QA reported only 3 of the
+*JEL-407 appendChild/insertBefore hooks above only fire when src is
+*JEL-557 cache short-circuit before network fetch.
+*JEL-554 v32): fast path for plugin bodies that parse on Chromium 56.
+*JEL-621 server pre-lowered drop attempt first (see __txResolve).
+*JEL-131 JEL-557 cold tx-cache priming. On a FRESH install the cache
+*JEL-557 serial-RTT model in the comment above is outdated) costs
+*JEL-1654 1. __recDyn persists intercepted dynamic URLs pattern
+*JEL-621 try the pre-lowered drop before priming Babel — on a drop
+*JEL-129 late window.onload rescue (legacy Chromium only). After the
+*JEL-99 bundles never auto-execute — the rewritten document's
+*JEL-88 exactly the telemetry (tx executed, ecAdded=0
+*JEL-202 also dumps Settings form-field IDs so PowerShell+PIL can OCR
+*JEL-436 followup: capture btnPlay click context so QA can screenshot
+*JEL-530 followup: also capture .stack from unhandledrejection so HUD
+*JEL-513 followup: wrap window.ApiClient.getItem once it appears
+*JEL-1580 v58: surface rescue listener state for QA pixel-read.
+*JEL-1580 v59: AF:a/s sc=h/N where a/s=auto-focuser attempts
+*JEL-1580 v60: synthetic AF self-test status row. "-" when off.
+*JEL-1924 secondary .bundle.js prefetch counter. SBP:N/B where
+*JEL-1959 /web/ <link rel=stylesheet> prefetch counter. Same
+*JEL-1967 <link rel=preload> counters from head IIFE.
+*JEL-131 login-idle tx-cache primer status. TP:f/t/e/q(:stop
+*JEL-436 followup: render btnPlay capture state when present.
+*JEL-513 followup: render last getItem response info.
+*JEL-530 followup: stack trace from unhandledrejection.
+*JEL-436 workaround: on Tizen 5.0 (Chromium 56), navigating to a
+*JEL-436 v23: walk webpack module cache to find connectionManager
+*JEL-534 and playbackManager. confirmed window.connectionManager is
+*JEL-530 where getItem returned ServerId but a different item
+*JEL-567 v43: an ApiClient is "authenticated" when it carries an
+*JEL-567 v43: connectionManager can return a token-less ApiClient
+*JEL-567 v43: read the registered-player roster off the
+*JEL-562 guard against undefined / empty-items dispatch. Without
+*JEL-562 v41): derive MediaType from Type when missing.
+*JEL-562 v41): diagnostic log of first 5 dispatches. Captures
+*JEL-567 v43: emit via console.warn (not console.log) so the
+*JEL-567 v43: fold the conclusive playback state into __shellDiag.pm
+*JEL-727 defensive force-load of built-in media players when the
+*JEL-727 pluginManager singleton shape. loadPlugin + ofType +
+*JEL-535 v24: shape-based CM detection fallback. Prototype string'
+*JEL-727 capture pluginManager singleton so pm.play wrap can
+*JEL-137 never force-require modules before the webpack entry
+*JEL-535 v24: webpack 5 wr.c exists but is empty (closure-bound'
+*JEL-727 also pick factories that look like pluginManager so we
+*JEL-623 kick the walker on first paint instead of at seed time.
+*JEL-535 `wr` itself comes from the probe-push idiom (QA-verified on
+*JEL-535 probe-push: a chunk with no modules whose runtime callback i
+*JEL-401 Plugin script transpilation
+*JEL-401 `Chromium/56` instead of `Chrome/56` (Q60R 2019 panels seen
+*JEL-436 will reject, preventing <video> element creation on Tizen 5.
 *JEL-406 the /407 legacy interceptor fetches versioned modules with
 *JEL-647 NOT legacy-gated (unlike injectBootProgress) — the 9-13 s wa
 *JEL-617 bootPhases ring (last 10 boots) + this boot's __shellTx* cou
