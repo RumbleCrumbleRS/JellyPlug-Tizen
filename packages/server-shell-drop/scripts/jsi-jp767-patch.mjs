@@ -3,6 +3,43 @@
  * jsi-jp767-patch.mjs — JELA-767: count the library grid once per filter
  * signature, not once per page step.
  *
+ * ###########################################################################
+ * # SHELVED 2026-08-30 — AC1 MEASURED NULL. DO NOT ARM, DO NOT DEPLOY.      #
+ * ###########################################################################
+ * This patcher is correct and tested, and it is deliberately NOT shipped. It
+ * was never applied to the live JSI channel; the flag stays dark forever.
+ *
+ * AC1, interleaved ON/OFF on `/Users/{uid}/Items`, scored on the server's own
+ * `x-response-time-ms` MEDIAN, preflight CLEAR either side of every run:
+ *
+ *   cell                       delta (ON-OFF)   95% CI
+ *   all-390  (THE REAL GRID)      +0.12 ms    [-10.28, +8.69]   spans 0
+ *   eps-946  rep1                 +5.70 ms    [ +2.97, +7.89]
+ *   eps-946  rep2                 +1.61 ms    [ -1.86, +5.29]   spans 0
+ *   eps-3058 (7.8x the grid)     +10.43 ms    [ -0.61, +20.20]  spans 0
+ *   eps-946  A/A CONTROL          -4.42 ms    [ -9.00, -0.16]   <- FLOOR
+ *
+ * The A/A control is the whole story. Both arms sent `true`; the responses
+ * were byte-identical (TotalRecordCount 946 both sides, same body length) and
+ * it still produced -4.42 ms with a CI that EXCLUDES ZERO. So the bootstrap CI
+ * under-covers here — the samples are not exchangeable — and rep1's "+5.70 ms,
+ * CI disjoint from zero" was floor, not signal. rep2 came back at +1.61 ms and
+ * did not replicate it. Harness floor at n=96/arm is +/-5 ms (JELA-690).
+ *
+ * Best estimate of the true cost, from the size sweep: the COUNT is roughly
+ * linear at ~3 ms per 1,000 rows of filtered set. The real grid's default
+ * filter (Movie,Series) is 390 rows => ~1 ms per page step. With jp768
+ * `filterbar.pageCache` now fleet default-ON (5 pages / 60 s), a 4-Next +
+ * 4-Prev session issues 5 fetches, not 9 — the back steps never reach the
+ * network. So the ENTIRE realizable prize is ~4 count queries x ~1 ms = ~4 ms
+ * per paging session, against levers this programme ships at 1,000-2,000 ms.
+ *
+ * Per AC1's own stopping rule that is a measured null: the consistency cleanup
+ * is not worth a paging regression, and the shipped override is load-bearing
+ * (see AC0 below). Kept in-tree as documentation so the next reader who finds
+ * the lone `EnableTotalRecordCount=!0` does not "fix" it — deleting that line
+ * deletes the Next button on page 1.
+ *
  * The web-skin source repo (`jellyplug-theme`) is gone from the workspace, so
  * the JS-Injector channel IS the source of truth for these snippets. This
  * applies the JELA-767 edits as anchored textual patches against the LIVE
@@ -28,9 +65,14 @@
  *
  * The override is NOT a bug in itself: `Le()`'s pager math takes its no-total
  * branch only when `TotalRecordCount` is null, and a flag-off response that
- * echoes the page length instead (AC0 of the ticket — unverified while the
- * box is down) would make `hasNext = (0+80 < 80) = false` and delete the
- * Next button on page 1. So the total is genuinely needed — once.
+ * echoes the page length instead makes `hasNext = (0+80 < 80) = false` and
+ * deletes the Next button on page 1. So the total is genuinely needed — once.
+ *
+ * AC0 CONFIRMED against prod (2026-08-26, re-confirmed 2026-08-30 in every
+ * A/B run above): flag-off returns the ECHO shape — the RETURNED PAGE LENGTH,
+ * never null and never the real total. `trc@StartIndex=0` read 80 with the
+ * flag off against 390 / 946 / 3058 with it on. The hostile case is the real
+ * one, the shipped override is load-bearing, and naive deletion breaks paging.
  *
  * ---------------------------------------------------------------------------
  * The fix: cache the total per query signature
