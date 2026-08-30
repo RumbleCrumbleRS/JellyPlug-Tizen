@@ -121,7 +121,14 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # base); each downstream WS still owns its own raise if it individually
 # outgrows this. Flag-neutral: no shell code changes, shell.min.js/
 # boot-shell.min.js bytes are unchanged by this ticket.
-HARD_CAP = 229376
+# JELA-752 raised it 229376 -> 245760 (224 -> 240 KiB): the widened
+# item-detail in-flight coalescer + bounded replay window (this ticket, plus
+# the JELA-757 play-path replay riding the same PR) grew the blob past the
+# cap once merged with the JELA-740/753/760 train that landed concurrently
+# (merged blob 231154 B). One 16 KiB step leaves ~14.6 KB headroom
+# (>= SOFT_HEADROOM), taken in the ticket that grows the code per the
+# policy above.
+HARD_CAP = 245760
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a

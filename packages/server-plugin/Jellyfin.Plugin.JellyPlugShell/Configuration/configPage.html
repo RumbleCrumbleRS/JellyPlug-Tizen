@@ -149,7 +149,38 @@
                     </div>
 
                     <div class="verticalSection">
-                        <h2 class="sectionTitle">Home rows</h2>
+                        <h2 class="sectionTitle">Home row cache</h2>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="HomeScreenSectionCacheSeconds" label="Home row cache TTL (seconds)" min="0" />
+                            <div class="fieldDescription">
+                                Private, per-user cache over /HomeScreen/Section/{name} — the Home Screen Sections
+                                row contents, which ship with no Cache-Control and no ETag and cost 1.4-2.2 s of
+                                server query time on every home load. 0 turns the cache off. Above ~30 s a stale
+                                Continue Watching resume position becomes visible, so leave it at 30 unless a
+                                watched-invalidation hook lands first.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="HomeScreenSectionCacheServerOnly" />
+                                <span>Server-side only (TVs must revalidate)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Keeps the server-side memo but stops TVs holding the rows in their own HTTP cache;
+                                a repeat still costs a request, answered by a 304. The rollback for client-side
+                                staleness, which a server restart cannot clear.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableHomeScreenSectionCache" />
+                                <span>Disable the home row cache</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Full kill switch: every request passes straight through, stamped with nothing.
+                                Read per request, so it takes effect without a server restart.
+                            </div>
+                        </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
                                 <input is="emby-checkbox" type="checkbox" id="DisableLatestShowsFastPath" />
@@ -159,6 +190,35 @@
                                 Hands GET /HomeScreen/Section/LatestShows back to Home Screen Sections' own
                                 30-day window walk (54 queries / ~1.2 s of server time on this library).
                                 Leave off unless the row looks wrong.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="SectionWarmIntervalSeconds" label="Keep home rows warm every (seconds)" min="0" />
+                            <div class="fieldDescription">
+                                A server that has been idle answers its first home row 10-25x slower than its
+                                own warm speed, and every row pays at once — the cost is in the shared library
+                                query path, not in any one section, and the row cache above cannot help because
+                                its TTL expires long before the first boot of the day. This rebuilds one home
+                                row in the background, for one user at a time, to hold that state open —
+                                one user is enough to keep every user fast. 0 turns it off. The penalty comes
+                                back within about a minute of idle — none at 30 s, 2.6x at 60 s, 7.6x at 5 min
+                                — so an interval above 60 buys very little and 30 is the tested setting.
+                                Roughly 0.5% of one CPU core.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="SectionWarmMovieRow" />
+                                <span>Warm the Latest Movies row as well</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Does nothing unless the interval above is non-zero. One warmed row does not
+                                carry the others as well as it first appeared: measured on this server, Latest
+                                Shows goes properly warm while Latest Movies still answers its first request
+                                4-13x slower than its own warm speed. Shortening the interval does not fix that
+                                — the missing work is per row, not per user — so this does the Latest Movies
+                                row's queries and artwork in the background too. Roughly doubles the warmer,
+                                i.e. about 1% of one CPU core.
                             </div>
                         </div>
                     </div>
@@ -176,6 +236,24 @@
                                 re-preflighting the same URL. The preflight cache is keyed on the full URL, so this
                                 saves the repeats only — measured at 5-8 of a TV boot's ~100 preflights. Takes effect
                                 without a restart; never overwrites a max-age another layer set.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Plugin script cache (JELA-723)</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisablePluginScriptCacheHeaders" />
+                                <span>Disable Cache-Control stamping on plugin client scripts</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Kill switch. By default the plugin stamps public, max-age=86400 (plus Vary:
+                                Accept-Encoding, Origin) on /NotifySync/client.js, /GetAvatar/ClientScript and
+                                /PluginPages/inject.js, so a TV re-downloads them at most once a day instead of
+                                every boot (NotifySync's own max-age is 300 s; the other two send none). Takes
+                                effect without a restart; a stale script self-corrects within a day of a plugin
+                                upgrade.
                             </div>
                         </div>
                     </div>
@@ -226,9 +304,15 @@
                     { id: 'LiteDefaultOn', type: 'bool' },
                     { id: 'LiteNativeDefaultOn', type: 'bool' },
                     { id: 'LiteSubsDefaultOn', type: 'bool' },
+                    { id: 'HomeScreenSectionCacheSeconds', type: 'number' },
+                    { id: 'HomeScreenSectionCacheServerOnly', type: 'bool' },
+                    { id: 'DisableHomeScreenSectionCache', type: 'bool' },
                     { id: 'DisableLatestShowsFastPath', type: 'bool' },
+                    { id: 'SectionWarmIntervalSeconds', type: 'number' },
+                    { id: 'SectionWarmMovieRow', type: 'bool' },
 
                     { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
+                    { id: 'DisablePluginScriptCacheHeaders', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
                     { id: 'DiagMaxRings', type: 'number' }
                 ];

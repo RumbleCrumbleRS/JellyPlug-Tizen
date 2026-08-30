@@ -218,7 +218,14 @@ public static class LatestShowsFastPath
     /// The DTO shape <c>LatestShowsSection.GetResults</c> hands to <c>GetBaseItemDto</c>.
     /// Kept identical so the row's cards render from the same fields they do today.
     /// </summary>
-    private static DtoOptions SectionDtoOptions()
+    /// <remarks>
+    /// Internal rather than private since JELA-798, where <see cref="SectionWarmService"/>
+    /// grew a movies half that warms with the same shape. The DTO shape is load-bearing
+    /// to a warmer specifically because it decides how much image work the pass does, and
+    /// JELA-793 measured that a pass which asks for a cheaper shape than the request it is
+    /// warming for is a null.
+    /// </remarks>
+    internal static DtoOptions SectionDtoOptions()
     {
         var dtoOptions = new DtoOptions
         {
