@@ -67,10 +67,18 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # ~104.8 KB and the first lockstep rebuild of shell.min.js no longer fit.
 # JEL-131 raised it 110592 -> 122880 (120 KiB): the login-idle tx-cache
 # primer (seed-side string block, mirrored in boot-shell) grew the minified
-# base to ~116.1 KB. shell.min.js is the HOSTED shell (served from /shell/,
-# not packaged in the .wgt since JEL-124), so the cap guards manifest
-# breadcrumb budget only — boot-shell.min.js (the wgt-shipped blob) has no
-# such cap and took the same block.
+# base to ~116.1 KB. shell.min.js is the HOSTED shell (served from /shell/).
+#   [JELA-812 correction] this entry went on to claim shell.min.js is "not
+#   packaged in the .wgt since JEL-124", so the cap "guards manifest
+#   breadcrumb budget only". Both halves are false and have been for the
+#   whole life of the cap: JEL-124 strips shell.js, qa-beacon.js and
+#   *.eb_clean from the stage dir (build-wgt.sh) and never shell.min.js,
+#   and src/index.html loads it with a literal <script src="shell.min.js">.
+#   The cap guards DEPLOYED CODE on both rails. The CAP POLICY block below
+#   already says this correctly; this line is corrected in place because it
+#   is the one a reader hits first.
+# boot-shell.min.js (packages/shell-tizen-bootstrap) has no such cap and
+# took the same block.
 # JEL-134 raised it 122880 -> 131072 (128 KiB): the IndexedDB creds vault
 # (seed-side mirror/invalidation + restoreCredsVault boot restore, mirrored
 # in boot-shell) grew the minified base to ~119.4 KB, leaving no room for
@@ -128,7 +136,36 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 # (merged blob 231154 B). One 16 KiB step leaves ~14.6 KB headroom
 # (>= SOFT_HEADROOM), taken in the ticket that grows the code per the
 # policy above.
-HARD_CAP = 245760
+# JELA-812 raised it 245760 -> 278528 (240 -> 272 KiB), TWO steps. Like
+# JELA-222 this is a standalone re-baseline, not a code-growing ticket:
+# shell.js / shell.min.js / boot-shell bytes are unchanged here. Landing
+# JELA-749 (PR #187, 8dca279) left the blob at 245390 B — 370 B of headroom
+# — so the build was already warning and the next shell change of any size
+# would have tripped the assert below for whoever happened to be holding
+# it, rather than for the change that consumed the headroom.
+#   Sizing. Measured over the 22 commits that touched src/shell.min.js
+#   between 2026-08-22 (192133 B) and 8dca279 (245390 B): +53257 B total,
+#   mean +2421 B/merge, median +2011 B/merge, p90 +5403 B, peak cadence 8
+#   shell-touching merges in one day (2026-08-26). ONE 16 KiB step leaves
+#   16754 B, of which only 8562 B sits above SOFT_HEADROOM — ~4 median
+#   merges before the build warns again and ~8 before it fails, i.e. about
+#   one day at the 08-26 rate, which would re-run this exact ticket inside
+#   a week. TWO steps leave 33138 B (24946 B usable above SOFT_HEADROOM,
+#   ~12 median merges), the same shared-runway target JELA-222 took and for
+#   the same reason: the perf program has a continuous train of flag-dark
+#   shell tickets and a single step is eaten by whichever lands first.
+#   Why 272 KiB is still a real diet tripwire. On the retail .wgt rail the
+#   whole staged payload at 8dca279 is 2397028 B, of which shell.min.js is
+#   245390 B (10.2%) and babel.min.js alone is 2091715 B (87.3%) — a full
+#   cap's worth of shell growth moves the widget by ~1.4%, so the .wgt
+#   budget this cap was originally derived from has stopped being the
+#   binding constraint. On the hosted /shell/ rail the blob is compression-
+#   served (JELA-727): 245390 B gzip -9 = 69601 B (28.4%), so the new cap
+#   is ~77 KiB on the wire, and M63 boot latency tracks request COUNT far
+#   more than bytes. The cap's remaining job is to keep per-ticket shell
+#   growth VISIBLE and deliberately re-baselined, which the SOFT_HEADROOM
+#   warning still does at this level.
+HARD_CAP = 278528
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
