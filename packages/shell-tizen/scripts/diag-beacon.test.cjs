@@ -105,10 +105,16 @@ function makeEnv(ls, win) {
   const intervals = [];
   const env = {
     window: win || {},
+    // JELA-748: the beacon now censuses the store (tx.ls / tx.lk), so the
+    // fake needs the enumeration surface a real Storage has.
     localStorage: {
       getItem: (k) => (store.has(k) ? store.get(k) : null),
       setItem: (k, v) => store.set(k, String(v)),
       removeItem: (k) => store.delete(k),
+      get length() {
+        return store.size;
+      },
+      key: (i) => [...store.keys()][i] ?? null,
     },
     store,
     clock,
@@ -230,6 +236,16 @@ const WIN = () => ({
   assert.deepStrictEqual(Object.keys(p).sort(), ["id", "ring", "tx", "ver"]);
   assert.ok(/^[0-9a-z]{6,24}$/.test(p.id), "id must be opaque base36: " + p.id);
   assert.deepStrictEqual(p.ring, RING, "ring must be the persisted bootPhases");
+  // JELA-748 (AC2): ls/lk/qe make priming state legible — ch/cm alone cannot
+  // tell an un-primed boot from a store that is refusing the writes that
+  // would prime it. ls/lk are a live census of the (fake) store; qe is 0
+  // here because nothing swallowed a write.
+  // JELA-799: gd/ps ride the same census try-block — gd = version
+  // generations the seed sweep dropped, ps = keys the widget pruner evicted.
+  // Both are 0 here (and on any fielded boot with the flags dark), which is
+  // exactly what makes them a usable flip signal.
+  let expectChars = 0;
+  for (const [k, v] of env.store) expectChars += k.length + String(v).length;
   assert.deepStrictEqual(p.tx, {
     skip: 56,
     done: 1,
@@ -237,7 +253,13 @@ const WIN = () => ({
     cm: 4,
     jc: 1,
     drop: { ok: 1, h: 0, m: 1, r: 0, f: 0 },
+    ls: expectChars,
+    lk: env.store.size,
+    qe: 0,
+    gd: 0,
+    ps: 0,
   });
+  assert.ok(p.tx.ls > 0 && p.tx.lk > 0, "census must report a non-empty store");
   assert.strictEqual(p.ver, "1.0.75");
   // Egress audit: the server URL is the TARGET, never the payload; no creds.
   for (const leak of [
@@ -337,6 +359,40 @@ const WIN = () => ({
   env.tick(3000);
   const tx = JSON.parse(env.xhrs[0].body).tx;
   assert.strictEqual(tx.jc, -1, "absent channel global must report jc:-1");
+}
+
+// 8. JELA-748 (AC2): a store that has stopped accepting writes must be
+// visible. txSetStatic / txRecordQuerySlot / __txSet / __txPersistLru all
+// soft-fail into catch(_){}, so without qe an un-primed boot on a wedged
+// store is indistinguishable from a healthy one.
+{
+  const win = WIN();
+  win.__shellLsQuotaErr = 7;
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  const tx = JSON.parse(env.xhrs[0].body).tx;
+  assert.strictEqual(tx.qe, 7, "swallowed localStorage writes must surface");
+  assert.ok(tx.ls > 0, "store census must be reported alongside");
+}
+
+// 9. JELA-748: a census that throws must not cost us the payload — ls/lk
+// degrade to -1 and every other field still ships.
+{
+  const win = WIN();
+  const env = makeEnv(LS_ON, win);
+  Object.defineProperty(env.localStorage, "length", {
+    get() {
+      throw new Error("census blew up");
+    },
+  });
+  env.run();
+  env.tick(3000);
+  assert.strictEqual(env.xhrs.length, 1, "a failed census must still POST");
+  const tx = JSON.parse(env.xhrs[0].body).tx;
+  assert.strictEqual(tx.ls, -1);
+  assert.strictEqual(tx.lk, -1);
+  assert.strictEqual(tx.ch, 120, "the rest of the payload is unaffected");
 }
 
 console.log("diag-beacon.test.cjs OK");

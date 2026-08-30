@@ -9,6 +9,102 @@
     "imageUrl": null,
     "versions": [
       {
+        "version": "1.0.41.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.41.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.41.0/jellyplug-shell_1.0.41.0.zip",
+        "checksum": "a7dedfbc9a4cc539eb714193199aee33",
+        "timestamp": "2026-08-30T04:46:28Z"
+      },
+      {
+        "version": "1.0.40.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.40.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.40.0/jellyplug-shell_1.0.40.0.zip",
+        "checksum": "ff9e7818521e9fb887f3af427b6424c8",
+        "timestamp": "2026-08-28T21:28:16Z"
+      },
+      {
+        "version": "1.0.39.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.39.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.39.0/jellyplug-shell_1.0.39.0.zip",
+        "checksum": "dbf67b3fb421ed4a0cd9774255717389",
+        "timestamp": "2026-08-28T19:04:50Z"
+      },
+      {
+        "version": "1.0.38.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.38.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.38.0/jellyplug-shell_1.0.38.0.zip",
+        "checksum": "13635a8d53abd69dc583cac1b9fd337d",
+        "timestamp": "2026-08-28T15:26:58Z"
+      },
+      {
+        "version": "1.0.37.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.37.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.37.0/jellyplug-shell_1.0.37.0.zip",
+        "checksum": "56e41e85a38c3fa380a5bbbdbf26feb7",
+        "timestamp": "2026-08-27T18:23:55Z"
+      },
+      {
+        "version": "1.0.36.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.36.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.36.0/jellyplug-shell_1.0.36.0.zip",
+        "checksum": "231b6d15e09d032941b69e7733183db3",
+        "timestamp": "2026-08-27T18:09:20Z"
+      },
+      {
+        "version": "1.0.35.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.35.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.35.0/jellyplug-shell_1.0.35.0.zip",
+        "checksum": "f8eb68e8ba2f4153bc84dbcdf57aadb5",
+        "timestamp": "2026-08-27T18:01:52Z"
+      },
+      {
+        "version": "1.0.34.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.34.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.34.0/jellyplug-shell_1.0.34.0.zip",
+        "checksum": "a23c54fd930d30f1034b223811b6fad9",
+        "timestamp": "2026-08-27T17:52:03Z"
+      },
+      {
+        "version": "1.0.33.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.33.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.33.0/jellyplug-shell_1.0.33.0.zip",
+        "checksum": "623a25becb2f9970e7e9880566583486",
+        "timestamp": "2026-08-27T17:42:28Z"
+      },
+      {
+        "version": "1.0.32.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.32.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.32.0/jellyplug-shell_1.0.32.0.zip",
+        "checksum": "bbcc4a02de2363261f12aa7f89836e06",
+        "timestamp": "2026-08-27T17:28:51Z"
+      },
+      {
+        "version": "1.0.31.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.31.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.31.0/jellyplug-shell_1.0.31.0.zip",
+        "checksum": "e1444a5947fa65073a41da38fe05cc78",
+        "timestamp": "2026-08-27T17:02:10Z"
+      },
+      {
+        "version": "1.0.30.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.30.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.30.0/jellyplug-shell_1.0.30.0.zip",
+        "checksum": "6a9b7a0562efb6a216ac87bfd81bc837",
+        "timestamp": "2026-08-26T20:57:42Z"
+      },
+      {
         "version": "1.0.29.0",
         "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.29.0",
         "targetAbi": "10.11.0.0",

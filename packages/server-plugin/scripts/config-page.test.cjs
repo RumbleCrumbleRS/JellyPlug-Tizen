@@ -55,7 +55,10 @@ const ctrl = fs.readFileSync(
   path.join(ROOT, "Controllers", "ShellController.cs"),
   "utf8",
 );
-const svc = fs.readFileSync(path.join(ROOT, "ConfigFingerprintService.cs"), "utf8");
+const svc = fs.readFileSync(
+  path.join(ROOT, "ConfigFingerprintService.cs"),
+  "utf8",
+);
 const cfg = fs.readFileSync(path.join(ROOT, "PluginConfiguration.cs"), "utf8");
 const task = fs.readFileSync(
   path.join(ROOT, "ScheduledTasks", "ConfigRehashTask.cs"),
@@ -64,17 +67,24 @@ const task = fs.readFileSync(
 
 // ---- 1. embedded-resource chain ---------------------------------------------
 
-assert.ok(plugin.includes("IHasWebPages"), "Plugin must implement IHasWebPages");
+assert.ok(
+  plugin.includes("IHasWebPages"),
+  "Plugin must implement IHasWebPages",
+);
 assert.ok(
   plugin.includes('.Configuration.configPage.html"'),
   "GetPages must point at the Configuration.configPage.html logical name",
 );
 assert.ok(
-  /<RootNamespace>Jellyfin\.Plugin\.JellyPlugShell<\/RootNamespace>/.test(csproj),
+  /<RootNamespace>Jellyfin\.Plugin\.JellyPlugShell<\/RootNamespace>/.test(
+    csproj,
+  ),
   "RootNamespace pin (logical-name basis for the config page resource)",
 );
 assert.ok(
-  /<EmbeddedResource Include="Configuration\/configPage\.html" \/>/.test(csproj),
+  /<EmbeddedResource Include="Configuration\/configPage\.html" \/>/.test(
+    csproj,
+  ),
   "configPage.html must be embedded WITHOUT a custom LogicalName",
 );
 
@@ -90,14 +100,19 @@ assert.ok(
 // ---- 3. form wiring ----------------------------------------------------------
 
 // Reverse direction: every declared form field must be a real config property.
-const formIds = [...page.matchAll(/\{ id: '(\w+)', type: '\w+' \}/g)].map((m) => m[1]);
+const formIds = [...page.matchAll(/\{ id: '(\w+)', type: '\w+' \}/g)].map(
+  (m) => m[1],
+);
 assert.ok(formIds.length >= 9, `expected the full field list, got ${formIds}`);
 for (const id of formIds) {
   assert.ok(
     new RegExp(`public\\s[^\\n]*\\b${id}\\b`).test(cfg),
     `form field '${id}' has no matching PluginConfiguration property (typo → silently never saved)`,
   );
-  assert.ok(page.includes(`id="${id}"`), `form field '${id}' has no matching input element`);
+  assert.ok(
+    page.includes(`id="${id}"`),
+    `form field '${id}' has no matching input element`,
+  );
 }
 
 // Forward direction: today's operator-facing settings all appear in the form.
@@ -114,8 +129,13 @@ for (const prop of [
   "DisableLatestShowsFastPath",
   "DisableDiagIngest",
   "DiagMaxRings",
+  "DisableCorsPreflightMaxAge", // JELA-709 kill switch
+  "SectionWarmIntervalSeconds", // JELA-793 warmer interval / kill switch
 ]) {
-  assert.ok(formIds.includes(prop), `operator setting ${prop} missing from the form`);
+  assert.ok(
+    formIds.includes(prop),
+    `operator setting ${prop} missing from the form`,
+  );
 }
 
 // ---- 4. fail-closed auth shape ----------------------------------------------
@@ -146,7 +166,8 @@ for (const route of anonRoutes) {
   const at = ctrl.indexOf(route);
   assert.ok(at >= 0, `${route} route missing`);
   assert.ok(
-    ctrl.lastIndexOf("    [AllowAnonymous]", at) > ctrl.lastIndexOf("]\n\n", at),
+    ctrl.lastIndexOf("    [AllowAnonymous]", at) >
+      ctrl.lastIndexOf("]\n\n", at),
     `${route} must carry [AllowAnonymous] (TVs fetch it before login)`,
   );
 }
@@ -157,7 +178,10 @@ assert.strictEqual(
 );
 
 // Operator-only fingerprint routes exist and do NOT opt out.
-for (const route of ['[HttpGet("fingerprint")]', '[HttpPost("fingerprint/rehash")]']) {
+for (const route of [
+  '[HttpGet("fingerprint")]',
+  '[HttpPost("fingerprint/rehash")]',
+]) {
   assert.ok(ctrl.includes(route), `${route} route missing`);
 }
 assert.ok(
@@ -171,7 +195,9 @@ assert.ok(
 // fingerprint (a transient NAS error at the 24h tick would otherwise strip
 // the epoch from the manifest fleet-wide).
 assert.ok(
-  /public ConfigFingerprint\? Rehash\(PluginConfiguration config, CancellationToken cancellationToken/.test(svc),
+  /public ConfigFingerprint\? Rehash\(PluginConfiguration config, CancellationToken cancellationToken/.test(
+    svc,
+  ),
   "ConfigFingerprintService.Rehash(config, token) missing",
 );
 assert.ok(
@@ -201,5 +227,24 @@ assert.ok(
     task.includes("TaskTriggerInfoType.IntervalTrigger"),
   "default triggers: startup + interval",
 );
+
+// The page's <div> nesting must balance. Every branch that adds an operator
+// setting adds a whole <div class="verticalSection"> block here, so this file
+// is a standing conflict magnet, and a "keep both sides" resolution can splice
+// two sections into one — the form still parses and every id pin above still
+// passes, but the section renders inside its neighbour. Cheap structural check.
+{
+  let depth = 0;
+  let wentNegative = false;
+  for (const m of page.matchAll(/<(\/?)div\b/g)) {
+    depth += m[1] ? -1 : 1;
+    if (depth < 0) wentNegative = true;
+  }
+  assert.strictEqual(depth, 0, "configPage.html has unbalanced <div> nesting");
+  assert.ok(
+    !wentNegative,
+    "configPage.html closes a <div> that was never opened",
+  );
+}
 
 console.log("config-page.test.cjs: all pins hold");

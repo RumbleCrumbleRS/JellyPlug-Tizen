@@ -148,9 +148,22 @@ export function applyPatch(body, patch) {
   return out;
 }
 
-/** The snippets ship to a Chromium-63/V8-6.3 engine — no ES2015+ in our edits. */
+/**
+ * The snippets ship to a Chromium-63/V8-6.3 engine — no ES2015+ in our edits.
+ *
+ * Both patches wrap every insertion in a PAIR of `/*jp681*\/` markers, so the
+ * added spans are the ODD-indexed split parts (jp745's idiom). `.slice(1)` is
+ * wrong: it keeps everything after the CLOSING marker too, i.e. the entire rest
+ * of the body, and then scans that unrelated shipped code for ES2015 tokens.
+ * On a single entry that mostly passed by luck; against the concatenated
+ * channel bundle the JELA-795 rig feeds it (one `*:txc:*` slot holding all 91
+ * entries) it tripped on the substring `class` inside a CSS selector string
+ * (`a.card[class*="jp-"]`) 49 KB downstream of the edit. It failed CLOSED, so
+ * nothing unsafe ever shipped — but the check has to scope to what we added.
+ */
 export function assertEs5Additions(body) {
-  const added = body.split("/*jp681*/").slice(1).join("");
+  const parts = body.split("/*jp681*/");
+  const added = parts.filter((_, i) => i % 2 === 1).join("\n");
   if (/=>|`|\blet\b|\bconst\b|\bclass\b/.test(added)) {
     throw new Error("jp681 edit introduced non-ES5 syntax");
   }

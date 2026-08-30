@@ -124,13 +124,19 @@ const MIN_SHELLS = [
 const ALL_SHELLS = SRC_SHELLS.concat(MIN_SHELLS);
 
 // The Page Visibility / lifecycle event names a host could bind to react to the
-// app being paused/resumed. The shell must bind NONE of these — with ONE
-// sanctioned exception since v2.0.24 (JELA-66): installResumeEpochCheck binds
-// exactly one window-level 'visibilitychange' listener whose only teardown
-// path is a config-epoch MISMATCH against a freshly fetched manifest (Part D3
-// pins those gates). Every match / offline / no-record resume falls through
-// untouched, so jellyfin-web's own handling still runs identically on TV and
-// in a browser tab.
+// app being paused/resumed. The shell must bind NONE of these — with TWO
+// sanctioned exceptions, both window-level 'visibilitychange':
+//   1. v2.0.24 (JELA-66) installResumeEpochCheck, whose only teardown path is
+//      a config-epoch MISMATCH against a freshly fetched manifest (Part D3
+//      pins those gates). Every match / offline / no-record resume falls
+//      through untouched.
+//   2. JELA-761 udcGate (flag-dark, seed-side), which does nothing but FLUSH a
+//      UserDataChanged socket frame it held while the page was hidden. It
+//      never touches SPA state, never navigates, and is a no-op unless
+//      localStorage["jellyfin.shell.udcGate"]==="1" AND a frame arrived while
+//      hidden.
+// So jellyfin-web's own handling still runs identically on TV and in a
+// browser tab.
 const LIFECYCLE_EVENTS = [
   "webkitvisibilitychange",
   "pagehide",
@@ -175,14 +181,28 @@ for (const [label, src] of ALL_SHELLS) {
   // document.open()/write() handoff (same contract as installBackHandler).
   const vis = src.match(/addEventListener\(\s*["']visibilitychange["']/g) || [];
   check(
-    "exactly one 'visibilitychange' listener (resume-epoch hook) in " + label,
-    vis.length === 1,
+    "exactly two 'visibilitychange' listeners (resume-epoch + JELA-761 udcGate) in " +
+      label,
+    vis.length === 2,
     "found " + vis.length + " registrations",
   );
+  // BOTH must be window-level: a document-level listener does not survive the
+  // document.open()/write() handoff (same contract as installBackHandler).
+  const winVis =
+    src.match(/window\.addEventListener\(\s*["']visibilitychange["']/g) || [];
   check(
-    "the visibilitychange listener is window-level (survives doc.write) in " +
+    "every visibilitychange listener is window-level (survives doc.write) in " +
       label,
-    /window\.addEventListener\(\s*["']visibilitychange["']/.test(src),
+    winVis.length === vis.length && vis.length > 0,
+    "window-level " + winVis.length + " of " + vis.length,
+  );
+  // The second one is the JELA-761 gate and nothing else: it may only flush a
+  // held socket frame, so it must sit inside the udcGate shim (identified by
+  // its diag object) and must not appear without the flag-dark opt-in.
+  check(
+    "the second visibilitychange listener belongs to the JELA-761 udcGate in " +
+      label,
+    src.includes("__shellUdc") && src.includes("jellyfin.shell.udcGate"),
   );
 }
 

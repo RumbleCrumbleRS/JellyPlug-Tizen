@@ -200,10 +200,26 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-707: re-pinned — both shells' seeds gained the paint-gated
     // JellyfinEnhanced re-injector (identical block; the hashes still
     // differ for the pre-existing reasons above).
-    // JELA-749: re-pinned again — merge brought the primer's versioned-key
-    // seed changes into both shells (hashes recomputed from merged sources).
-    retail: "9765ab93bdb17858",
-    boot: "765b9d0b1f34eb99",
+    // JELA-748: re-pinned again — both shells gained __qeB (the swallowed-
+    // localStorage-write counter behind the beacon's tx.qe) and route
+    // __txSet's exhausted quota path through it.
+    // JELA-753 + JELA-737: re-pinned — merged seed carries both the
+    // home-resume controller cache and the settle-gated bitrate-ladder
+    // release (identical blocks in both shells).
+    // JELA-725: re-pinned — both shells gained the jp725 YouTube IFrame API
+    // stub (identical block; it short-circuits the media bar's awaited
+    // loadYouTubeAPI so boot never touches the www.youtube.com origin).
+    // JELA-799: re-pinned — both seeds gained the (a) generation sweep
+    // (__TXGENK/__txGenOn/__txVerTok/__txFam/__txGenRec, plus the
+    // __txGenRec call in __txSet's query arm), byte-identical in the two
+    // shells; only the surrounding buildSeedScript stays divergent.
+    // JELA-761: re-pinned — both seeds also gained the UserDataChanged
+    // gate shim (identical block; divergence reasons unchanged).
+    // JELA-749: re-pinned — both seeds gained __txAuthed, __txSweepBare and
+    // the primer's dynPluginUrls query inheritance (identical blocks in the
+    // two shells; the divergence reasons above are unchanged).
+    retail: "7d5abda19ebc6571",
+    boot: "3c0090152c072f6a",
   },
   {
     name: "buildDiagSeedScript",
