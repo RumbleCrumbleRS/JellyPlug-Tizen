@@ -1,16 +1,28 @@
 # JELA-820 — reserve-then-fill for the mid-home rows (`jp820`)
 
 **Date:** 2026-08-31 · **Parent finding:** JELA-815 · **Status: deployed DARK on
-the live JSI channel (`jellyplug.rows.reservefill`, seeded nowhere).
-AC2 PASSES at 0 px (§5d) and AC4 PASSES as a same-boot differential (§5f).
-AC1 is NOT settled and its old 61 → 26 pair is stale — the production shell moved
-mid-ticket (§5e). AC3 not measured.** §6 is what is left.
+the live JSI channel (`jellyplug.rows.reservefill`, seeded nowhere). ALL FOUR ACs
+are now settled:**
+
+| AC                                     | verdict                                             |
+| -------------------------------------- | --------------------------------------------------- |
+| **AC1** home-row reqs at boot ≤ 30     | **FAIL — 50.7, and structurally unreachable** (§5g) |
+| **AC2** no section moves > 8 px        | **PASS at 0 px** (§5d)                              |
+| **AC3** total cold-boot reqs drop      | **MEASURED NULL** (−5.3 vs A/A spread 15) (§5g)     |
+| **AC4** kill switch as a differential  | **PASS** (§5f)                                      |
+
+**The mechanism works perfectly and the prize does not exist.** All 10 producer
+requests leave the boot path on every single boot (spread 0 in both arms), and
+the total boot request count does not move, because the concurrency they free is
+immediately consumed by fan-out that would otherwise have landed later. The
+ticket's projected "another 40–50 requests and ~180 KB off every cold boot" is
+**REFUTED**. §9 is the disposition.
 
 Measured on the JELA-112 virtual Tizen 5.0 rig against the LIVE JSI channel.
 **The endpoint is a request COUNT, never a timing** (JELA-805). §5 was measured
-on production shell `d41a3d7a`; §5d–§5f on `b358bd10` after JELA-823/824/826 and
-JELA-817 landed — **the shell sha is quoted per section on purpose, because the
-two are not comparable**.
+on production shell `d41a3d7a`; §5d–§5f on `b358bd10`; §5g on `b43aa2b7` — **the
+shell sha is quoted per section on purpose, because they are not comparable**,
+and the shell moved three times inside this one ticket.
 
 ---
 
@@ -47,8 +59,13 @@ framing, so it is recorded here:
 | `/Items/Latest`, other  |            8 | stock web client     | **no**                          |
 
 **The three JSI producers this ticket can reach are only 10 requests directly.**
-The prize is larger than 10 because deferring a row also defers its card
-hydration — measured below at −35 home-row requests, not −10.
+
+> The original next line read: _"The prize is larger than 10 because deferring a
+> row also defers its card hydration — measured below at −35 home-row requests,
+> not −10."_ **That is refuted (§5g).** `card-hydration` at boot is **+0.7** in
+> the ON arm, not lower: the producers' hydration was never on the boot path to
+> begin with. The reachable prize is exactly the 10 requests in this table, and
+> even those do not reduce the boot total — see §5g and §9.
 
 ## 3. What ships
 
@@ -123,6 +140,14 @@ The same discovery breaks the inherited OFF-arm recipe: removing
 straight back. The harness now strips and asserts **both** keys.
 
 ## 5. Results
+
+> **§5's request table is REFUTED — do not quote the 61 → 26 pair.** Its ON arm
+> (`ON2`) loaded **5.23 MB** at boot against its control's **11.19 MB**,
+> produced **no `match-score` bucket at all** (0, where every other capture in
+> this ticket reports exactly 8), and never resolved a shell sha. It was an
+> anomalous boot, not a jp820 win, and "AC1 PASS at 26" was an artefact of it.
+> §5g is the settled AC1/AC3 result. §5b–§5f (the AC2 diagnosis, the fix, the
+> 0 px re-measure and AC4) are unaffected — they are within-capture comparisons.
 
 One matched pair, same rig, same shell `d41a3d7a`, fresh profile per boot, flag
 stripped pre-nav in **both** arms and re-seeded only for ON (JELA-809 idiom).
@@ -368,16 +393,93 @@ ON3   gate820: flag=true  reserved=3 pinned=3 fired=3 why=near  producers @boot 
 jp820 is completely inert with its key absent, and all ten producer requests are
 back on the boot path exactly as they are today. **AC4 PASSES.**
 
+### 5g. AC1 and AC3, settled — n=3 interleaved pairs, with an A/A control
+
+§5e guessed that the settle window was truncating a variable amount of work and
+that AC1 needed `boot`-phase arms with repeats. Half right: the arms were needed,
+the hypothesis was wrong, and two **different** confounds had to be instrumented
+away first (both below). Shell `b43aa2b7`, boot phase, fresh profile per boot,
+arms **interleaved** OFF/ON/OFF/ON/… never in blocks (JELA-682).
+
+```
+metric               OFFb   OFFc   OFFd    ONa    ONb    ONc   OFFmean  ONmean   delta
+total reqs            404    419    416    413    404    406     413.0   407.7    -5.3
+home-row reqs          54     62     64     52     50     50      60.0    50.7    -9.3
+home-row bytes     229779 281166 286806 242941 222001 220035    265917  228326  -37591
+producers              10     10     10      0      0      0      10.0     0.0   -10.0
+  top-picks             2      2      2      0      0      0       2.0     0.0    -2.0
+  watch-it-again        6      6      6      0      0      0       6.0     0.0    -6.0
+  my-list               2      2      2      0      0      0       2.0     0.0    -2.0
+  hss-native           10     14     14     12     14     14      12.7    13.3    +0.7
+  card-hydration       20     22     24     24     22     22      22.0    22.7    +0.7
+  match-score           8      8      8      8      8      8       8.0     8.0     0.0
+  other-row             6      8      8      8      6      6       7.3     6.7    -0.7
+```
+
+**The A/A control is the three OFF arms** — same session, byte-identical config,
+so their spread is the floor below which nothing is a result (JELA-767):
+
+| endpoint       | A/A spread | ON − OFF |             verdict |
+| -------------- | ---------: | -------: | ------------------: |
+| total reqs     |         15 |     −5.3 |    **within → NULL** |
+| home-row reqs  |         10 |     −9.3 |    **within → NULL** |
+| home-row bytes |     57,027 |  −37,591 |    **within → NULL** |
+| **producers**  |      **0** | **−10.0** | **real, and exact** |
+
+- **AC1 — home-row requests at boot ≤ 30: FAIL at 50.7, and the target is not
+  reachable by this ticket.** Every request jp820 can reach is already gone; the
+  50.7 that remain are `card-hydration` 22.7 + `hss-native` 13.3 + `match-score`
+  8 + `other-row` 6.7, which is precisely the set §2 identified as having **no
+  JSI entry to patch**. ≤30 was inherited from JELA-815 when the pool was 76;
+  with jp815's 28 already fleet-live the arithmetic no longer closes.
+- **AC3 — total cold-boot requests: MEASURED NULL.** −5.3 against an A/A spread
+  of 15. Not a regression, not a win.
+- **The 10 producer requests really do leave the boot, on every boot, with zero
+  variance** — and the aggregate still does not move. `card-hydration` is
+  **+0.7** in the ON arm, not the −16 the ticket's "deferring a row also defers
+  its card hydration" projection required. That projection is refuted: the
+  producers' hydration was not on the boot path to begin with, and the
+  concurrency their deferral frees is taken straight back by the rest of the
+  fan-out. **Freed boot concurrency is not a saving — it is a redistribution.**
+
+#### Two confounds had to be instrumented away, and each one had already faked a result
+
+**1. A 5xx storm is not a `failed` request.** The `OFF3` arm §5e used as its
+control took **116 × `502`** on `/Users/<id>/Items/<id>` preflights at boot. It
+passed every validity gate in the harness, because the gate keys on CDP's
+`errorText` and a 502 is a perfectly successful HTTP transaction as far as CDP is
+concerned — status 502, no `errorText`. Those 116 never became GETs, so the arm
+read **114 requests lighter** than its partner. Published unexamined, that is a
+spectacular jp820 AC3 win invented entirely by a flaky reverse proxy.
+`run820.mjs` now VOIDs any capture with >5 5xx responses at boot.
+
+**2. A truncation test must look at the END of the boot, not the first gap.** The
+first cut of the new gate called "quiesce" the first ≥4 s gap in request starts
+after firstCard. Boot fan-out is bursty, so that is an early **lull**: it cut
+`ONb` at fc+5,496 ms and reported **37** home rows where the boot actually issued
+**50** — manufacturing a 13-request win out of a pause. The gate that survives is
+**tail idle**: the gap between the last request the boot started and the settle
+wall that cut it. `OFFa` failed it at **673 ms** (its curve was still climbing,
+401 → 409 between fc+30 s and fc+45 s) and is excluded above; the other six boots
+sat idle 10–31 s before the wall closed and are genuine counts, not floors.
+
+> Both confounds push in the direction of a **bigger** jp820 win. A measurement
+> whose errors all flatter the hypothesis deserves the extra boot.
+
 ## 6. What is left, precisely
 
-1. **Settle AC1 and measure AC3** with `boot`-phase arms
-   (`run820.mjs <tag> 1 1 boot`), repeated, and designed to separate the
-   redistribution effect in §5e — the question is whether the 10 producer requests
-   actually leave the boot or are simply replaced by fan-out that would otherwise
-   have landed later. A scroll-phase total is necessarily a wash because the
-   deferred work lands inside the same capture.
-2. Decide the `getComputedStyle().lineHeight` tightening in §5d.
-3. Then request the fleet flip for `jellyplug.rows.reservefill`.
+Nothing measurable. All four ACs are settled (§5d, §5f, §5g), and the two items
+§6 previously listed as prerequisites for a flip request are now moot:
+
+1. ~~Settle AC1 and measure AC3 with `boot`-phase arms.~~ **Done — §5g.** The
+   question it posed ("do the 10 requests actually leave the boot, or are they
+   replaced by fan-out that would otherwise have landed later?") is answered:
+   **both.** They leave, and they are replaced.
+2. ~~Decide the `getComputedStyle().lineHeight` tightening.~~ **Moot.** It buys
+   28 px of reserved slack on a feature that is not shipping on a boot-cost
+   argument. Re-open it only if §9 option B is taken.
+3. ~~Request the fleet flip.~~ **Superseded by §9** — the flip cannot be
+   requested on the ticket's stated prize, because that prize is refuted.
 
 ## 7. Rollback
 
@@ -403,3 +505,46 @@ writes `"0"`, not a deletion.
 - Measure AC2 against the **first section**, not the container: the container's
   own top drifts by ~12–32 px between the two captures, which shows up as a
   uniform phantom shift on every row.
+- **A 5xx storm passes every gate that keys on `errorText`.** CDP reports a 502
+  as a successful transaction. Gate on `status >= 500` separately (§5g).
+- **Truncation is idle-at-the-END, never the first gap after firstCard** (§5g).
+- The A/A control costs one extra control boot and is not optional: on this
+  endpoint the A/A spread (10 home-row requests) is LARGER than the effect
+  being claimed (−9.3). Without it, §5g reads as a win.
+
+## 9. Disposition — jp820 should not be flipped on a boot-cost argument
+
+The board decision this ticket exists to serve is "flip `reservefill` for the
+fleet?", and the honest answer from §5g is **not for the reason we filed it.**
+
+What is actually true after n=3:
+
+- The **mechanism is sound and exact.** 10 → 0 producer requests at boot, every
+  boot, zero variance, with the kill switch proven inert (§5f).
+- The **anti-shift property is real and was hard-won.** 0 px against an 8 px
+  budget (§5d), where a naive deferral moves content by a whole row (333–353 px).
+- The **boot cost does not move.** Total requests −5.3 against an A/A spread of
+  15; home-row bytes −37 KB against a spread of 57 KB. Both NULL.
+
+So jp820 buys a **redistribution** of when 10 requests happen, not a saving, and
+it costs ~4 KB of channel JS plus a placeholder state on three rows. On the
+ticket's own framing — "roughly another 40-50 requests and ~180 KB off every cold
+boot" — it does not earn a flip.
+
+Two defensible options, for the board:
+
+- **A — leave it dark, or strip it.** The measured prize is null. `reservefill`
+  is seeded nowhere, so leaving the four patched entries in place is inert for
+  every TV, and §7's rollback reproduces the pre-image byte-for-byte if the
+  board would rather have it gone. Recommended.
+- **B — flip it anyway, for the anti-shift property**, and treat the request
+  count as incidental. This is only coherent if some LATER lever wants to defer
+  a mid-home row: jp820 is the thing that makes such a deferral safe, and §5d is
+  the proof that it is. Deferring the decision costs nothing, because the patch
+  is already deployed and dark.
+
+**The residual is a different ticket.** The 50.7 home-row requests still at boot
+in the ON arm are `card-hydration` 22.7 + `hss-native` 13.3 + `match-score` 8 +
+`other-row` 6.7 — the buckets §2 flagged as having no JSI entry to patch. No
+amount of reserve-then-fill reaches them; they need either a server-side change
+or a fork of the stock web client's home path.
