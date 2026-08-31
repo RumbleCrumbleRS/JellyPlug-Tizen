@@ -27,6 +27,13 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// interception short-circuits before that filter's <c>OnStarting</c> runs; they
 /// do not conflict because short-circuited responses never invoke <c>OnStarting</c>
 /// on the real static-file response.
+///
+/// <para>Short-circuiting also skips the CORS middleware that would have decorated
+/// the real static-file response, so this reproduces what the live origin emits:
+/// <c>Access-Control-Allow-Origin: *</c> whenever the request carries an
+/// <c>Origin</c> (JELA-731 hit the same thing on its own fast path). A webfont is
+/// always fetched in CORS mode, and the shell's document origin is not the server's
+/// — drop that header and every icon in the UI becomes a blank box.</para>
 /// </summary>
 public class MaterialIconsSubsetStartupFilter : IStartupFilter
 {
@@ -80,6 +87,14 @@ public class MaterialIconsSubsetStartupFilter : IStartupFilter
 
         response.Headers["Cache-Control"] = CacheControlValue;
         response.Headers["Vary"] = VaryValue;
+
+        // A font is always fetched in CORS mode. The live origin answers a request
+        // that carries an Origin with "*", and Vary above already names Origin, so
+        // the two responses stay cacheable under one key each.
+        if (!string.IsNullOrEmpty(request.Headers.Origin))
+        {
+            response.Headers["Access-Control-Allow-Origin"] = "*";
+        }
 
         // Honour If-None-Match to avoid re-sending 4 KB on warm hits.
         var etag = $"\"{asset.Sha256[..16]}\"";
