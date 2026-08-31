@@ -299,8 +299,24 @@
     // commit; readers see a cache miss and refetch (self-healing, same
     // contract as a pruned slot).
     //
-    // Flag-dark: opt-in localStorage["jellyfin.shell.lsWriteBehind"]="1";
-    // kill switch ["jellyfin.shell.lsWriteBehindDisabled"]="1". QA
+    // JELA-827: fleet-ON (opt-OUT). This shipped opt-in — enabled only when
+    // localStorage["jellyfin.shell.lsWriteBehind"] === "1" — but the "1" is
+    // written by the jp806seed JSI channel entry, which only runs AFTER the
+    // lite→SPA handoff (JELA-802). installLsWriteBehind() runs at the TOP of
+    // the shell, so on a cold boot (fresh install, LS wipe, quota eviction)
+    // the key is absent and the write-behind never installed — exactly the
+    // boot with the most first-fill localStorage traffic to batch. The enable
+    // side now reads !== "0", so an absent key means ON.
+    // Two independent kills, both preserved and both durable (the jp806 seeder
+    // guards on !== "0", so a "0" survives the channel):
+    //   ["jellyfin.shell.lsWriteBehind"]="0"          -> off
+    //   ["jellyfin.shell.lsWriteBehindDisabled"]="1"  -> off
+    // A THROWING localStorage still leaves this OFF (`enabled` stays false):
+    // this block monkey-patches Storage.prototype, so an engine whose
+    // localStorage cannot even be read is the one case to stand down on
+    // rather than wrap. That is a deliberate divergence from JELA-823's
+    // "unreadable gate = ON" for deferBitrateTest, which only defers a fetch.
+    // QA
     // surface: window.__shellLsWB {st:"hold"|"flushed", q, qc (held
     // count/chars), fl, fc (flushed count/chars), qe (flush quota
     // errors), ms (flush wall-clock)}.
@@ -313,7 +329,7 @@
       var enabled = false;
       try {
         enabled =
-          localStorage.getItem("jellyfin.shell.lsWriteBehind") === "1" &&
+          localStorage.getItem("jellyfin.shell.lsWriteBehind") !== "0" &&
           localStorage.getItem("jellyfin.shell.lsWriteBehindDisabled") !== "1";
       } catch (_) {}
       if (!enabled) return;
