@@ -24,7 +24,7 @@ cross-origin and therefore each buying a preflight too.
 
 That free destination is the whole argument. Moving a fetch into scroll time is
 only a win if scroll time is idle, and JELA-813 is the measurement that says it
-is. This ticket is not JELA-682 (which moved the genre burst *post-paint*, and
+is. This ticket is not JELA-682 (which moved the genre burst _post-paint_, and
 is confirmed still working), not JELA-745 (which decoupled row FETCH from the
 debounced MOUNT), and not JELA-681 (which found "stream the rows" is a measured
 null against firstCard). The lever here is **request count**, which is the
@@ -37,10 +37,10 @@ Two anchored textual patches against the live channel entries
 (`packages/server-shell-drop/scripts/jsi-jp815-patch.mjs`, fail-closed on any
 anchor that does not match exactly once):
 
-| entry          | edit                                              | delta    |
-| -------------- | ------------------------------------------------- | -------- |
-| `tizen-compat` | install `JellyPlug.rowViewGate`                   | +1,921 B |
-| `genre-rows`   | the 14-candidate fetch burst holds on that gate   | +206 B   |
+| entry          | edit                                            | delta    |
+| -------------- | ----------------------------------------------- | -------- |
+| `tizen-compat` | install `JellyPlug.rowViewGate`                 | +1,921 B |
+| `genre-rows`   | the 14-candidate fetch burst holds on that gate | +206 B   |
 
 ### It is not an IntersectionObserver
 
@@ -82,13 +82,13 @@ AC4 differential.
 
 Dark on the live JSI channel, verified at the wire (not from the config):
 
-| artifact                        | evidence                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------- |
-| config round-trip               | 105 entries, zero mismatches vs the POSTed body                                  |
-| no foreign writer raced us      | live config re-GET byte-identical to our patched config across all 105 entries   |
-| pre-image reconstruction        | stripping `/*jp815*/…/*jp815*/` reproduces the fetched base byte-for-byte        |
-| `/JavaScriptInjector/public.js` | `jp815` x6, both patched entry bodies byte-present, 912,803 B                    |
-| ES5                             | the whole served bundle parses at acorn `ecmaVersion: 5`                         |
+| artifact                        | evidence                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------ |
+| config round-trip               | 105 entries, zero mismatches vs the POSTed body                                |
+| no foreign writer raced us      | live config re-GET byte-identical to our patched config across all 105 entries |
+| pre-image reconstruction        | stripping `/*jp815*/…/*jp815*/` reproduces the fetched base byte-for-byte      |
+| `/JavaScriptInjector/public.js` | `jp815` x6, both patched entry bodies byte-present, 912,803 B                  |
+| ES5                             | the whole served bundle parses at acorn `ecmaVersion: 5`                       |
 
 **The off-by-one needed a THIRD save, not two.** [`jsi-config-save-off-by-one`]
 says POST twice then verify the served bundle. Two POSTs left the bundle with
@@ -127,8 +127,8 @@ halved.
 - **AC4 — kill switch as a DIFFERENTIAL: PASS.** The flag is `removeItem`-ed
   **pre-nav in every arm** and re-seeded only for ON (JELA-809 idiom), so the
   control is an explicit removal rather than an assumption about the channel.
-  The OFF arm reports `gate flag=false held=0` — the gate is *present* and
-  *disarmed*, and fetches all 14 candidates at boot exactly as today.
+  The OFF arm reports `gate flag=false held=0` — the gate is _present_ and
+  _disarmed_, and fetches all 14 candidates at boot exactly as today.
 
 ### The intervention proved it fired (protocol rule 4)
 
@@ -145,7 +145,7 @@ OFF @boot end:    flag=false held=0 fired=0 polls=0  scrolled=0 opened=0 why=nul
 counter: the burst was queued, the gate was armed, and it never opened because
 nothing scrolled. The scroll-end read is the release stated as a counter, and
 `why="near"` at **poll 61 of a 800-poll belt** is the load-bearing part — the
-gate opened on the *geometric* term, not because the fail-open belt timed out.
+gate opened on the _geometric_ term, not because the fail-open belt timed out.
 An ON boot reporting `gatePresent=false`, `flag!==true`, or neither held nor
 fired is discarded as VOID, not recorded as a null. The OFF arm has the
 symmetric gate: fewer than 10 genre queries means the capture was truncated by
@@ -164,7 +164,7 @@ every other below-the-fold section too — Top Picks (y=1,230), Watch It Again
 Those are a different problem, not more of the same one. Genre rows are safe to
 defer because they are **always last**; the others render into ranks that place
 them in the **middle** of the home, so a deferred fetch makes a row appear
-*above* the user's current scroll position and shifts everything under them. On
+_above_ the user's current scroll position and shifts everything under them. On
 a D-pad TV that moves the focused card out from under the user. Solving
 mid-list insertion (reserve the slot, then fill it) is real work and belongs in
 its own ticket.
@@ -197,7 +197,7 @@ Re-POST the config with `/*jp815*/…/*jp815*/` stripped from both entries — t
 test proves that reproduces the pre-image byte-for-byte. Because the flag is
 dark, removing the entries is a true no-op for every TV; there is no latched
 state to unwind (contrast JELA-789, where rollback had to be an active
-*remover* because the seeder had already written a key).
+_remover_ because the seeder had already written a key).
 
 Once the flag is flipped ON for the fleet, rollback becomes a seeder that
 writes `"0"`, not a deletion.

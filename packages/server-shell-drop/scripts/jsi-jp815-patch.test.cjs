@@ -34,7 +34,7 @@ let mod;
 // The anchor text is quoted VERBATIM from the live channel entries so an
 // upstream edit that moves an anchor fails here before it fails on the server.
 const TC_BODY =
-  '(function(s){var n={};n.homeItemTypes=jp512F,/*jp745*/n.rowPrefetch=(function(){return{on:on,arm:arm}})(),' +
+  "(function(s){var n={};n.homeItemTypes=jp512F,/*jp745*/n.rowPrefetch=(function(){return{on:on,arm:arm}})()," +
   "/*jp745*/n.__compatReady=!0,s.JellyPlug=n})(window);";
 
 const GR_BODY =
@@ -49,7 +49,7 @@ const GR_BODY =
 
 /** genre-rows fixture extended with the anchors jp816 also needs. */
 const GR_BODY_816 =
-  "function G(e){A||x<f.length||(A=F(f,L,Q(),o),n.log(\"sel\"),V(e),jpIdle())}" +
+  'function G(e){A||x<f.length||(A=F(f,L,Q(),o),n.log("sel"),V(e),jpIdle())}' +
   "var $=!1,jpBz=!1,jpId=!1,jpFs=null,jpUid=null;" +
   "function jpRst320(){$=!1,L={},w={},p={},A=null,x=0,jpBz=!1}" +
   GR_BODY;
@@ -63,10 +63,22 @@ function mkCfg816() {
 function mkCfg() {
   return {
     CustomJavaScripts: [
-      { Name: "JellyPlug — tizen-compat (load first)", Script: TC_BODY, Enabled: true },
-      { Name: "JellyPlug — netflix-rows", Script: "/*untouched*/void 0;", Enabled: true },
+      {
+        Name: "JellyPlug — tizen-compat (load first)",
+        Script: TC_BODY,
+        Enabled: true,
+      },
+      {
+        Name: "JellyPlug — netflix-rows",
+        Script: "/*untouched*/void 0;",
+        Enabled: true,
+      },
       { Name: "JellyPlug — genre-rows", Script: GR_BODY, Enabled: true },
-      { Name: "JellyPlug — row-see-all", Script: "/*untouched*/void 0;", Enabled: true },
+      {
+        Name: "JellyPlug — row-see-all",
+        Script: "/*untouched*/void 0;",
+        Enabled: true,
+      },
     ],
   };
 }
@@ -322,7 +334,10 @@ async function main() {
     assert.strictEqual(calls, 1, "and exactly once");
     // and a LATER hold on an already-open gate runs straight through
     let late = 0;
-    assert.strictEqual(g.hold("late", () => late++), false);
+    assert.strictEqual(
+      g.hold("late", () => late++),
+      false,
+    );
     assert.strictEqual(late, 1);
   }
 
@@ -373,7 +388,9 @@ async function main() {
 
   // --- 4i. lookahead is sized for 1080p, not for the 540 px rig ------------
   {
-    const w540 = mkGate(mkWindow({ sections: rigSections(), innerHeight: 540 }));
+    const w540 = mkGate(
+      mkWindow({ sections: rigSections(), innerHeight: 540 }),
+    );
     const w1080 = mkGate(
       mkWindow({ sections: rigSections(), innerHeight: 1080 }),
     );

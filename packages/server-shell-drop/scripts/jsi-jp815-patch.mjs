@@ -86,7 +86,9 @@
  * Also not here: the 14-candidates-for-8-rows over-fetch found while reading
  * this entry (`F()` selects the first `O`=8 qualifying candidates, so on a
  * healthy library the last 6 queries are fetched and discarded every boot).
- * That is a pure win independent of scrolling and gets its own ticket.
+ * That is a win independent of scrolling and JELA-816 already ships it as
+ * `jp816`; the two compose — jp816 shrinks the burst, jp815 moves what is left
+ * off the boot path.
  *
  * ORDERING vs jp816. Both patches edit the genre-rows fan-out, and jp816's
  * `rows:fanout-open` anchor is a SUBSTRING of this patch's `rows:hold` anchor.
@@ -151,7 +153,7 @@ export const VIEW_GATE_SRC =
   // section would otherwise pin the bottom edge at the top of the page.
   "function geo(){" +
   "var dc=s.document;if(!dc||!dc.querySelectorAll)return null;" +
-  "var l=dc.querySelectorAll(\".verticalSection\"),b=null,t=null,i,e,r,cn,cnt=0;" +
+  'var l=dc.querySelectorAll(".verticalSection"),b=null,t=null,i,e,r,cn,cnt=0;' +
   "for(i=0;i<l.length;i++){e=l[i];" +
   'cn=e&&e.className!=null?String(e.className):"";' +
   'if(cn.indexOf("jp-genre-row")!==-1)continue;' +
@@ -173,7 +175,7 @@ export const VIEW_GATE_SRC =
   "function ready(){" +
   "var g=geo();if(!g)return 0;" +
   "if(!scr&&scrolled(g))scr=1;" +
-  'if(!scr)return 0;' +
+  "if(!scr)return 0;" +
   'if(g.b<=vh()+look()){why="near";return 1}' +
   "return 0}" +
   "function flush(w){" +
@@ -237,7 +239,7 @@ export const PATCH_ROWS = {
       from: "})(f[a])}V(t),ve()",
       to:
         "})(f[a])" +
-        "/*jp815*/};if(jpG815&&jpG815.on())jpG815.hold(\"genre-rows\",jpF815);" +
+        '/*jp815*/};if(jpG815&&jpG815.on())jpG815.hold("genre-rows",jpF815);' +
         "else jpF815();/*jp815*/" +
         "}V(t),ve()",
     },
