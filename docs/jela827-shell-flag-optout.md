@@ -194,3 +194,76 @@ that fails to regenerate looks exactly like one that did not need to.**
 
 Rig: `/tmp/jela827-rig-*` (`run827.mjs` + `run827base.mjs`, out of git per
 JEL-141).
+
+---
+
+# Rollout record — LIVE in production 2026-08-31
+
+Board approved on interaction `9c1a7fc3-caeb-463d-ab2b-70b6344e7113` (accepted
+17:57Z). The accept carried no option id, so it is read as approving the card as
+written — both actions.
+
+## 1. Shell published as server-plugin v1.0.45.0
+
+`0c6bbd3` (PR #251) bumped `<Version>`; `release-server-plugin` is
+**dispatch-only**, so the release was triggered by hand with
+`confirm_version=1.0.45.0` rather than firing on the merge. Release
+`server-plugin-v1.0.45.0` at 18:13Z, then `POST /Packages/Installed/…` →
+`1.0.44.0 Superseded | 1.0.45.0 Restart` → `POST /System/Restart` → ~100 s of
+502 → `1.0.45.0 Active`.
+
+Verified on the wire, hashing the SERVED body rather than trusting the version:
+
+```
+GET /shell/shell.min.js  200  246,435 B
+sha256 a171f117…0034c4   ==  repo packages/shell-tizen/src/shell.min.js
+udcGate / homeResume / diagBeacon / ytApiStub / lsWriteBehind
+    opt-OUT sites = 1 each,  opt-in sites = 0 each
+```
+
+## 2. diagBeacon seeder guard repaired in the live channel
+
+The JELA-34 entry guarded `!== "1"`, so it rewrote `"1"` over a per-TV `"0"` and
+the kill switch survived only the boot it was set in. Changed to `!== "0"`,
+matching jp789/jp806/jp807.
+
+Sequence, per the JSI hazards: re-fetched the config **immediately** before
+patching — the entry count had moved 106 → 108 while this ticket was in flight,
+so a stale body would have deleted two sibling entries — proved the patched
+seeder's polarity in `node:vm` (absent → `"1"`, `"1"` → `"1"`, `"0"` → stays
+`"0"`, non-Tizen → no write), POSTed twice, then verified the **served** bundle:
+
+```
+GET /JavaScriptInjector/public.js  200  921,989 B
+  !== "0" guard : 1 site      !== "1" guard : 0 sites
+```
+
+Note the path is `/JavaScriptInjector/public.js` (capital S, capital I), not
+`/web/public.js` — the latter is a 404.
+
+## 3. Post-deploy cold boot on the REAL fleet path
+
+The acceptance above booted a locally-served shell. This one drops the
+`hsbCached*` seeds entirely so HSB discovers the shell through prod's own
+manifest — a local-shell acceptance proves the build, not the fleet.
+
+All five keys `null` pre-nav on a fresh profile, 68 requests, SPA reached:
+
+| flag            | cold boot, nothing seeded                    |
+| --------------- | -------------------------------------------- |
+| `udcGate`       | **ARMED** — `__shellUdc {on:1}`              |
+| `homeResume`    | **ARMED** — `__shellHR {on:1}`, chunk hook 1 |
+| `diagBeacon`    | **ARMED**                                    |
+| `ytApiStub`     | **ARMED** — stub + `YT.Player`               |
+| `lsWriteBehind` | **ARMED** — `__shellLsWB` object             |
+
+The shell came off `…/shell/shell.min.js?t=1788200384` — HSB's timeout-fallback
+path, whose URL carries **no sha at all** (the JELA-821 trap that fakes a
+provenance failure). Provenance here rests on the independent `sha256` of the
+served body above, not on the request URL.
+
+## Rollback
+
+Per-flag, no republish: set the key to `"0"` in the channel. **Never
+`removeItem`** — an absent key now means ON. All five kills are now durable;
+`diagBeacon`'s became durable with item 2 above.
