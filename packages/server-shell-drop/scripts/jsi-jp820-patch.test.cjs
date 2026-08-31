@@ -16,6 +16,11 @@
  * placeholder, and a hydration that does not move the section.
  */
 const assert = require("node:assert");
+// Arming needs BOTH keys: jp815's (now fleet-seeded) and jp820's own.
+const ARMED = {
+  "jellyplug.rows.viewgate": "1",
+  "jellyplug.rows.reservefill": "1",
+};
 const vm = require("node:vm");
 
 let mod;
@@ -489,17 +494,64 @@ async function main() {
     assert.strictEqual(d.state.timers.length, 0, "no poll armed when disarmed");
   }
   {
-    // "0" is the per-TV kill switch and must behave exactly like absent.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "0" } });
+    // THE FLEET'S CURRENT STATE, and the reason jp820 carries its own key:
+    // JELA-815's flip seeds viewgate="1" on every TV. If jp820 read that flag
+    // it would be live the instant it reached the channel.
+    const d = mkDom({ ls: { "jellyplug.rows.viewgate": "1" } });
+    const g = mkGate(d);
+    assert.strictEqual(
+      g.stats820().gate815,
+      true,
+      "precondition: jp815's half IS armed, exactly as the fleet has it",
+    );
+    assert.strictEqual(
+      g.stats820().flag,
+      false,
+      "but jp820 is NOT armed — its own key is absent",
+    );
+    let calls = 0;
+    assert.strictEqual(
+      g.reserve("top-picks", { build: () => d.mkEl("div") }),
+      null,
+      "no placeholder is mounted on a fleet TV",
+    );
+    g.holdEl("k", d.mkEl("div"), () => calls++);
+    assert.strictEqual(calls, 1, "and the shipped path runs verbatim");
+  }
+  {
+    // jp815's kill switch must still kill BOTH halves: a slot reserved behind a
+    // gate that is off would be a placeholder nothing ever fills.
+    const d = mkDom({
+      ls: {
+        "jellyplug.rows.viewgate": "0",
+        "jellyplug.rows.reservefill": "1",
+      },
+    });
     const g = mkGate(d);
     let calls = 0;
     g.holdEl("k", d.mkEl("div"), () => calls++);
-    assert.strictEqual(calls, 1, '"0" must run the shipped path');
+    assert.strictEqual(
+      calls,
+      1,
+      "jp815's kill switch overrides jp820's own arm key",
+    );
+  }
+  {
+    // ...and jp820's own "0" is a per-TV kill switch for the reserve half alone.
+    const d = mkDom({
+      ls: {
+        "jellyplug.rows.viewgate": "1",
+        "jellyplug.rows.reservefill": "0",
+      },
+    });
+    let calls = 0;
+    mkGate(d).holdEl("k", d.mkEl("div"), () => calls++);
+    assert.strictEqual(calls, 1, '"0" must behave exactly like absent');
   }
 
   // --- 6. reserve() mounts, sanitises, and marks ----------------------------
   {
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     let built = 0;
     const res = g.reserve("top-picks", {
@@ -531,7 +583,7 @@ async function main() {
   {
     // A row already rendered from cache is reserved by ADOPTION, not rebuilt —
     // that is the warm-TV path, where the hold defers a revalidation.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     const existing = mkSection(d, "jp-picks-row", 22, 300, 8);
     d.container.appendChild(existing);
@@ -551,7 +603,7 @@ async function main() {
 
   // --- 7. the gate holds, and geometry ALONE does not open it ---------------
   {
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     // A home that is still building: only one section exists, so the reserved
     // slot sits at y=498 — trivially inside any lookahead. This is the jp815
@@ -583,7 +635,7 @@ async function main() {
 
   // --- 8. scroll alone does not open it either ------------------------------
   {
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     // A tall home: the reserved slot is 5 screenfuls down.
     for (let i = 0; i < 6; i++) {
@@ -627,7 +679,7 @@ async function main() {
 
   // --- 9. per-element independence — the whole point of jp820 --------------
   {
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     for (let i = 0; i < 2; i++) {
       d.container.appendChild(mkSection(d, "row" + i, 10 + i, 300, 3));
@@ -670,7 +722,7 @@ async function main() {
   {
     // The home container never appears: give up after MOUNT_MAX and let the
     // shipped path fetch, rather than hanging a row forever.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     let calls = 0;
     const res = g.reserve("top-picks", {
@@ -689,7 +741,7 @@ async function main() {
   }
   {
     // A slot that mounts LATE is still reserved: the resolver retries per poll.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     let ready = false;
     let calls = 0;
@@ -715,7 +767,7 @@ async function main() {
   {
     // Fail-open belt, inherited from jp815: a geometry probe that silently
     // breaks must cost a late fetch, never a permanently missing row.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     const ph = mkSection(d, "jp-picks-row", 22, 300, 3, " ");
     d.container.appendChild(ph);
@@ -734,7 +786,7 @@ async function main() {
   }
   {
     // Mid-flight kill switch: flipping the flag off must release, not strand.
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     const ph = mkSection(d, "jp-picks-row", 22, 300, 3, " ");
     d.container.appendChild(ph);
@@ -755,7 +807,7 @@ async function main() {
 
   // --- 11. dedup by key, and a user switch gets its own key -----------------
   {
-    const d = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
+    const d = mkDom({ ls: ARMED });
     const g = mkGate(d);
     const ph = mkSection(d, "jp-picks-row", 22, 300, 3, " ");
     d.container.appendChild(ph);
@@ -795,8 +847,8 @@ async function main() {
 
   // --- 12. lookahead is ONE screenful, and scales with the panel ------------
   {
-    const d540 = mkDom({ ls: { [mod.FLAG_KEY]: "1" } });
-    const d1080 = mkDom({ ls: { [mod.FLAG_KEY]: "1" }, innerHeight: 1080 });
+    const d540 = mkDom({ ls: ARMED });
+    const d1080 = mkDom({ ls: ARMED, innerHeight: 1080 });
     assert.strictEqual(
       mkGate(d540).stats820().look,
       540,
@@ -808,7 +860,7 @@ async function main() {
       "and one screenful on a 1080p panel — relative, so no floor is needed",
     );
     // The floor only guards a degenerate innerHeight.
-    const dBad = mkDom({ ls: { [mod.FLAG_KEY]: "1" }, innerHeight: 0 });
+    const dBad = mkDom({ ls: ARMED, innerHeight: 0 });
     assert.strictEqual(mkGate(dBad).stats820().look, mod.LOOKAHEAD_MIN_PX);
   }
 
@@ -817,7 +869,7 @@ async function main() {
   // `top-picks` entry is PATCHED by the real patcher, then run.
   {
     const run = (flag) => {
-      const d = mkDom({ ls: flag ? { [mod.FLAG_KEY]: "1" } : {} });
+      const d = mkDom({ ls: flag ? ARMED : {} });
       const g = mkGate(d);
       const fetches = [];
       // Two sections above the reserved slot, mirroring the live home.

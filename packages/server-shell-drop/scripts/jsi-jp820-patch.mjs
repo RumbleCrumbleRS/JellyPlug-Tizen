@@ -119,12 +119,16 @@
  * ticket. Also not here: the 10-request taste-profile burst, which belongs to
  * `match-score` and renders no row at all.
  *
- * Dark by default. Nothing changes until `jellyplug.rows.viewgate` is `"1"` in
- * localStorage — the SAME flag jp815 already uses, on purpose: these are two
- * halves of one behaviour and a TV must never run half of it. With the flag off
- * `reserve()` returns null, no placeholder is mounted, `holdEl()` is never
- * reached and the shipped code path runs verbatim, which is the AC4
- * differential.
+ * Dark by default, behind jp820's OWN key. `reserve()` returns null, no
+ * placeholder is mounted, `holdEl()` runs its callback synchronously and the
+ * shipped code path executes verbatim — which is the AC4 differential.
+ *
+ * Arming needs BOTH `jellyplug.rows.viewgate = "1"` (jp815's, now fleet-seeded)
+ * AND `jellyplug.rows.reservefill = "1"` (jp820's, absent everywhere). An
+ * earlier cut of this patch shared jp815's flag; the JELA-815 fleet flip landed
+ * a `/*jp815seed*\/` entry mid-flight and that sharing put jp820 live on the
+ * fleet the moment it reached the channel. Sharing a flag with a patch that can
+ * be flipped independently is not a dark deploy.
  *
  * Usage:
  *   node jsi-jp820-patch.mjs --config <live-cfg.json> --out <patched-cfg.json>
@@ -134,8 +138,23 @@ import { readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import vm from "node:vm";
 
-/** Shared with jp815 on purpose — one flag arms the whole row-view behaviour. */
+/**
+ * jp815's flag. jp820 REQUIRES it, because a reserved slot whose fetch is not
+ * gated is pointless and a gate with no slot is the shift this ticket exists to
+ * prevent — so `jellyplug.rows.viewgate = "0"` kills both halves at once.
+ */
 export const FLAG_KEY = "jellyplug.rows.viewgate";
+/**
+ * jp820's OWN flag, and the reason this is not just FLAG_KEY.
+ *
+ * The first cut of this patch shared jp815's flag on the theory that the two
+ * are halves of one behaviour. That was wrong the moment JELA-815's fleet flip
+ * landed: a `/*jp815seed*\/` entry now writes `viewgate="1"` for every TV, so
+ * sharing the flag would have put jp820 LIVE on the fleet the instant it hit
+ * the channel — no dark period, no board flip, and (measured) a 20 px shift
+ * riding along with it. A patch is only dark if its OWN key is absent.
+ */
+export const FLAG820_KEY = "jellyplug.rows.reservefill";
 /** Stub cards per reserved row. Height is independent of this; 3 reads as a row. */
 export const STUB_CARDS = 3;
 /** Give up on mounting a placeholder after this many polls (~15 s at 750 ms). */
@@ -161,7 +180,15 @@ export const HOLD_EL_SRC =
   MOUNT_MAX +
   ",LK1=" +
   LOOKAHEAD_MIN_PX +
-  ";" +
+  ',F820="' +
+  FLAG820_KEY +
+  '";' +
+  // BOTH flags, ANDed. jp815's is now fleet-seeded, so jp820 has to carry its
+  // own key or it ships live; and it still defers to jp815's kill switch,
+  // because a slot reserved by a gate that is off would never be filled.
+  "function on820(){if(!on())return!1;" +
+  'try{return!!(s.localStorage&&s.localStorage.getItem(F820)==="1")}' +
+  "catch(e){return!1}}" +
   // One screenful of lookahead, relative to the panel (JELA-815 sizing note).
   "function look1(){var v=vh();return v<LK1?LK1:v}" +
   // `el` is the memoised resolver returned by reserve(): re-run every poll so a
@@ -188,7 +215,7 @@ export const HOLD_EL_SRC =
   "function eflush(w){var q=EQ;EQ=[];EK={};" +
   "for(var i=0;i<q.length;i++)fire820(q[i],w)}" +
   "function etick(){eH=null;if(!EQ.length)return;" +
-  'if(!on()){eflush("disarmed");return}' +
+  'if(!on820()){eflush("disarmed");return}' +
   'if(++eP>=MX){eflush("belt");return}' +
   "if(!scr&&scrolled(geo()))scr=1;" +
   "var keep=[],i,it,nd;" +
@@ -204,7 +231,7 @@ export const HOLD_EL_SRC =
   // the return value says only whether the call was DEFERRED.
   "function holdEl(k,el,fn){" +
   'if(typeof fn!="function")return!1;' +
-  "if(!on()){try{fn()}catch(e){}return!1}" +
+  "if(!on820()){try{fn()}catch(e){}return!1}" +
   "if(EK[k])return!0;" +
   "var it={k:k,el:el,fn:fn,m:0};" +
   // Resolve once now so the placeholder is in the DOM at boot, not a poll later.
@@ -228,7 +255,7 @@ export const HOLD_EL_SRC =
   // when the producer first runs, and retrying each poll is what makes the
   // reservation survive a slow home mount.
   "function reserve(k,o){" +
-  "if(!on()||!o)return null;" +
+  "if(!on820()||!o)return null;" +
   "var nd=null;" +
   "return function(){" +
   "if(nd&&nd.parentNode)return nd;" +
@@ -240,7 +267,7 @@ export const HOLD_EL_SRC =
   "var ok=!1;try{ok=!!(o.mount&&o.mount(b))}catch(e3){ok=!1}" +
   "if(!ok)return null;" +
   "RES++;nd=b;return nd}}" +
-  "function stats820(){return{flag:on(),reserved:RES,held:EQ.length,fired:eF," +
+  "function stats820(){return{flag:on820(),gate815:on(),reserved:RES,held:EQ.length,fired:eF," +
   "polls:eP,opened:eO,why:eW,nomount:NOM,scrolled:scr,vh:vh(),look:look1()}}" +
   "/*jp820*/";
 
