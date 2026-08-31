@@ -4064,6 +4064,214 @@
       'FPX.open=function(fxm){try{var fxv=String(fxm||"").toUpperCase();if(fxv!=="GET"&&fxv!=="HEAD")fcFl()}catch(_){FC.err++}' +
       "return fxO.apply(this,arguments)}}}catch(_){FC.err++}" +
       "}catch(_){G.err++}}" +
+      // JELA-830: coalesce the boot `Ids=` hydration burst by ID-UNION, not by
+      // byte-identical URL.
+      //
+      // The JELA-829 census (ATTR-b1-boot, shell a171f117, fleet flag state)
+      // found ELEVEN boot GETs carrying `Ids=`. Between them they ask for 339
+      // item ids of which only 144 are distinct — the same items fetched 2.35x
+      // over. Three of them (+30 407 / +30 436 / +30 469 ms) land inside 62 ms
+      // of each other with pairwise 100% id overlap: the same 21 items, three
+      // times, differing ONLY in which `Fields` are asked for.
+      //
+      // The coalescer above cannot see any of them. `/Users/*/Items` is already
+      // on its allowlist, but its key is the byte-identical URL and no two of
+      // these eleven URLs are identical — every one carries a different `Ids=`
+      // list. So this is not a wider window or another allowlist entry; it is a
+      // different key.
+      //
+      // Shape: a short BATCH window per (route, credentials, mode, headers,
+      // non-unionable query). Requests that land in the window are held, their
+      // id lists are unioned into ONE request, and each waiter is served a
+      // response sliced back down to exactly the ids it asked for. Simulated
+      // against the census capture: 11 -> 8 at a 150 ms window, 11 -> 6 at
+      // 250 ms (the default), 11 -> 5 at 800 ms.
+      //
+      // The window is a real delay — the batch is NOT sent until it closes —
+      // so this is only affordable because the whole burst fires at +19 s to
+      // +30 s, long after firstCard. It is post-paint hydration latency, never
+      // paint latency. A batch that closes with ONE member is re-issued with
+      // its ORIGINAL url and init, untouched: a singleton pays the window but
+      // takes on no rewrite risk at all.
+      //
+      // What may be unioned, and why each is safe (Jellyfin defaults matter
+      // here — for several of these "absent" is the PERMISSIVE value, so a
+      // naive union would RESTRICT a caller that asked for nothing):
+      //
+      //   Ids                    unioned; that is the whole point.
+      //   Limit                  set to the union's id count. MUST be >= it or
+      //                          the server truncates somebody's items.
+      //   Fields                 unioned. `Fields` is purely additive on top of
+      //                          the base DTO, so a union is always a superset.
+      //   EnableUserData         absent means TRUE -> OR. Superset.
+      //   EnableTotalRecordCount forced FALSE on the wire and SYNTHESIZED per
+      //                          slice — see below.
+      //
+      // Everything else — api_key, SortBy, IncludeItemTypes, ParentId, AND THE
+      // THREE IMAGE-SHAPE PARAMETERS (EnableImages, EnableImageTypes,
+      // ImageTypeLimit) — is part of the batch key, so it is never merged
+      // across and is carried onto the union URL verbatim. The base path is in
+      // the key too, which is what keeps `/Items?Ids=` and
+      // `/Users/{u}/Items?Ids=` — different routes, one of which ignores user
+      // data — in separate batches.
+      //
+      // The image parameters are in the KEY and not in the union because the
+      // first rig A/B measured what unioning them costs. `EnableImageTypes`
+      // absent means ALL image types and `ImageTypeLimit` absent means
+      // unlimited, so a union has to DROP them whenever one member omits them —
+      // unioning "Primary" with "absent" would strip Backdrop/Logo from the
+      // member that asked for everything. Dropping them is correct, and it is
+      // also expensive: the boot tail (21 + 21 + 6 ids at 171 / 213 / 204 B per
+      // item, 9,298 B in three requests) came back as ONE 24-id union at 493 B
+      // per item — 11,835 B. Two requests saved, 2.5 KB paid. That is the wrong
+      // trade, and it is not a tuning problem: an unrestricted image shape is
+      // ~2.5x the per-item cost. Keyed instead, the same tail merges the two
+      // members that share an image shape and leaves the third alone — one
+      // request saved and bytes DOWN.
+      //
+      // EnableTotalRecordCount: the census listed "only merge ETRC=false" as a
+      // constraint, on the grounds that a caller wanting the count cannot be
+      // served from a filtered slice. That constraint is DISCHARGED here rather
+      // than obeyed, because for an `Ids=`-bounded query the count is derivable
+      // exactly: `Ids` caps the result set at |Ids|, so whenever `Limit` >=
+      // |Ids| and `StartIndex` is 0 the server cannot truncate, and
+      // TotalRecordCount is identically Items.length. The slice therefore sets
+      // TotalRecordCount = its own length and is byte-for-byte what the server
+      // would have answered. Both preconditions are ENFORCED: a member with
+      // StartIndex > 0, or with a Limit below its own id count, is refused the
+      // batch and goes to the network alone. (Obeying the constraint literally
+      // would have left requests 0/1/2/4 — none of which sends ETRC at all —
+      // unmergeable, for 11 -> 8 instead of 11 -> 6.)
+      //
+      // Ordering: the union response is sliced by walking the SERVER's item
+      // order and keeping the member's ids, so each waiter sees its items in
+      // the same relative order the server would have returned them (sort is
+      // consistent, and `SortBy` is in the key so a batch never mixes sorts).
+      //
+      // Opt-outs, all matching the coalescer above: a Request object, a body or
+      // an AbortSignal opts the call out; Range / If-None-Match /
+      // If-Modified-Since opt it out; request headers are part of the key, and
+      // headers we cannot walk opt the call out entirely.
+      //
+      // Fallback: a non-2xx union, a body that will not parse, or a body with
+      // no `Items` array replays EVERY waiter on the real network — worst case
+      // is today's behaviour plus one wasted request. Slices are all built
+      // BEFORE any waiter is resolved, so a mid-slice throw cannot leave half
+      // the batch resolved and half replayed.
+      //
+      // SHIPS DARK. Its own opt-in flag, seeded nowhere until a board flip:
+      // localStorage['jellyfin.shell.fcIdsUnion']='1' arms it. With the key
+      // absent the shim is not installed at all and every request is on the
+      // wire. Window: localStorage['jellyfin.shell.fcIdsUnionWindowMs']
+      // (0..2000, default 250; 0 stands the shim down).
+      // Counters: window.__shellFCU {on,w,seen,skip,batch,fire,sing,serve,
+      // items,short,absent,fb,err}. The saving is (batch - fire - sing);
+      // `short` is the correctness invariant and must stay 0 — it counts ids a
+      // waiter asked for that WERE in the union response and yet did not reach
+      // its slice, which is the only way the id normalisation could be wrong.
+      'if(flg("jellyfin.shell.fcIdsUnion")&&!W.__shellFCU&&typeof W.fetch==="function"&&typeof Response==="function"&&typeof Promise==="function"){try{' +
+      'var iuW=250;try{var iuwv=localStorage.getItem("jellyfin.shell.fcIdsUnionWindowMs");' +
+      'if(iuwv!==null&&iuwv!==""){iuwv=parseInt(iuwv,10);if(iuwv>=0&&iuwv<=2000)iuW=iuwv}}catch(_){}' +
+      "if(iuW>0){" +
+      // Caps. iuMx bounds the union's id count; iuUL bounds the generated URL
+      // so a batch can never outgrow Kestrel's request-line limit.
+      "var iuMx=200,iuUL=6000;" +
+      "var IU=W.__shellFCU={on:1,w:iuW,seen:0,skip:0,batch:0,fire:0,sing:0,serve:0,items:0,short:0,absent:0,fb:0,err:0},iuB={};" +
+      // Ids may arrive dashed or undashed and in either case; the response's
+      // .Id is undashed lower hex. Normalise both sides before matching.
+      'var iuNz=function(s){return String(s).toLowerCase().replace(/-/g,"")};' +
+      'var iuDe=function(s){try{return decodeURIComponent(String(s).replace(/\\+/g," "))}catch(_){return String(s)}};' +
+      "var iuRe=/^(range|if-none-match|if-modified-since)$/;" +
+      // Header digest: identical headers join, different headers never do, and
+      // anything we cannot walk (or that varies the body) returns null = skip.
+      'var iuHd=function(o2){try{if(!o2||!o2.headers)return"";var h2=o2.headers,a2=[],i2,n2;' +
+      'var pu=function(n3,v3){n3=String(n3).toLowerCase();if(iuRe.test(n3))a2=null;else if(a2)a2.push(n3+":"+String(v3))};' +
+      'if(Object.prototype.toString.call(h2)==="[object Array]"){for(i2=0;i2<h2.length;i2++)if(h2[i2])pu(h2[i2][0],h2[i2][1])}' +
+      'else if(typeof h2.forEach==="function"){h2.forEach(function(v3,n3){pu(n3,v3)})}' +
+      "else{for(n2 in h2)pu(n2,h2[n2])}" +
+      'if(!a2)return null;a2.sort();return a2.join("|")}catch(_){return null}};' +
+      "var iuUn=/^(ids|limit|fields|enableuserdata|enabletotalrecordcount|startindex)$/;" +
+      // Parse one candidate URL. Returns null for anything not an /Items route
+      // with a non-empty Ids list, or anything whose Limit/StartIndex would
+      // make the synthesized TotalRecordCount wrong (see the note above).
+      'var iuPr=function(u){var h3=u.indexOf("#");if(h3>=0)u=u.slice(0,h3);' +
+      'var q3=u.indexOf("?");if(q3<0)return null;var bs=u.slice(0,q3);' +
+      'if(bs.length<7||bs.slice(-6)!=="/Items")return null;' +
+      "var o={b:bs,ids:[],lim:null,si:null,fl:[],eu:1,ot:[]};" +
+      'var ps=u.slice(q3+1).split("&"),i3,e3,k3,v3,lk;' +
+      "for(i3=0;i3<ps.length;i3++){if(!ps[i3])continue;" +
+      'e3=ps[i3].indexOf("=");k3=e3<0?ps[i3]:ps[i3].slice(0,e3);v3=e3<0?"":ps[i3].slice(e3+1);lk=k3.toLowerCase();' +
+      'if(!iuUn.test(lk)){o.ot.push(k3+"="+v3);continue}' +
+      'if(lk==="ids"){o.ids=iuDe(v3).split(",")}' +
+      'else if(lk==="limit"){o.lim=parseInt(iuDe(v3),10)}' +
+      'else if(lk==="startindex"){o.si=parseInt(iuDe(v3),10)}' +
+      'else if(lk==="fields"){o.fl=iuDe(v3).split(",")}' +
+      'else if(lk==="enableuserdata"){o.eu=iuDe(v3)==="false"?0:1}}' +
+      "var il=[],j3;for(j3=0;j3<o.ids.length;j3++)if(o.ids[j3])il.push(o.ids[j3]);" +
+      "if(!il.length)return null;o.ids=il;" +
+      // NaN fails both tests, which is the intent: unparseable = do not batch.
+      "if(o.si!==null&&o.si!==0)return null;" +
+      "if(o.lim!==null&&!(o.lim>=il.length))return null;return o};" +
+      // Build the union URL from the batch's merged parameter state.
+      "var iuMk=function(b){var qs=b.ot.slice();" +
+      'qs.push("Ids="+encodeURIComponent(b.ids.join(",")));' +
+      'qs.push("Limit="+b.ids.length);' +
+      'qs.push("EnableTotalRecordCount=false");' +
+      'if(b.fl.length)qs.push("Fields="+encodeURIComponent(b.fl.join(",")));' +
+      'if(!b.eu)qs.push("EnableUserData=false");' +
+      'return b.b+"?"+qs.join("&")};' +
+      // 34 = a GUID plus its %2C separator; the constant only has to be an
+      // over-estimate for the length guard to be conservative.
+      "var iuLn=function(b,ex){return b.b.length+b.otl+(b.ids.length+ex)*34+160};" +
+      "var iuRp=function(ms){var i4;for(i4=0;i4<ms.length;i4++)(function(m4){" +
+      "iuF.call(W,m4.u,m4.o).then(function(r4){m4.res(r4)},function(e4){m4.rej(e4)})})(ms[i4])};" +
+      "var iuFi=function(k4){var b=iuB[k4];if(!b)return;delete iuB[k4];" +
+      "try{clearTimeout(b.t)}catch(_){}var ms=b.m;" +
+      // One member left: re-issue it verbatim. It paid the window; it takes on
+      // none of the rewrite risk.
+      "if(ms.length<2){if(ms.length){IU.sing++;iuRp(ms)}return}" +
+      "IU.fire++;" +
+      "iuF.call(W,iuMk(b),b.o).then(function(r5){" +
+      'if(!(r5.status>=200&&r5.status<300))throw new Error("iu-status");' +
+      "return r5.text().then(function(t5){return{r:r5,t:t5}})" +
+      "}).then(function(z){" +
+      "var d=JSON.parse(z.t),rw=d&&d.Items,i5,j5,kk;" +
+      'if(!rw||typeof rw.length!=="number")throw new Error("iu-shape");' +
+      "var hh={};try{z.r.headers.forEach(function(hv,hn){hn=String(hn);var lh=hn.toLowerCase();" +
+      'if(lh!=="content-length"&&lh!=="content-encoding")hh[hn]=hv})}catch(_){hh["content-type"]="application/json"}' +
+      "var seen={};for(i5=0;i5<rw.length;i5++)if(rw[i5])seen[iuNz(rw[i5].Id)]=1;" +
+      // Build every slice BEFORE resolving anyone, so a throw here replays the
+      // whole batch instead of half-resolving it.
+      "var outs=[];for(i5=0;i5<ms.length;i5++){var m5=ms[i5],ou=[],go={};" +
+      "for(j5=0;j5<rw.length;j5++){var it=rw[j5];if(it&&m5.set[iuNz(it.Id)]){ou.push(it);go[iuNz(it.Id)]=1}}" +
+      "for(j5=0;j5<m5.ids.length;j5++){var nz=iuNz(m5.ids[j5]);if(!go[nz]){if(seen[nz])IU.short++;else IU.absent++}}" +
+      "var od={};for(kk in d)if(Object.prototype.hasOwnProperty.call(d,kk))od[kk]=d[kk];" +
+      "od.Items=ou;od.TotalRecordCount=ou.length;od.StartIndex=0;" +
+      "outs.push(JSON.stringify(od));IU.items+=ou.length}" +
+      "for(i5=0;i5<ms.length;i5++){IU.serve++;" +
+      'ms[i5].res(new Response(outs[i5],{status:z.r.status,statusText:z.r.statusText||"",headers:hh}))}' +
+      "}).then(null,function(){try{IU.fb++;iuRp(ms)}catch(_){IU.err++}})};" +
+      "var iuAd=function(u,o2){var p=iuPr(u);if(!p)return null;" +
+      "var hd=iuHd(o2);if(hd===null){IU.skip++;return null}IU.seen++;" +
+      'var k4=p.b+"\\u0000"+(o2&&o2.credentials?String(o2.credentials):"same-origin")+"\\u0000"+' +
+      '(o2&&o2.mode?String(o2.mode):"cors")+"\\u0000"+hd+"\\u0000"+p.ot.slice().sort().join("&");' +
+      "var b=iuB[k4],j4;" +
+      "if(b&&(b.ids.length+p.ids.length>iuMx||iuLn(b,p.ids.length)>iuUL)){iuFi(k4);b=null}" +
+      'if(!b){b=iuB[k4]={b:p.b,ot:p.ot,otl:p.ot.join("&").length,ids:[],set:{},fl:[],' +
+      "eu:p.eu,m:[],o:o2,t:null};" +
+      "b.t=setTimeout(function(){try{iuFi(k4)}catch(_){IU.err++}},iuW)}" +
+      "for(j4=0;j4<p.ids.length;j4++){var nz4=iuNz(p.ids[j4]);if(!b.set[nz4]){b.set[nz4]=1;b.ids.push(p.ids[j4])}}" +
+      "for(j4=0;j4<p.fl.length;j4++)if(p.fl[j4]&&b.fl.indexOf(p.fl[j4])<0)b.fl.push(p.fl[j4]);" +
+      "b.eu=b.eu||p.eu;" +
+      "var m4={ids:p.ids,set:{},u:u,o:o2,res:null,rej:null};" +
+      "for(j4=0;j4<p.ids.length;j4++)m4.set[iuNz(p.ids[j4])]=1;" +
+      "b.m.push(m4);IU.batch++;" +
+      "return new Promise(function(rs,rj){m4.res=rs;m4.rej=rj})};" +
+      "var iuF=W.fetch;W.fetch=function(fu,fo){try{" +
+      'if((fo&&fo.method?String(fo.method).toUpperCase():"GET")==="GET"&&typeof fu==="string"&&' +
+      '!(fo&&(fo.body||fo.signal))&&fu.indexOf("Ids=")>=0){var ip=iuAd(fu,fo);if(ip)return ip}' +
+      "}catch(_){IU.err++}return iuF.apply(W,arguments)};" +
+      "}}catch(_){G.err++}}" +
       // JELA-757: play-path replay — stop the play chain re-downloading the
       // item the detail page is already standing on, and stop /Intros gating
       // PlaybackInfo.
