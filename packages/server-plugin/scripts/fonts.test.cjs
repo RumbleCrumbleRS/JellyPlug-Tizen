@@ -82,6 +82,11 @@ for (const sheet of css) {
 
 // Every committed body is referenced (orphans mean the css and the dir have
 // drifted apart — usually a weight was dropped in one place only).
+// Exception: JELA-825 subset fonts that are served via middleware interception
+// (not via CSS url()) are allowed to have no CSS reference.
+const MIDDLEWARE_SERVED_FONTS = new Set([
+  "MaterialIcons-Regular-subset.woff2",
+]);
 const referenced = new Set(
   css.flatMap((sheet) =>
     [
@@ -92,6 +97,7 @@ const referenced = new Set(
   ),
 );
 for (const f of woff2) {
+  if (MIDDLEWARE_SERVED_FONTS.has(f)) continue;
   assert.ok(referenced.has(f), `${f} committed but referenced by no css`);
 }
 

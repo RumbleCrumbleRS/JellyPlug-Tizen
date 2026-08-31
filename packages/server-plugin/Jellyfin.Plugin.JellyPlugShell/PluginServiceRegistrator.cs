@@ -31,6 +31,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // JELA-731/732.
         serviceCollection.AddTransient<IStartupFilter, PluginScriptCacheStartupFilter>();
 
+        // JELA-825: intercept /web/MaterialIcons-Regular.*.woff2 and serve a 4 KB
+        // subset in place of the 125 KB full font. Must sit inside the compression
+        // filter (registered first/outermost) so the response gets gzip treatment.
+        // Registered before WebAssetCacheStartupFilter — the interception short-circuits
+        // before that filter's OnStarting runs, so there is no conflict.
+        serviceCollection.AddTransient<IStartupFilter, MaterialIconsSubsetStartupFilter>();
+
         // JELA-722: immutable headers on content-hashed /web/ chunks. IStartupFilter +
         // OnStarting is the only order-independent hook here — RegisterServices runs
         // before Startup.ConfigureServices, so a direct middleware substitution loses.
