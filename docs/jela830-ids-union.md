@@ -242,3 +242,80 @@ into a fresh profile, not a re-boot); that is unchanged.
   J830_SHA=<sha256 of the shell served at /shell830.min.js> J830_ARM=ON|OFF \
   node run830.mjs <tag> 1 1 boot
   ```
+
+---
+
+## 8. JELA-831 — the fleet flip
+
+### 8.1 Why the flag could not stay opt-in
+
+JELA-830 shipped `jellyfin.shell.fcIdsUnion` opt-in and seeded it nowhere. Arming it by
+JSI-channel seeder — the obvious move — **would have shipped the flip with its effect
+removed.** The read site is in `instantHomeBody()`, which runs at shell boot; the JSI
+channel runs only after the lite→SPA handoff (JELA-802). A seeded `"1"` therefore arms
+**one boot late** (JELA-821, and the whole JELA-827 bug class). The burst this coalesces
+is a **cold-boot** burst, so boot-1-dark is exactly where the prize lives.
+
+So the read was flipped to the JELA-827 opt-OUT shape instead. An absent key now means
+**ON**, and the flip arms on **boot 1** with no seeder at all.
+
+```
+- if(flg ("jellyfin.shell.fcIdsUnion") && ...)   // getItem(k) === "1"
++ if(flgO("jellyfin.shell.fcIdsUnion") && ...)   // getItem(k) !== "0"
+```
+
+`flgO` is a new opt-OUT companion to the existing `flg` helper, mirrored into both
+shells. It is **fail-closed on a throwing `localStorage`** — deliberately, and not for
+symmetry with `flg`: a device whose `getItem` throws can never read its own kill switch,
+and an un-killable feature is the one state no rollback can reach. That device is left
+OFF.
+
+**Rollback is `setItem("jellyfin.shell.fcIdsUnion", "0")` — never `removeItem`, which is
+now an ON arm.** Setting `fcIdsUnionWindowMs` to `"0"` is a second, independent
+stand-down. Both leave the shim _uninstalled_, not merely inert.
+
+### 8.2 Rider audit (JELA-821)
+
+The live prod shell was fetched and hashed, not assumed:
+
+|                                                              | value                                                             |
+| ------------------------------------------------------------ | ----------------------------------------------------------------- |
+| live `/shell/shell.min.js` before the flip                   | `a171f117ecf9c798…`                                               |
+| the commit that built those bytes                            | `b9b185e8` (JELA-827 5/5, `lsWriteBehind`)                        |
+| shell-source commits between the live bytes and this release | `69361d2`, `a3dc802` (**both JELA-830**), plus this ticket's flip |
+
+Nothing unrelated rides along: the only shell-source changes between the bytes on the
+wire and the release are JELA-830's two commits and JELA-831's flip. `shell.min.js` is
+unaffected by the `.csproj` version bump — `__SHELL_VER__` is substituted from
+`tizen/config.xml` (1.0.90), not from the plugin version.
+
+**Expected shell sha after this release — pinned before the release, to be confirmed on
+the wire:**
+
+```
+shell.min.js       f3fdc2df8988134aee22c7e36336abc67d6fb0c13e5ac7b3eb07cd7cf797bfad
+boot-shell.min.js  4e8c61fb3171c46353bd34474b33f0174558292e86fead22c8e3ecab70bf8365
+```
+
+### 8.3 Test evidence for the flip
+
+`ids-union.test.cjs` gained the arming differential (JELA-789/809) and kept every
+JELA-830 assertion. The static contract check now pins the **polarity**, not just the
+key: it asserts `flgO(FLAG)` is present _and_ that the old `flg(FLAG)` read is **gone**,
+so a silent revert to opt-in fails the build rather than passing a key-only check.
+
+| arm                         | before (JELA-830)                  | after (JELA-831)                                         |
+| --------------------------- | ---------------------------------- | -------------------------------------------------------- |
+| key **absent**              | shim not installed, 11 on the wire | **shim installed, census collapses, `short=0`, `err=0`** |
+| key `"0"`                   | (was ON)                           | **shim not installed, 11 on the wire**                   |
+| **throwing** `localStorage` | —                                  | **shim not installed** (device stays killable)           |
+
+All 35 checks pass. Both `src↔min` verifiers pass, `cross-shell-parity` passes (111
+shared functions), and both package suites are green. Both built mins were audited **by
+read expression**: 1 × `flgO("jellyfin.shell.fcIdsUnion")`, 0 × stale `flg(...)`.
+
+### 8.4 What this does NOT change
+
+Everything in §7 stands. The absolute wire count still tracks rendered home size, `sing`
+still dominates `fire` at a 250 ms window, and the **warm** path is still unmeasured.
+The flip changes _when_ the shim arms, not what it does once armed.

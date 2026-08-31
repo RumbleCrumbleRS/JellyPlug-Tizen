@@ -24,8 +24,12 @@
  * to a hand-written scenario.
  *
  * Pinned:
- *   - DARK BY DEFAULT: with jellyfin.shell.fcIdsUnion absent the shim is not
- *     installed at all and all eleven requests are on the wire (AC4's shape)
+ *   - JELA-831 FLEET-ON (opt-OUT): with jellyfin.shell.fcIdsUnion ABSENT the
+ *     shim IS installed and the census collapses — the arming differential.
+ *     The kill switch is the literal "0", which leaves the shim uninstalled
+ *     and all eleven requests on the wire (AC4's shape); a THROWING
+ *     localStorage also stands the shim down, so a device that cannot read
+ *     its own kill switch is never armed.
  *   - armed at the default 250 ms window the eleven collapse to SEVEN, and the
  *     339 id lookups to 144 (AC1: <= 8). At 150 ms it is 11 -> 9, which does
  *     NOT clear AC1 — pinned, because a shorter window is a weaker lever
@@ -100,7 +104,19 @@ const CREDS = JSON.stringify({
 });
 
 // ---- static contract checks ------------------------------------------------
-assert(body.indexOf('flg("' + FLAG + '")') !== -1, "opt-in flag key present");
+// JELA-831: pin the POLARITY, not just the key. The opt-in `flg(...)` read is
+// what made this boot-1-dark, so assert it is gone as well as that flgO is
+// present — otherwise a revert to `flg` would still satisfy a key-only check.
+assert(body.indexOf('flgO("' + FLAG + '")') !== -1, "opt-OUT flag read present");
+assert(
+  body.indexOf('flg("' + FLAG + '")') === -1,
+  "the opt-in flg() read must be gone (JELA-831 arms on boot 1)",
+);
+assert(
+  body.indexOf('function flgO(k){try{return localStorage.getItem(k)!=="0"}') !==
+    -1,
+  "flgO is the absent-means-ON, fail-closed-on-throw helper",
+);
 assert(body.indexOf(WKEY) !== -1, "window override key present");
 assert(body.indexOf("__shellFCU") !== -1, "counters present");
 assert(body.indexOf("</script") === -1, "no </script literal");
@@ -266,8 +282,13 @@ function makeEnv(opts) {
     for (const k of Object.keys(opts.store))
       if (opts.store[k] === null) delete store[k];
   const localStorage = {
-    getItem: (k) =>
-      Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null,
+    // opts.throwOnGet models a device whose localStorage cannot be READ at all
+    // (JELA-797 quota / a wedged engine). Such a device can never read its own
+    // kill switch, so flgO must leave it OFF — see the flgO header in shell.js.
+    getItem: (k) => {
+      if (opts.throwOnGet) throw new Error("localStorage unreadable");
+      return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+    },
     setItem: (k, v) => {
       store[k] = String(v);
     },
@@ -472,8 +493,8 @@ assert.strictEqual(
 
 // Replay the eleven captured requests at their captured offsets on the fake
 // clock, serving whatever reaches the network from the pool.
-async function replayCensus(store) {
-  const env = makeEnv({ store }).run();
+async function replayCensus(store, envOpts) {
+  const env = makeEnv(Object.assign({ store }, envOpts)).run();
   const pool = makePool(ALL_IDS);
   const recs = [];
   let t = 0;
@@ -547,17 +568,53 @@ function paramsOf(url) {
 }
 
 async function main() {
-  // ---- 1. dark by default ------------------------------------------------
+  // ---- 1. JELA-831: fleet-ON by default, killed by "0" --------------------
+  // The arming differential (JELA-789/809): under JELA-830 an absent key left
+  // the shim uninstalled, and the JELA-831 flip is exactly this inversion. The
+  // cold boot is the one that pays the burst, so an absent key must arm.
   await check(
-    "flag absent: shim is not installed and all 11 census GETs are on the wire",
+    "flag ABSENT: shim IS installed and the census collapses (JELA-831 opt-OUT)",
     async () => {
       const { env } = await replayCensus({ [FLAG]: null });
+      const IU = env.window.__shellFCU;
+      assert(IU && IU.on === 1, "counters installed on a key-absent boot");
+      assert.strictEqual(IU.w, 250, "default window is 250 ms");
+      assert(
+        env.net.length <= 8,
+        "AC1 on the key-absent boot: " +
+          env.net.length +
+          " requests, want <= 8",
+      );
+      assert.strictEqual(IU.short, 0, "correctness invariant holds");
+      assert.strictEqual(IU.err, 0, "no shim errors");
+    },
+  );
+
+  // The kill switch must leave the shim UNINSTALLED, not merely inert — that
+  // is what makes a rollback a real stand-down. Rollback is setItem(key,"0"),
+  // NEVER removeItem, which is now an ON arm.
+  await check(
+    'flag "0": shim is not installed and all 11 census GETs are on the wire',
+    async () => {
+      const { env } = await replayCensus({ [FLAG]: "0" });
       assert.strictEqual(
         env.window.__shellFCU,
         undefined,
         "no counters installed",
       );
       assert.strictEqual(env.net.length, 11, "eleven requests on the wire");
+    },
+  );
+
+  await check(
+    "THROWING localStorage: shim stands down, so an unkillable device is never armed",
+    async () => {
+      const { env } = await replayCensus({ [FLAG]: null }, { throwOnGet: 1 });
+      assert.strictEqual(
+        env.window.__shellFCU,
+        undefined,
+        "no counters installed when the gate cannot be read",
+      );
     },
   );
 
