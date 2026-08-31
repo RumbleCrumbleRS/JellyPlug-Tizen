@@ -35,11 +35,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DisableTxDynScan { get; set; }
 
     /// <summary>
-    /// JELA-30 (WS-C): refuse all opt-in boot-ring diag beacons at
-    /// POST /shell/diag. Ingest is off on the TV by default (the shell only
-    /// posts when localStorage["jellyfin.shell.diagBeacon"]==="1"), so this
+    /// JELA-30 (WS-C): refuse all boot-ring diag beacons at POST /shell/diag.
+    /// JELA-827: the TV-side gate is now opt-OUT — the shell posts unless
+    /// localStorage["jellyfin.shell.diagBeacon"]==="0" (the "1" was seeded by
+    /// the JSI channel, which runs too late to arm a cold boot). This still
     /// defaults false — flip it to have the server reject every beacon
-    /// regardless of what a fielded TV opts into.
+    /// regardless of what a fielded TV is set to.
     /// </summary>
     public bool DisableDiagIngest { get; set; }
 

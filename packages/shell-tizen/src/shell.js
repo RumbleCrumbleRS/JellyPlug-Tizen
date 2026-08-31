@@ -5844,9 +5844,20 @@
   // TV's boot health over HTTP — no sdb session, no CDP, no power-cycle (the
   // recurring cost across JELA-13/21/26/27).
   //
-  // OPT-IN, default OFF: inert unless localStorage['jellyfin.shell.diagBeacon']
-  // === '1' (settable on-device via the QA overlay localStorage seeds or the
-  // JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
+  // JELA-827: fleet-ON (opt-OUT). This shipped OPT-IN — inert unless
+  // localStorage['jellyfin.shell.diagBeacon'] === '1' — and the "1" is written
+  // by the JEL-197 JS-Injector snippet channel, which only runs AFTER the
+  // lite→SPA handoff (JELA-802). The key is therefore ABSENT on every cold
+  // boot (fresh install, LS wipe, quota eviction), so the beacon was dead for
+  // exactly the boots an operator most needs reported: first install and
+  // post-eviction. Read for the kill switch instead — an absent key now means
+  // ON. Per-TV kill: localStorage['jellyfin.shell.diagBeacon'] = '0'.
+  // NOTE: the standing JELA-34 channel seeder re-writes "1" whenever the key
+  // is not already "1", so a per-TV "0" survives only the boot it is set in
+  // until that seeder's guard is changed to `!== "0"` (tracked separately).
+  // Egress is unchanged and still self-only: the target is the user's own
+  // server (see the redaction paragraph below); the fleet is already seeded
+  // "1", so this changes behaviour ONLY on key-absent boots.
   //
   // Redaction / egress (JEL-139, WS-F folded into JELA-30): the payload is
   // built ONLY from (a) the numeric bootPhases ring records, (b) numeric
@@ -5878,7 +5889,7 @@
   function diagBeaconPostBody() {
     return (
       "(function(){try{" +
-      'try{if(localStorage.getItem("jellyfin.shell.diagBeacon")!=="1")return}catch(_){return}' +
+      'try{if(localStorage.getItem("jellyfin.shell.diagBeacon")==="0")return}catch(_){return}' +
       "var W=window;" +
       "if(W.__shellDiagBeaconArmed)return;W.__shellDiagBeaconArmed=1;" +
       "var st=W.__shellDiagBeacon={sent:0,http:0,tries:0,err:0};" +
@@ -5950,7 +5961,7 @@
   }
 
   // JELA-30: written-document injector (DOMParser path; the string fast path
-  // splices the same body). No-op unless diagBeacon==='1' — gate is inside
+  // splices the same body). No-op when diagBeacon==='0' — gate is inside
   // the body so injection stays unconditional and cheap.
   function injectDiagBeaconPost(doc) {
     var dbTag = doc.createElement("script");
@@ -8245,7 +8256,7 @@
     // JELA-29: opt-in Direct-Home prototype (no-op unless directHome=1).
     var directHomeTag =
       '<script data-shell-direct-home="1">' + directHomeBody() + "</script>";
-    // JELA-30: opt-in boot-ring diag beacon (no-op unless diagBeacon==='1').
+    // JELA-30: boot-ring diag beacon (JELA-827: opt-OUT) (no-op when diagBeacon==='0').
     var diagBeaconTag =
       '<script data-shell-diag-beacon="1">' +
       diagBeaconPostBody() +
@@ -9438,8 +9449,8 @@
         // JELA-29: opt-in Direct-Home render prototype (no-op unless
         // directHome=1) — see directHomeBody().
         injectDirectHome(doc);
-        // JELA-30: opt-in boot-ring diag beacon posts the JEL-617 ring +
-        // tx counters to POST /shell/diag (no-op unless diagBeacon==='1').
+        // JELA-30: boot-ring diag beacon (JELA-827: opt-OUT) posts the JEL-617 ring +
+        // tx counters to POST /shell/diag (no-op when diagBeacon==='0').
         injectDiagBeaconPost(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through
