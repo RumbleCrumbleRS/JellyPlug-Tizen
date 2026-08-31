@@ -220,8 +220,10 @@ const INTENTIONAL_DIVERGENCES = [
     // two shells; the divergence reasons above are unchanged).
     // JELA-827 (2/5): re-pinned — the ytApiStub gate flipped from opt-in to
     // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
-    retail: "260e9d1fe1d381e2",
-    boot: "cf12fc8f791a12fa",
+    // JELA-827 (3/5): re-pinned — the homeResume gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
+    retail: "605fda07d6bc96ac",
+    boot: "9f09ea4ba637b010",
   },
   {
     name: "buildDiagSeedScript",

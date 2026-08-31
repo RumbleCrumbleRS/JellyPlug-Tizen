@@ -2821,12 +2821,22 @@
       // Anything not matching those routes (browsing, scrolling, backing out)
       // is exactly the case this exists for.
       //
-      // Flag-dark; the flag IS the kill switch (default OFF), same as
-      // chunkWarm. Diag/proof-of-arm: window.__shellHR =
+      // JELA-827: fleet-ON (opt-OUT). This shipped as `!== "1"` -> bail, but
+      // the "1" is written by the jp789seed JSI channel entry, which only
+      // runs AFTER the lite→SPA handoff (JELA-802). That seeder's own header
+      // says it: "The shell reads the key BEFORE this channel executes, so
+      // the seed takes effect on the NEXT boot." On a cold boot (fresh
+      // install, LS wipe, quota eviction) the key is absent, so the JELA-789
+      // ring (21 reqs/138 KB per Back -> 5-10 reqs/<9 KB) was never paid
+      // back. Read for the kill switch instead: absent key means ON.
+      // Per-TV kill: localStorage["jellyfin.shell.homeResume"]="0" (the
+      // jp789 seeder guards on !== "0", so a "0" survives the channel).
+      // TTL knob: "jellyfin.shell.homeResumeTtlMs" (default 300000).
+      // Diag/proof-of-arm: window.__shellHR =
       // {on,push,wr,found,mid,wrap,ctor,hits,miss,stale,dirty,moved,err,why}.
       // An arm reporting hits:0 has not fired and must be discarded (JELA-690).
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.homeResume")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.homeResume")==="0")return;',
       "    var W=window;",
       '    var D=W.__shellHR={on:1,push:0,wr:0,found:0,mid:"",wrap:0,ctor:0,hits:0,miss:0,stale:0,dirty:0,moved:0,err:0,why:""};',
       "    var TTL=300000;",
