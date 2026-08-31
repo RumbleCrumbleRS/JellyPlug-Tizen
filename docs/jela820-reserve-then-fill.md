@@ -1,9 +1,9 @@
 # JELA-820 — reserve-then-fill for the mid-home rows (`jp820`)
 
-**Date:** 2026-08-31 · **Parent finding:** JELA-815 · **Status: merged, deployed
-DARK on the live JSI channel. AC1 and AC4 PASS. AC2 FAILS at 21 px against an
-8 px budget. AC3 not measured.** The ticket is not done; §6 is the exact next
-step.
+**Date:** 2026-08-31 · **Parent finding:** JELA-815 · **Status: deployed DARK on
+the live JSI channel (`jellyplug.rows.reservefill`, seeded nowhere). AC1 and AC4
+PASS. AC2 failed at 21 px on the first cut; §5b diagnoses it and §5c is the
+fix.** §6 is what is left.
 
 Measured on the JELA-112 virtual Tizen 5.0 rig against the LIVE production
 shell `d41a3d7a` and the LIVE JSI channel. **The endpoint is a request COUNT,
@@ -191,9 +191,6 @@ Read the table carefully, because the failure is narrower than the headline:
   than its hydrated form** (333 → 353), and that 20 px propagates to every
   section below it. My List has the same 333 → 353 growth, but sits above only
   the genre rows, which append last anyway.
-- `watch-it-again` hydrated at **exactly** its placeholder height (333 → 333),
-  so the stub geometry is not wrong in general — it is wrong for the top-picks
-  and my-list card kind specifically.
 - Without jp820 the same deferral would shift content by a **whole row**
   (333–353 px). 21 px is a 94% reduction. It is still not ≤ 8 px, and the AC is
   the AC.
@@ -202,20 +199,89 @@ A zero-height node (index 4, the genre-rows anchor) reports a 5,464 px "move".
 It has `h=0` in both states, cannot shift anything, and is excluded — a future
 AC2 probe must skip zero-height sections or it reports a spurious failure.
 
+### 5b. The 20 px, diagnosed — it is a CSS clamp, not the stub markup
+
+The first reading of the table above was wrong in a way worth recording:
+`watch-it-again` hydrating at exactly 333 → 333 was taken as evidence that "the
+stub is wrong for one card kind, not in general", and the proposed fix was to
+convert the stubs to the card builders' poster branch.
+
+Both halves of that are refuted by the shipped CSS.
+
+**The poster branch cannot be the cause.** `.jp-picks-card .cardImageContainer`
+(and the `again` / `my-list` twins) take their height entirely from
+`padding-top:150%`, and BOTH the poster `<img>` and the `--noart` fallback
+`<div>` are `position:absolute`. The two branches are byte-identical geometry, so
+swapping the stub onto the poster branch would have moved nothing — one rig boot
+spent to learn that. (`--wide` drops to `56.25%`, i.e. shorter, so a non-wide
+stub is the tall case there too.)
+
+**The actual cause is one line-clamp rule:**
+
+```css
+.layout-tv .jp-genre-row  .jp-genre-card   .cardText,
+.layout-tv .jp-picks-row  .jp-picks-card   .cardText,
+.layout-tv .jp-again-row  .jp-again-card   .cardText,
+.layout-tv .jp-my-list    .jp-my-list-card .cardText
+  { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical;
+    -webkit-line-clamp:2; overflow:hidden }
+```
+
+A card title is **clamped** at two lines but free to occupy **one**. A row is
+therefore one line (20 px) taller as soon as ANY card in it has a title that
+wraps. Stub names are `U+00A0` and never wrap, so a placeholder is always the
+one-line form — and every number in the table follows:
+
+| row            | placeholder | hydrated | why                                       |
+| -------------- | ----------: | -------: | ----------------------------------------- |
+| top-picks      |         333 |      353 | some title wraps                          |
+| my-list        |         333 |      353 | primary is `sub`, secondary is `name`     |
+| watch-it-again |         333 |      333 | no title happened to wrap — **data luck** |
+
+So `watch-it-again` passing was never evidence of correctness. The row height is
+a **function of the items**, and a placeholder cannot know them. No stub content
+fixes that.
+
+### 5c. Fix: reserve the row's TALLEST state, not the placeholder's
+
+`pin820` measures the placeholder's natural height plus `TEXT_LINE_SLACK` (2)
+times the height of one rendered `.cardText` — read off the placeholder's own
+first `.cardText`, whose content is a single `U+00A0` and is therefore exactly
+one line — and writes the sum as an inline `min-height` on the **section**.
+
+- Two lines is the exact worst case, not a guess: every producer builds at most
+  two `.cardText` rows per card, and each is clamped at 2.
+- The **section** is the right node because `fill` replaces the whole
+  `.itemsContainer`; a reservation on the container would be discarded by the
+  swap it is supposed to survive. This is the one thing jp820 deliberately
+  leaves behind on a surviving node (contrast `pointer-events:none`, which must
+  never be left there).
+- Measuring the live node beats any constant: it tracks font-size, the panel's
+  vw-derived card width, and whatever the theme does to line-height.
+- The value is a running **maximum** kept on the node as `data-jp820h`, refreshed
+  at mount and on every poll, with the existing `min-height` cleared first so the
+  reservation can never feed back into its own input. The theme CSS is injected
+  by another channel entry, so a measurement taken before it lands
+  **under**-reserves — degrading to today's behaviour — rather than compounding.
+
+Hydrated content is `<=` the reservation by construction, so the section's height
+is unchanged across the swap and nothing below it moves.
+
+**The test fixture was why this shipped.** `jsi-jp820-patch.test.cjs` set
+`a.h=300` on every card; a fixture that *declares* card height cannot see a
+height that *depends on the items*, so it passed while the rig measured 21 px.
+Card height is now derived from the card's `.cardText` children with the two-line
+clamp modelled, and the fake pool returns one wrapping title. With `pin820`
+neutered the suite fails with `AC2: section 4 moved 20 px` — the production
+number.
+
 ## 6. What is left, precisely
 
-1. **Close the 20 px.** The stub takes the card builder's `--noart` fallback
-   branch; the hypothesis is that the real poster box is 20 px taller for the
-   top-picks/my-list card kind. The fix to try is making `sane820` convert stub
-   cards to the poster branch — drop the `--noart` class token, remove the
-   fallback child, and append the builders' own
-   `img.jp-card-poster` with a 1×1 transparent data URI and the identical
-   `cssText`. That costs no request and is generic across all three producers.
-   Re-measure AC2; the target is the `watch-it-again` result (Δh = 0) for all
-   three.
-2. **Measure AC3** with `boot`-phase arms (`run820.mjs <tag> 1 1 boot`), which
-   is the only phase where a cold-boot total is meaningful.
-3. Then request the fleet flip for `jellyplug.rows.reservefill`.
+1. **Measure AC3** with `boot`-phase arms (`run820.mjs <tag> 1 1 boot`), which is
+   the only phase where a cold-boot total is meaningful — a scroll-phase total is
+   necessarily a wash (527 vs 528) because the deferred work lands inside the
+   same capture.
+2. Then request the fleet flip for `jellyplug.rows.reservefill`.
 
 ## 7. Rollback
 
