@@ -6968,48 +6968,47 @@
         // JELA-824: wait for the bulk pre-fetch to settle, then serve from the
         // map if present; fall back to individual fetch on any miss or failure.
         var hash = rel.slice(3, -3); // strip leading "tx/" and trailing ".js"
-        return (d.bulkReady || Promise.resolve())
-          .then(function () {
-            if (d.bulkBodies && typeof d.bulkBodies[hash] === "string") {
-              var body = d.bulkBodies[hash];
-              if (!body.length || !loweredBodyOk(body)) {
+        return (d.bulkReady || Promise.resolve()).then(function () {
+          if (d.bulkBodies && typeof d.bulkBodies[hash] === "string") {
+            var body = d.bulkBodies[hash];
+            if (!body.length || !loweredBodyOk(body)) {
+              d.r++;
+              return null;
+            }
+            d.h++;
+            // JELA-187: a drop hit means this static body needs lowering.
+            try {
+              localStorage.setItem(DROP_NEEDED_KEY, "1");
+            } catch (_) {}
+            return body;
+          }
+          return fetch(d.base + rel, { credentials: "omit" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r.text();
+            })
+            .then(function (body) {
+              if (
+                typeof body !== "string" ||
+                !body.length ||
+                !loweredBodyOk(body)
+              ) {
                 d.r++;
                 return null;
               }
               d.h++;
-              // JELA-187: a drop hit means this static body needs lowering.
+              // JELA-187: a drop hit means this static body needs lowering —
+              // the warm-boot string fast path must never replay its raw src.
               try {
                 localStorage.setItem(DROP_NEEDED_KEY, "1");
               } catch (_) {}
               return body;
-            }
-            return fetch(d.base + rel, { credentials: "omit" })
-              .then(function (r) {
-                if (!r.ok) throw new Error("HTTP " + r.status);
-                return r.text();
-              })
-              .then(function (body) {
-                if (
-                  typeof body !== "string" ||
-                  !body.length ||
-                  !loweredBodyOk(body)
-                ) {
-                  d.r++;
-                  return null;
-                }
-                d.h++;
-                // JELA-187: a drop hit means this static body needs lowering —
-                // the warm-boot string fast path must never replay its raw src.
-                try {
-                  localStorage.setItem(DROP_NEEDED_KEY, "1");
-                } catch (_) {}
-                return body;
-              })
-              .catch(function () {
-                d.f++;
-                return null;
-              });
-          });
+            })
+            .catch(function () {
+              d.f++;
+              return null;
+            });
+        });
       })
       .catch(function () {
         return null;
