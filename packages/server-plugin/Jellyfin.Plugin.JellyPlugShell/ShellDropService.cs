@@ -86,6 +86,8 @@ public class ShellDropService
 
     private readonly object _txManifestGzipLock = new();
     private (long Length, DateTime LastWriteUtc, byte[]? Gzip) _txManifestGzip = (-1, default, null);
+    private readonly object _txCountLock = new();
+    private (DateTime LastWriteUtc, int Count) _txCount = (default, -1);
 
     public byte[] ShellBytes { get; }
 
@@ -271,6 +273,50 @@ public class ShellDropService
         return _txGzip.GetOrAdd(
             hash,
             h => new Lazy<byte[]?>(() => GzipTxFile(h), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
+
+    /// <summary>
+    /// JELA-833: how many tx bodies this drop actually publishes — the ceiling
+    /// any honest /shell/tx-bundle request can need. JELA-824 hard-coded a cap
+    /// of 200 against a manifest already at 192 (96% of it) and then TRUNCATED
+    /// silently past the cap, so the caller could not tell a short answer from
+    /// a complete one; deriving the bound from the drop removes both the magic
+    /// number and the drift. Validated against the directory's mtime on each
+    /// call — a publish is an atomic rename, so a stale stamp costs one
+    /// recount, never a torn read. Returns 0 when the drop is absent, which
+    /// the controller reads as "no bundle to serve".
+    /// </summary>
+    public int TxBodyCount()
+    {
+        try
+        {
+            var info = new DirectoryInfo(TxDir);
+            if (!info.Exists)
+            {
+                return 0;
+            }
+
+            var stamp = info.LastWriteTimeUtc;
+            lock (_txCountLock)
+            {
+                if (_txCount.LastWriteUtc == stamp && _txCount.Count >= 0)
+                {
+                    return _txCount.Count;
+                }
+            }
+
+            var n = Directory.EnumerateFiles(TxDir, "*.js", SearchOption.TopDirectoryOnly).Count();
+            lock (_txCountLock)
+            {
+                _txCount = (stamp, n);
+            }
+
+            return n;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     /// <summary>
