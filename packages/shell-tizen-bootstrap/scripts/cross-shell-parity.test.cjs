@@ -224,8 +224,12 @@ const INTENTIONAL_DIVERGENCES = [
     // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
     // JELA-827 (4/5): re-pinned — the udcGate gate flipped from opt-in to
     // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
-    retail: "50aff9f20214f577",
-    boot: "b8d6bfca4d3e9351",
+    // JELA-833: re-pinned — __txDropGet stopped awaiting the JELA-824 global
+    // d.bulkReady and now calls the shared d.want() coalescer on
+    // window.__shellTxDrop. Identical block in both seeds (both go through
+    // the same batcher installed by txBundleAttach); reasons unchanged.
+    retail: "ecb2af648d7e2bd9",
+    boot: "353482310345646b",
   },
   {
     name: "buildDiagSeedScript",

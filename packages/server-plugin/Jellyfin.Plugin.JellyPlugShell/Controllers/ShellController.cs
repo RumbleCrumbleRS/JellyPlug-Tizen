@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Net.Http.Headers;
@@ -337,9 +338,23 @@ public class ShellController : ControllerBase
     }
 
     /// <summary>
+    /// Mirrors the shell's TXB_MAX (JELA-833 txBundleAttach) — the largest
+    /// batch a well-behaved client sends in one POST, and the floor under the
+    /// server's derived cap.
+    /// </summary>
+    private const int ClientBatchMax = 64;
+
+    /// <summary>
     /// JELA-824: bulk tx-body endpoint — collapses the 65–68 per-body GETs on
-    /// a cold boot to a single round trip. The client POSTs the full id list it
-    /// already knows from the manifest and receives a hash→body JSON map.
+    /// a cold boot into a handful of round trips. The client POSTs a batch of
+    /// the hashes it has ACTUALLY discovered and receives a hash→body JSON map.
+    ///
+    /// JELA-833: the client used to POST every id in the manifest, because the
+    /// needed set is discovered lazily and unioning was the only way to know it
+    /// up front. That shipped 18.8 MB per boot against a ~200 KB baseline. The
+    /// client now coalesces discovered hashes into batches instead, so this
+    /// endpoint must stay correct for PARTIAL id sets and repeat calls within
+    /// one boot — it always was, but that is now the normal case, not the edge.
     ///
     /// Cache policy: no-store. The request body (id set) can vary per client
     /// and per JSI scripts deploy (ceInvalidate clears every TX_PFX key so the
@@ -364,9 +379,13 @@ public class ShellController : ControllerBase
     [Consumes("application/json")]
     public async Task<IActionResult> PostTxBundle()
     {
-        // Hard cap: each body is ≤12 KB and the drop is ~70 entries.
-        // 200 gives comfortable headroom without allowing abuse.
-        const int MaxIds = 200;
+        // JELA-833: the bound is the drop's own body count, not a magic
+        // number. JELA-824 used a literal 200 against a manifest already at
+        // 192 — 96% of the cap — so the next drop rebuild would have crossed
+        // it silently. Floor at the client's per-POST batch size so a small
+        // or momentarily-unreadable drop can never 413 an honest request.
+        var published = _drop.TxBodyCount();
+        var maxIds = Math.Max(published, ClientBatchMax);
 
         string[] ids;
         try
@@ -385,9 +404,13 @@ public class ShellController : ControllerBase
             return BadRequest();
         }
 
-        if (ids.Length > MaxIds)
+        if (ids.Length > maxIds)
         {
-            ids = ids[..MaxIds];
+            // Explicit, not truncated. A short map is indistinguishable from a
+            // complete one on the client (a missing hash just falls back to the
+            // per-body GET), so silent truncation would have hidden the very
+            // drift that made this cap wrong in the first place.
+            return StatusCode(StatusCodes.Status413PayloadTooLarge);
         }
 
         var result = new Dictionary<string, string>(ids.Length, StringComparer.Ordinal);

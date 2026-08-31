@@ -1956,8 +1956,12 @@
       "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
       '      var rel=d.entries[__txFnv(String(code||""))];',
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
-      // JELA-824: wait for bulk pre-fetch, serve from map if present.
-      '      var hash=rel.slice(3,-3);return(d.bulkReady||Promise.resolve()).then(function(){if(d.bulkBodies&&typeof d.bulkBodies[hash]==="string"){var b=d.bulkBodies[hash];if(!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});});',
+      // JELA-833: same coalescer as the widget side — d.want is installed on
+      // the shared window.__shellTxDrop by txBundleAttach, so this seed and
+      // txDropResolve batch into ONE queue instead of each running their own.
+      // d.want absent (kill switch) or resolving null both fall through to
+      // the per-body GET below.
+      '      var hash=rel.slice(3,-3);var vb=d.want?d.want(hash):Promise.resolve(null);return vb.then(function(pb){if(typeof pb==="string"){if(!pb.length||!__loweredOk(pb)){d.r++;return null;}d.h++;return pb;}return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});});',
       "    }",
       // JELA-183: handoff-safe lazy Babel for the dynamic pipelines + primer.
       // The widget-side window.__ensureBabel (bootstrap index.html) loads
@@ -7062,13 +7066,108 @@
       f: 0,
     };
     window.__shellTxDrop = d;
-    // JELA-824: pre-fetch all tx bodies in one POST instead of 65-68
-    // individual GETs. The manifest already lists every hash, so we know
-    // the full id set here. bulkReady settles once the map is populated
-    // (or fails silently — txDropResolve falls back to per-body fetch).
-    if (!txBundleDisabled()) {
-      var ids = Object.keys(e);
-      d.bulkReady = fetch(u + "/shell/tx-bundle", {
+    txBundleAttach(d, u);
+    return d;
+  }
+  // ---- JELA-833: tx-bundle request coalescer -----------------------------
+  //
+  // JELA-824 shipped a bundle that POSTed Object.keys(manifest) — the whole
+  // 192-entry manifest, 18.8 MB on the wire — because the needed set is
+  // discovered lazily and unioning was the only way to know it up front.
+  // That traded a once-ever ~200 KB of `immutable` per-body GETs for an
+  // 18.8 MB `no-store` download on EVERY boot (85-97x; see the JELA-833 QA
+  // verdict on JELA-824).
+  //
+  // The needed set really is discovered lazily — but it is not discovered
+  // SLOWLY. Measured on the JELA-112 rig against served shell f3fdc2df: the
+  // 68 tx hashes of a cold boot land in 7 distinct 100 ms buckets, median
+  // inter-arrival 2 ms, with 62 of the 68 inside a single ~300 ms burst,
+  // because the SPA splices its script tags in bursts. So batching what was
+  // ACTUALLY discovered keeps the baseline byte profile and still collapses
+  // the round trips. Never speculate: any hash we ask for and do not use is
+  // a byte we did not owe.
+  //
+  // Shape:
+  //   * one POST in flight at a time — hashes discovered while a POST is out
+  //     ride the next one for free, so a slow round trip widens batches
+  //     instead of multiplying them;
+  //   * the debounce window DOUBLES per batch (60 ms -> 1000 ms cap), which
+  //     bounds the batch count by the log of the discovery span rather than
+  //     linearly in the hash count;
+  //   * a batch below TXB_MIN falls back to the per-body GET. One `no-store`
+  //     POST and one `immutable` GET cost the same round trip, and only the
+  //     GET is still there on the next boot — so a lone hash must never
+  //     become a bundle request. This is also what keeps the JEL-621 primer
+  //     (serial drain, one hash at a time) on the cacheable path.
+  //
+  // QA counters on window.__shellTxDrop: bulkBatches (POSTs issued),
+  // bulkWanted (hashes offered to the batcher), bulkSolo (batches dropped to
+  // per-body for being under TXB_MIN), bulkBodies (map of fetched bodies).
+  var TXB_W0 = 60; // first debounce window, ms
+  var TXB_WMAX = 1000; // window cap after doubling, ms
+  var TXB_MAX = 64; // ids per POST — bounds one response
+  var TXB_MIN = 2; // below this, use the immutable per-body GET
+  function txBundleAttach(d, serverUrl) {
+    // Leaves d.want undefined when the kill switch is set, which is exactly
+    // what txDropResolve reads to take the per-body path (AC4 differential).
+    if (txBundleDisabled()) return;
+    var url = serverUrl + "/shell/tx-bundle";
+    var q = {}; // hash -> {cbs:[resolve...], sent:0|1}
+    var bodies = {}; // hash -> lowered body text
+    var busy = 0;
+    var timer = null;
+    var due = 0;
+    var win = TXB_W0;
+    d.bulkBodies = bodies;
+    d.bulkBatches = 0;
+    d.bulkWanted = 0;
+    d.bulkSolo = 0;
+    function anyPending() {
+      for (var k in q) if (q[k] && !q[k].sent) return true;
+      return false;
+    }
+    function settle(ids, map) {
+      // A hash the server omitted resolves null — the caller falls back to
+      // the per-body GET, so a partial or failed bundle is never fatal.
+      for (var i = 0; i < ids.length; i++) {
+        var h = ids[i];
+        var w = q[h];
+        var body = map && typeof map[h] === "string" ? map[h] : null;
+        if (body !== null) bodies[h] = body;
+        delete q[h];
+        if (w) {
+          for (var j = 0; j < w.cbs.length; j++) {
+            try {
+              w.cbs[j](body);
+            } catch (_) {}
+          }
+        }
+      }
+      busy = 0;
+      if (anyPending()) arm(win);
+    }
+    function flush() {
+      timer = null;
+      due = 0;
+      if (busy) return; // settle() re-arms
+      var ids = [];
+      for (var k in q) {
+        if (q[k] && !q[k].sent) {
+          ids.push(k);
+          if (ids.length >= TXB_MAX) break;
+        }
+      }
+      if (!ids.length) return;
+      if (ids.length < TXB_MIN) {
+        d.bulkSolo++;
+        settle(ids, null);
+        return;
+      }
+      for (var i = 0; i < ids.length; i++) q[ids[i]].sent = 1;
+      busy = 1;
+      d.bulkBatches++;
+      win = Math.min(win * 2, TXB_WMAX);
+      fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "omit",
@@ -7077,14 +7176,36 @@
         .then(function (r) {
           return r.ok ? r.json() : null;
         })
-        .then(function (map) {
-          if (map && typeof map === "object") d.bulkBodies = map;
+        .then(function (m) {
+          settle(ids, m && typeof m === "object" ? m : null);
         })
-        .catch(function () {});
-    } else {
-      d.bulkReady = Promise.resolve();
+        .catch(function () {
+          settle(ids, null);
+        });
     }
-    return d;
+    function arm(ms) {
+      var at = Date.now() + ms;
+      if (timer && due <= at) return; // an earlier flush is already armed
+      if (timer) clearTimeout(timer);
+      due = at;
+      timer = setTimeout(flush, ms);
+    }
+    // Promise<string|null>. null means "not from the bundle" — the caller
+    // falls back to the per-body GET. Never rejects.
+    d.want = function (hash) {
+      if (typeof bodies[hash] === "string")
+        return Promise.resolve(bodies[hash]);
+      var w = q[hash];
+      if (!w) {
+        w = q[hash] = { cbs: [], sent: 0 };
+        d.bulkWanted++;
+      }
+      var p = new Promise(function (res) {
+        w.cbs.push(res);
+      });
+      if (!w.sent) arm(win);
+      return p;
+    };
   }
   function ceTxmRead(u) {
     try {
@@ -7225,13 +7346,17 @@
           d.m++;
           return null;
         }
-        // JELA-824: wait for the bulk pre-fetch to settle, then serve from the
-        // map if present; fall back to individual fetch on any miss or failure.
+        // JELA-833: offer this hash to the coalescer and wait only for ITS
+        // batch — never for a single all-or-nothing fetch of everything
+        // (JELA-824 serialised the whole slow-path transpile behind one
+        // 18.8 MB download). d.want is absent when the kill switch is set,
+        // and resolves null whenever the bundle did not carry the body, so
+        // both cases land on the per-body GET below.
         var hash = rel.slice(3, -3); // strip leading "tx/" and trailing ".js"
-        return (d.bulkReady || Promise.resolve()).then(function () {
-          if (d.bulkBodies && typeof d.bulkBodies[hash] === "string") {
-            var body = d.bulkBodies[hash];
-            if (!body.length || !loweredBodyOk(body)) {
+        var viaBundle = d.want ? d.want(hash) : Promise.resolve(null);
+        return viaBundle.then(function (bundled) {
+          if (typeof bundled === "string") {
+            if (!bundled.length || !loweredBodyOk(bundled)) {
               d.r++;
               return null;
             }
@@ -7240,7 +7365,7 @@
             try {
               localStorage.setItem(DROP_NEEDED_KEY, "1");
             } catch (_) {}
-            return body;
+            return bundled;
           }
           return fetch(d.base + rel, { credentials: "omit" })
             .then(function (r) {
