@@ -17,7 +17,7 @@ One expression in `stripJeScriptsForDefer()`:
 ```
 
 `deferJe` is seeded fleet-ON by the jp773 JSI channel entry, but the channel
-only runs after the lite→SPA handoff (JELA-802) — one boot *after* this read
+only runs after the lite→SPA handoff (JELA-802) — one boot _after_ this read
 site. So every boot that began with the key absent (a first install, a
 re-install, any localStorage eviction) fell through to the stock pre-paint
 injection and paid all 152 JellyfinEnhanced modules — 670,857 B, 36% of a cold
@@ -29,10 +29,10 @@ A release ships **all** of main, so the audit is on the shell bytes, not on the
 ticket list. Between the previously-served shell and this one there was exactly
 one shell-source commit:
 
-| | sha256 | read site |
-|---|---|---|
+|                           | sha256      | read site            |
+| ------------------------- | ----------- | -------------------- |
 | served before (v1.0.42.0) | `d41a3d7a…` | `…deferJe") !== "1"` |
-| served after (v1.0.43.0) | `b358bd10…` | `…deferJe") === "0"` |
+| served after (v1.0.43.0)  | `b358bd10…` | `…deferJe") === "0"` |
 
 `git diff cd86bbf origin/main -- packages/shell-tizen/src/` is that expression,
 its comment, and the `catch` that no longer bails. Everything else merged since
@@ -48,7 +48,7 @@ in the shell, and did not ride here.
 3. **Audited the shipped artifact, not just the release.** Downloaded the
    published zip, extracted `Jellyfin.Plugin.JellyPlugShell.dll` and grepped the
    embedded shell **by read expression**: 1 × `deferJe")==="0"`, 0 ×
-   `deferJe")!=="1"`. Grepping by *key* is useless here — `deferJe`
+   `deferJe")!=="1"`. Grepping by _key_ is useless here — `deferJe`
    substring-matches the unrelated `deferJeMs` tunable.
 4. `PluginUpdates` scheduled task → `/Plugins` listed 1.0.43.0 with status
    `Restart` on the **first** trigger (the stale-manifest gotcha did not bite).
@@ -77,17 +77,17 @@ back to `shell.min.js?t=<now>`, a URL carrying no sha at all. The driver also
 re-audits the executed bytes for the read expression and refuses to start unless
 the served artifact is the patched one.
 
-| | ON — key absent | ON — key absent | OFF — kill switch |
-|---|---|---|---|
-| capture | `PRODON2` | `PRODON5` | `PRODOFF3` |
-| executed shell sha | `b358bd10…` | `b43aa2b7…` | `b43aa2b7…` |
-| `deferJe` at nav | `null` | `null` | `"0"` |
-| `__shellJeDefer` | `{on:1,held:1,rel:1,inj:1}` | `{on:1,held:1,rel:1,inj:1}` | **absent** |
-| **JE modules pre-paint** | **0 / 152** | **3 / 152** | **152 / 152** |
-| all `/JellyfinEnhanced/*` pre-paint bytes | **0** | 51,231 | **1,118,155** |
-| JE module window, from nav | +17,570 .. +19,377 ms | +47,796 .. +48,833 ms | +26,723 .. +31,614 ms |
-| firstCard | 15,019 ms | 48,281 ms | 40,653 ms |
-| provenance / validity gates | pass | pass | pass |
+|                                           | ON — key absent             | ON — key absent             | OFF — kill switch     |
+| ----------------------------------------- | --------------------------- | --------------------------- | --------------------- |
+| capture                                   | `PRODON2`                   | `PRODON5`                   | `PRODOFF3`            |
+| executed shell sha                        | `b358bd10…`                 | `b43aa2b7…`                 | `b43aa2b7…`           |
+| `deferJe` at nav                          | `null`                      | `null`                      | `"0"`                 |
+| `__shellJeDefer`                          | `{on:1,held:1,rel:1,inj:1}` | `{on:1,held:1,rel:1,inj:1}` | **absent**            |
+| **JE modules pre-paint**                  | **0 / 152**                 | **3 / 152**                 | **152 / 152**         |
+| all `/JellyfinEnhanced/*` pre-paint bytes | **0**                       | 51,231                      | **1,118,155**         |
+| JE module window, from nav                | +17,570 .. +19,377 ms       | +47,796 .. +48,833 ms       | +26,723 .. +31,614 ms |
+| firstCard                                 | 15,019 ms                   | 48,281 ms                   | 40,653 ms             |
+| provenance / validity gates               | pass                        | pass                        | pass                  |
 
 **COUNT claim only.** The box carried loadavg 4.8–11.4 from concurrent sibling
 rigs and n=1 per arm, so firstCard is recorded but **not** claimed.
