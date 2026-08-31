@@ -8994,16 +8994,32 @@
   // module fan-out — deferring to paint+delay moves that start by seconds,
   // not the features' existence.
   //
-  // Flag-dark: opt in with localStorage["jellyfin.shell.deferJe"]="1"
-  // (post-paint delay tunable via "jellyfin.shell.deferJeMs", default 3000).
+  // JELA-821: the gate is opt-OUT, not opt-in. It shipped opt-in and the
+  // jp773 channel seed of "jellyfin.shell.deferJe"="1" arms ONE BOOT LATE —
+  // the JSI channel only runs after the lite->SPA handoff (JELA-802), while
+  // this read site runs on the boot BEFORE it. So any boot that starts with
+  // the key absent — a first install, a re-install, any localStorage
+  // eviction — read null !== "1" and paid the whole JE module storm
+  // pre-paint (measured 152 modules / 670,857 B, 36% of a cold boot's
+  // requests, in 9/9 valid boots across two rigs; JELA-813/819). Reading for
+  // the "0" kill switch instead changes behaviour ONLY on those boots: the
+  // fleet seed is already "1", and an explicit "0" still opts a device out.
+  // A throwing localStorage now defers as well (same shape as
+  // stripDeadMediaBarJs below) — unreadable storage is exactly the case the
+  // fleet default is meant to cover. Adding the key to liteAdoptDefaults'
+  // flagDefaults whitelist would NOT fix this: that map is itself cached one
+  // boot behind (LITE_DEFAULTS_KEY is stale-one-boot by contract), so it is
+  // absent on a true first boot too.
+  //
+  // Kill switch: localStorage["jellyfin.shell.deferJe"]="0" restores the
+  // stock pre-paint injection (post-paint delay still tunable via
+  // "jellyfin.shell.deferJeMs", default 3000).
   // Diag/counter (perf-protocol rule 4 — the ring's ON arm must prove the
   // lever fired): window.__shellJeDefer = {on,held,urls,rel,inj,tRel,tInj}.
   function stripJeScriptsForDefer(html) {
     try {
-      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
-    } catch (_) {
-      return html;
-    }
+      if (localStorage.getItem("jellyfin.shell.deferJe") === "0") return html;
+    } catch (_) {}
     var d = (window.__shellJeDefer = {
       on: 1,
       held: 0,

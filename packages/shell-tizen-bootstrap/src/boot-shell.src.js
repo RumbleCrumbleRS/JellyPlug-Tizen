@@ -7054,14 +7054,17 @@
   // stays pristine), park URLs on window.__shellJeDefer; the seed's
   // paint-gated re-injector (buildSeedScript) restores them post-paint via
   // the dynamic-interceptor pipeline. Lockstep with shell.js.
-  // Flag-dark: localStorage["jellyfin.shell.deferJe"]="1"; delay
+  // JELA-821: opt-OUT, not opt-in. The jp773 channel seed of
+  // "jellyfin.shell.deferJe"="1" arms ONE BOOT LATE (the JSI channel runs
+  // only after the lite->SPA handoff, JELA-802), so every key-absent boot —
+  // first install, re-install, LS eviction — paid the full JE module storm
+  // pre-paint (152 modules / 670,857 B, JELA-813/819). Only the "0" kill
+  // switch disables now; a throwing localStorage defers too. delay
   // "jellyfin.shell.deferJeMs" (default 3000). Diag: window.__shellJeDefer.
   function stripJeScriptsForDefer(html) {
     try {
-      if (localStorage.getItem("jellyfin.shell.deferJe") !== "1") return html;
-    } catch (_) {
-      return html;
-    }
+      if (localStorage.getItem("jellyfin.shell.deferJe") === "0") return html;
+    } catch (_) {}
     var d = (window.__shellJeDefer = {
       on: 1,
       held: 0,
