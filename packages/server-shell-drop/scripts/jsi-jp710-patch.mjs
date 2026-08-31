@@ -38,8 +38,19 @@
  * first), or Inter/Sora fall back to system faces until it is. Pair with
  * snapshot/rollback discipline exactly like jsi-jp682-patch.mjs.
  *
+ * PATCH_MEDIABAR IS SUPERSEDED ON THE LIVE CHANNEL (JELA-814/818, 2026-08-31).
+ * The media-bar entry now carries jp716's `jp716Css()`, which maps a jsdelivr
+ * slideshowpure href onto `ApiClient.serverAddress() +
+ * /shell/fonts/mediabar-slideshowpure.css` behind the SAME FLAG_KEY, and the
+ * rig confirms that half is on the wire. jp710's own media-bar anchor still
+ * matches, so applying it would not throw — it would just re-map the href a
+ * second time, one layer earlier and root-relative instead of absolute. Ship
+ * `--only fonts` on this channel; PATCH_MEDIABAR stays here for a channel that
+ * has not taken jp716.
+ *
  * Usage:
  *   node jsi-jp710-patch.mjs --config <live-cfg.json> --out <patched.json>
+ *   node jsi-jp710-patch.mjs --config <cfg.json> --out <p.json> --only fonts
  *   node jsi-jp710-patch.mjs --entry <name> --in <body.js> --out <body.js>
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -58,6 +69,7 @@ export const LOCAL_MEDIABAR_URL = "/shell/fonts/mediabar-slideshowpure.css";
 
 // --- theme-css: loadFonts fetches the local stylesheet -----------------------
 export const PATCH_FONTS = {
+  id: "fonts",
   entry: /theme-css/i,
   edits: [
     {
@@ -80,6 +92,7 @@ export const PATCH_FONTS = {
 // --- media-bar: the index.html probe re-links the local patched copy ---------
 // In this snippet `u` is the href extracted from a probed <link> tag.
 export const PATCH_MEDIABAR = {
+  id: "mediabar",
   entry: /—\s*media-bar$/,
   edits: [
     {
@@ -127,10 +140,31 @@ export function assertEs5Additions(body) {
   }
 }
 
-export function patchConfig(cfg) {
+/**
+ * Resolve a `--only` selector to a patch list. No selector = every patch.
+ * An unknown id throws rather than silently patching nothing.
+ */
+export function selectPatches(only) {
+  if (!only) return PATCHES;
+  const ids = String(only)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.map((id) => {
+    const p = PATCHES.find((x) => x.id === id);
+    if (!p) {
+      throw new Error(
+        `jp710: unknown --only id "${id}" (have ${PATCHES.map((x) => x.id).join(", ")})`,
+      );
+    }
+    return p;
+  });
+}
+
+export function patchConfig(cfg, patches = PATCHES) {
   const entries = cfg.CustomJavaScripts || [];
   const report = [];
-  for (const patch of PATCHES) {
+  for (const patch of patches) {
     const hit = entries.filter((e) => patch.entry.test(e.Name || ""));
     if (hit.length !== 1) {
       throw new Error(
@@ -148,13 +182,14 @@ export function patchConfig(cfg) {
 }
 
 function parseArgs(argv) {
-  const a = { config: null, out: null, in: null, entry: null };
+  const a = { config: null, out: null, in: null, entry: null, only: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if (k === "--config") a.config = argv[++i];
     else if (k === "--out") a.out = argv[++i];
     else if (k === "--in") a.in = argv[++i];
     else if (k === "--entry") a.entry = argv[++i];
+    else if (k === "--only") a.only = argv[++i];
   }
   return a;
 }
@@ -167,7 +202,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   if (args.config) {
     const cfg = JSON.parse(readFileSync(args.config, "utf8"));
-    for (const r of patchConfig(cfg)) {
+    for (const r of patchConfig(cfg, selectPatches(args.only))) {
       console.error(`ok  ${r.name}  ${r.delta >= 0 ? "+" : ""}${r.delta} B`);
     }
     writeFileSync(args.out, JSON.stringify(cfg, null, 2));
