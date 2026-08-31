@@ -1,5 +1,5 @@
 /*
- * JELA-30 (WS-C/C3): opt-in boot-ring diag beacon.
+ * JELA-30 (WS-C/C3): boot-ring diag beacon. JELA-827: opt-OUT (fleet-ON).
  *
  * The shell posts the persisted JEL-617 bootPhases ring (last 10 boots) +
  * this boot's __shellTx* counters to the server-plugin's POST /shell/diag so
@@ -7,8 +7,9 @@
  * test extracts the SHIPPED diagBeaconPostBody()/injectDiagBeaconPost() out
  * of the shell source and drives the beacon through stubbed
  * window/localStorage/XHR + a virtual clock, pinning:
- *   - OPT-IN: inert (no interval, no XHR, nothing on window) unless
- *     localStorage['jellyfin.shell.diagBeacon'] === '1'
+ *   - OPT-OUT (JELA-827): armed when the key is ABSENT or "1"; inert (no
+ *     interval, no XHR, nothing on window) only when
+ *     localStorage['jellyfin.shell.diagBeacon'] === '0'
  *   - egress/redaction (JEL-139, WS-F): payload carries ONLY
  *     {id, ring, tx, ver} — the opaque [0-9a-z] device id, the numeric ring
  *     records, numeric tx counters, the shell version; the server URL is the
@@ -58,7 +59,20 @@ assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
 assert(body.indexOf("`") === -1, "body must be ES5 (no template literals)");
 assert(
   body.indexOf('"jellyfin.shell.diagBeacon"') !== -1,
-  "opt-in localStorage gate missing",
+  "localStorage gate missing",
+);
+// JELA-827: pin the read EXPRESSION, not just the key. The gate must be
+// opt-OUT (absent key => ON) because the "1" is channel-seeded and the JSI
+// channel only runs after the lite->SPA handoff (JELA-802).
+assert(
+  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")==="0"') !==
+    -1,
+  'JELA-827: diagBeacon gate must read ==="0" (opt-OUT)',
+);
+assert(
+  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")!=="1"') ===
+    -1,
+  'JELA-827: old opt-in gate !=="1" must be gone (dead on every cold boot)',
 );
 assert(body.indexOf("/shell/diag") !== -1, "POST target /shell/diag missing");
 assert(
@@ -206,16 +220,56 @@ const WIN = () => ({
   __shellTxDrop: { ok: { base: "x" }, h: 0, m: 1, r: 0, f: 0 },
 });
 
-// 1. Default OFF: no flag -> completely inert.
+// 1. JELA-827: key ABSENT -> ARMED. The "1" is channel-seeded and the channel
+//    runs after the lite->SPA handoff, so a cold boot has no key at all; the
+//    old `!== "1"` gate made exactly those boots unreportable. A key-absent
+//    arm is no longer an OFF arm.
 {
-  const env = makeEnv({ "jellyfin.shell.serverUrl": SERVER }, WIN());
+  const env = makeEnv(
+    {
+      "jellyfin.shell.serverUrl": SERVER,
+      "jellyfin.shell.bootPhases": JSON.stringify(RING),
+    },
+    WIN(),
+  );
+  env.run();
+  assert.strictEqual(
+    env.intervals.length,
+    1,
+    "JELA-827: flag absent must arm the 3 s poll (opt-OUT)",
+  );
+  env.tick(3000);
+  assert.strictEqual(
+    env.xhrs.length,
+    1,
+    "JELA-827: flag absent must POST exactly once",
+  );
+  assert.ok(
+    env.window.__shellDiagBeaconArmed,
+    "JELA-827: flag absent must latch",
+  );
+}
+
+// 1b. JELA-827 kill switch: key = "0" -> completely inert. This proves the gate
+//     is still live and was not simply deleted. Rollback for this flag is
+//     setItem(key,"0"), NEVER removeItem.
+{
+  const env = makeEnv(
+    {
+      "jellyfin.shell.diagBeacon": "0",
+      "jellyfin.shell.serverUrl": SERVER,
+      "jellyfin.shell.bootPhases": JSON.stringify(RING),
+    },
+    WIN(),
+  );
   env.run();
   assert.strictEqual(env.intervals.length, 0, "opt-out must not arm any timer");
   assert.strictEqual(env.xhrs.length, 0, "opt-out must not touch the network");
   assert.ok(!env.window.__shellDiagBeaconArmed, "opt-out must not latch");
 }
 
-// 2. Opt-in happy path: home mark present -> one clean POST.
+// 2. Seeded "1" (the fleet's current state) still arms — happy path: home mark
+//    present -> one clean POST.
 {
   const env = makeEnv(LS_ON, WIN());
   env.run();

@@ -1239,10 +1239,19 @@
       // block stands down whenever the cap is disabled — if someone turns the
       // cap off to debug trailers, they get the real API back along with it.
       // Content-pattern based, no plugin name (plugin-agnostic-shell.test.cjs).
-      // Enable (flag-dark): localStorage["jellyfin.shell.ytApiStub"]="1".
-      // Kill switch: localStorage["jellyfin.shell.ytApiStubDisabled"]="1".
+      // JELA-827: fleet-ON (opt-OUT). This shipped opt-in as `!== "1"`, but
+      // the "1" is written by the JELA-725 JSI channel entry, which only runs
+      // AFTER the lite→SPA handoff (JELA-802) — so on every cold boot (fresh
+      // install, LS wipe, quota eviction) the key was absent, the stub never
+      // installed, and the real YouTube iframe API leaked through for exactly
+      // the boot the JEL-238 cap exists to protect. Read for the kill switch
+      // instead: an absent key now means ON.
+      // Kill switch: localStorage["jellyfin.shell.ytApiStubDisabled"]="1"
+      // (this is the DURABLE per-TV kill — the JELA-725 seeder honours it and
+      // would otherwise re-write ytApiStub back to "1"). The JEL-238 cap kill
+      // "jellyfin.shell.ytIframeCapDisabled"="1" also stands this block down.
       // Diag: window.__shellYtApiStub (1 when the stub was installed).
-      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytApiStub")!=="1")return;if(localStorage.getItem("jellyfin.shell.ytApiStubDisabled")==="1")return;if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;if(window.YT&&window.YT.Player)return;function P(){}var n=["playVideo","pauseVideo","stopVideo","seekTo","mute","unMute","setVolume","destroy","loadVideoById","cueVideoById","addEventListener","removeEventListener","setPlaybackQuality"];for(var i=0;i<n.length;i++){P.prototype[n[i]]=function(){};}P.prototype.getPlayerState=function(){return -1;};P.prototype.getCurrentTime=function(){return 0;};P.prototype.getVolume=function(){return 0;};P.prototype.isMuted=function(){return true;};window.YT={loaded:1,Player:P,PlayerState:{UNSTARTED:-1,ENDED:0,PLAYING:1,PAUSED:2,BUFFERING:3,CUED:5}};window.__shellYtApiStub=1;var f=window.onYouTubeIframeAPIReady;if(typeof f==="function"){try{f();}catch(_){}}})();}catch(_){}',
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytApiStub")==="0")return;if(localStorage.getItem("jellyfin.shell.ytApiStubDisabled")==="1")return;if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;if(window.YT&&window.YT.Player)return;function P(){}var n=["playVideo","pauseVideo","stopVideo","seekTo","mute","unMute","setVolume","destroy","loadVideoById","cueVideoById","addEventListener","removeEventListener","setPlaybackQuality"];for(var i=0;i<n.length;i++){P.prototype[n[i]]=function(){};}P.prototype.getPlayerState=function(){return -1;};P.prototype.getCurrentTime=function(){return 0;};P.prototype.getVolume=function(){return 0;};P.prototype.isMuted=function(){return true;};window.YT={loaded:1,Player:P,PlayerState:{UNSTARTED:-1,ENDED:0,PLAYING:1,PAUSED:2,BUFFERING:3,CUED:5}};window.__shellYtApiStub=1;var f=window.onYouTubeIframeAPIReady;if(typeof f==="function"){try{f();}catch(_){}}})();}catch(_){}',
       // JELA-686 (JELA-679/P2): persist the bitrate detection across boots.
       //
       // jellyfin-apiclient's detectBitrate DOES have a cache, with a sane
@@ -1411,13 +1420,21 @@
       // removeEventListener are wrapped too so a vendor switch of transport
       // cannot silently un-gate this.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.udcGate"]="1".
+      // JELA-827: fleet-ON (opt-OUT). This shipped as `!== "1"` -> bail, but
+      // the "1" is written by the jp807seed JSI channel entry, which only
+      // runs AFTER the lite→SPA handoff (JELA-802), so on a cold boot the
+      // key is absent and every UserDataChanged push landed unswallowed —
+      // the JELA-807 prize is 16.00 reqs / 59,680 B per swallowed push, and
+      // a fresh install paid all of it. Read for the kill switch instead:
+      // absent key means ON.
+      // Per-TV kill: localStorage["jellyfin.shell.udcGate"]="0" (the jp807
+      // seeder guards on !== "0", so a "0" survives the channel).
       // Tunable: "jellyfin.shell.udcCoalesceMs" (default 3000; 0 = no
       // coalescing, diff only).
       // Diag: window.__shellUdc =
       //   {on,seen,pass,dropNoHit,dropDup,held,ids,err}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.udcGate")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.udcGate")==="0")return;',
       "    if(window.__shellUdc)return;",
       "    var P=window.WebSocket&&window.WebSocket.prototype;if(!P)return;",
       "    var G=window.__shellUdc={on:1,seen:0,pass:0,dropNoHit:0,dropDup:0,held:0,ids:0,err:0};",
@@ -3360,12 +3377,22 @@
       // Anything not matching those routes (browsing, scrolling, backing out)
       // is exactly the case this exists for.
       //
-      // Flag-dark; the flag IS the kill switch (default OFF), same as
-      // chunkWarm. Diag/proof-of-arm: window.__shellHR =
+      // JELA-827: fleet-ON (opt-OUT). This shipped as `!== "1"` -> bail, but
+      // the "1" is written by the jp789seed JSI channel entry, which only
+      // runs AFTER the lite→SPA handoff (JELA-802). That seeder's own header
+      // says it: "The shell reads the key BEFORE this channel executes, so
+      // the seed takes effect on the NEXT boot." On a cold boot (fresh
+      // install, LS wipe, quota eviction) the key is absent, so the JELA-789
+      // ring (21 reqs/138 KB per Back -> 5-10 reqs/<9 KB) was never paid
+      // back. Read for the kill switch instead: absent key means ON.
+      // Per-TV kill: localStorage["jellyfin.shell.homeResume"]="0" (the
+      // jp789 seeder guards on !== "0", so a "0" survives the channel).
+      // TTL knob: "jellyfin.shell.homeResumeTtlMs" (default 300000).
+      // Diag/proof-of-arm: window.__shellHR =
       // {on,push,wr,found,mid,wrap,ctor,hits,miss,stale,dirty,moved,err,why}.
       // An arm reporting hits:0 has not fired and must be discarded (JELA-690).
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.homeResume")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.homeResume")==="0")return;',
       "    var W=window;",
       '    var D=W.__shellHR={on:1,push:0,wr:0,found:0,mid:"",wrap:0,ctor:0,hits:0,miss:0,stale:0,dirty:0,moved:0,err:0,why:""};',
       "    var TTL=300000;",
@@ -5844,9 +5871,20 @@
   // TV's boot health over HTTP — no sdb session, no CDP, no power-cycle (the
   // recurring cost across JELA-13/21/26/27).
   //
-  // OPT-IN, default OFF: inert unless localStorage['jellyfin.shell.diagBeacon']
-  // === '1' (settable on-device via the QA overlay localStorage seeds or the
-  // JEL-197 JS-Injector snippet channel — no sdb needed to opt a TV in).
+  // JELA-827: fleet-ON (opt-OUT). This shipped OPT-IN — inert unless
+  // localStorage['jellyfin.shell.diagBeacon'] === '1' — and the "1" is written
+  // by the JEL-197 JS-Injector snippet channel, which only runs AFTER the
+  // lite→SPA handoff (JELA-802). The key is therefore ABSENT on every cold
+  // boot (fresh install, LS wipe, quota eviction), so the beacon was dead for
+  // exactly the boots an operator most needs reported: first install and
+  // post-eviction. Read for the kill switch instead — an absent key now means
+  // ON. Per-TV kill: localStorage['jellyfin.shell.diagBeacon'] = '0'.
+  // NOTE: the standing JELA-34 channel seeder re-writes "1" whenever the key
+  // is not already "1", so a per-TV "0" survives only the boot it is set in
+  // until that seeder's guard is changed to `!== "0"` (tracked separately).
+  // Egress is unchanged and still self-only: the target is the user's own
+  // server (see the redaction paragraph below); the fleet is already seeded
+  // "1", so this changes behaviour ONLY on key-absent boots.
   //
   // Redaction / egress (JEL-139, WS-F folded into JELA-30): the payload is
   // built ONLY from (a) the numeric bootPhases ring records, (b) numeric
@@ -5878,7 +5916,7 @@
   function diagBeaconPostBody() {
     return (
       "(function(){try{" +
-      'try{if(localStorage.getItem("jellyfin.shell.diagBeacon")!=="1")return}catch(_){return}' +
+      'try{if(localStorage.getItem("jellyfin.shell.diagBeacon")==="0")return}catch(_){return}' +
       "var W=window;" +
       "if(W.__shellDiagBeaconArmed)return;W.__shellDiagBeaconArmed=1;" +
       "var st=W.__shellDiagBeacon={sent:0,http:0,tries:0,err:0};" +
@@ -5950,7 +5988,7 @@
   }
 
   // JELA-30: written-document injector (DOMParser path; the string fast path
-  // splices the same body). No-op unless diagBeacon==='1' — gate is inside
+  // splices the same body). No-op when diagBeacon==='0' — gate is inside
   // the body so injection stays unconditional and cheap.
   function injectDiagBeaconPost(doc) {
     var dbTag = doc.createElement("script");
@@ -8245,7 +8283,7 @@
     // JELA-29: opt-in Direct-Home prototype (no-op unless directHome=1).
     var directHomeTag =
       '<script data-shell-direct-home="1">' + directHomeBody() + "</script>";
-    // JELA-30: opt-in boot-ring diag beacon (no-op unless diagBeacon==='1').
+    // JELA-30: boot-ring diag beacon (JELA-827: opt-OUT) (no-op when diagBeacon==='0').
     var diagBeaconTag =
       '<script data-shell-diag-beacon="1">' +
       diagBeaconPostBody() +
@@ -9438,8 +9476,8 @@
         // JELA-29: opt-in Direct-Home render prototype (no-op unless
         // directHome=1) — see directHomeBody().
         injectDirectHome(doc);
-        // JELA-30: opt-in boot-ring diag beacon posts the JEL-617 ring +
-        // tx counters to POST /shell/diag (no-op unless diagBeacon==='1').
+        // JELA-30: boot-ring diag beacon (JELA-827: opt-OUT) posts the JEL-617 ring +
+        // tx counters to POST /shell/diag (no-op when diagBeacon==='0').
         injectDiagBeaconPost(doc);
         // JEL-197: ensure the JS-Injector snippet channel (public.js) is
         // present so transpileLegacyScripts below fetches + runs it through

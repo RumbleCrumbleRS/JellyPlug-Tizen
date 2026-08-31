@@ -44,22 +44,33 @@
  * ---------------------------------------------------------------------------
  * The one property that must not be mistaken for a broken deploy
  * ---------------------------------------------------------------------------
- * THE SEED ENGAGES ONE BOOT LATE. The gate's IIFE opens with
+ * THE SEED ENGAGES ONE BOOT LATE. That is exactly the bug JELA-827 fixed in
+ * the shell: the gate's IIFE now opens with
+ *     if(localStorage.getItem("jellyfin.shell.udcGate")==="0")return;
+ * so an ABSENT key is an ON boot and this seeder is only a no-op confirmation
+ * plus the per-TV "0" kill it already honours. Before JELA-827 it read
  *     if(localStorage.getItem("jellyfin.shell.udcGate")!=="1")return;
- * and that runs ONCE, when the shell installs the socket hook at document
- * start — it is NOT re-read per frame. This channel only runs AFTER the
- * lite->SPA handoff (JELA-802), which is far later. So the boot that first
- * receives this seeder cannot arm the gate; boot N+1 arms.
+ * and every cold boot ran ungated. Either way the read happens ONCE, when the
+ * shell installs the socket hook at document start — it is NOT re-read per
+ * frame. This channel only runs AFTER the lite->SPA handoff (JELA-802), which
+ * is far later, so this seeder's WRITE can never be observed by the boot that
+ * received it; boot N+1 observes it.
  *
- * A post-flip smoke boot showing `window.__shellUdc === undefined` on boot 1
- * is CORRECT, not a failed deploy. Verify on BOOT 2 of a single fresh profile
+ * Post-JELA-827 that no longer matters for arming: boot 1 arms on the absent
+ * key. It still matters for the "0" kill — clearing a per-TV "0" takes effect
+ * on the NEXT boot.
+ *
+ * PRE-JELA-827 NOTE, kept for anyone reading an old capture: a post-flip smoke
+ * boot showing `window.__shellUdc === undefined` on boot 1 was CORRECT, not a
+ * failed deploy. Such a capture had to be read on BOOT 2 of a fresh profile
  * (JELA-790: a served bundle does not prove a seeder — boot twice on ONE
  * profile). An armed boot reports
  * `__shellUdc = {on:1, seen, pass, dropNoHit, dropDup, held, ids, err}`.
  *
- * Per-TV kill: `jellyfin.shell.udcGate` = "0". The shell gate is `!== "1"`, so
- * "0" disarms it, and the seeder's own `!== "0"` guard means a TV that set "0"
- * itself is never re-armed by this entry.
+ * Per-TV kill: `jellyfin.shell.udcGate` = "0". Post-JELA-827 the shell gate is
+ * `=== "0"` -> bail, so "0" still disarms it — and it is now the ONLY thing
+ * that does, since an absent key means ON. The seeder's own `!== "0"` guard
+ * means a TV that set "0" itself is never re-armed by this entry.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import vm from "node:vm";
@@ -94,8 +105,10 @@ export const SEED_SRC =
   `(function(){try{var k="${FLAG_KEY}";if(localStorage.getItem(k)!=="0"){localStorage.setItem(k,"1");}}catch(e){}})();\n`;
 
 /**
- * The remover. Writes "0", which fails the shell's `=== "1"` gate AND blocks
- * the seeder's `!== "0"` re-write.
+ * The remover. Writes "0", which trips the shell's `=== "0"` bail (JELA-827;
+ * it failed the older `=== "1"` gate too) AND blocks the seeder's `!== "0"`
+ * re-write. Post-JELA-827 this remover is MANDATORY for a rollback: deleting
+ * the entry leaves every TV ON, and so does removing the key.
  */
 export const ROLLBACK_SRC =
   `/* JellyPlug — JELA-807 ROLLBACK: disarm the udcGate fleet-wide. This REPLACES the\n` +
@@ -110,7 +123,9 @@ export const ROLLBACK_SRC =
 /** Reject anything the M63-class Q60R engine would throw on. */
 export function assertEs5(src) {
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "");
-  if (/=>|`|\blet\b|\bconst\b|\bclass\b|\basync\b|\?\.|\?\?|catch\s*\{/.test(code)) {
+  if (
+    /=>|`|\blet\b|\bconst\b|\bclass\b|\basync\b|\?\.|\?\?|catch\s*\{/.test(code)
+  ) {
     throw new Error("jp807: seeder introduced non-ES5 syntax");
   }
   new vm.Script(src, { filename: "jp807.js" });
@@ -126,12 +141,17 @@ export function patchConfig(cfg, { rollback = false } = {}) {
   if (!Array.isArray(entries)) {
     throw new Error("jp807: config has no CustomJavaScripts array");
   }
-  const mine = entries.filter((e) => (e.Script || "").includes(MARKER) ||
-    (e.Script || "").includes(ROLLBACK_MARKER));
+  const mine = entries.filter(
+    (e) =>
+      (e.Script || "").includes(MARKER) ||
+      (e.Script || "").includes(ROLLBACK_MARKER),
+  );
 
   if (rollback) {
     if (mine.length !== 1) {
-      throw new Error(`jp807 rollback: found ${mine.length} jp807 entries (want 1)`);
+      throw new Error(
+        `jp807 rollback: found ${mine.length} jp807 entries (want 1)`,
+      );
     }
     assertEs5(ROLLBACK_SRC);
     mine[0].Script = ROLLBACK_SRC;

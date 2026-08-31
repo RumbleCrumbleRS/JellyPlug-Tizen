@@ -158,14 +158,45 @@ const SMALL = "y".repeat(100);
 // --- flag-dark gating -------------------------------------------------------
 
 {
+  // JELA-827: key ABSENT is now an ON arm. The "1" is written by the jp806seed
+  // JSI channel entry, which runs only after the lite->SPA handoff (JELA-802),
+  // while installLsWriteBehind() runs at the TOP of the shell — so the old
+  // opt-in gate was dead on every cold boot.
   const env = makeEnv({});
   const before = env.Storage.prototype.setItem;
   env.install();
   check(
-    "flag off: prototype untouched",
+    "JELA-827 flag ABSENT: prototype IS wrapped (opt-OUT)",
+    env.Storage.prototype.setItem !== before,
+  );
+  check(
+    "JELA-827 flag ABSENT: QA surface installed",
+    env.window.__shellLsWB !== undefined,
+  );
+}
+{
+  // JELA-827 kill switch: "0" on the flag itself stands the block down. Proves
+  // the gate is live and not deleted. Rollback is setItem(key,"0"), NEVER
+  // removeItem.
+  const env = makeEnv({ "jellyfin.shell.lsWriteBehind": "0" });
+  const before = env.Storage.prototype.setItem;
+  env.install();
+  check(
+    'flag "0": prototype untouched',
     env.Storage.prototype.setItem === before,
   );
-  check("flag off: no QA surface", env.window.__shellLsWB === undefined);
+  check('flag "0": no QA surface', env.window.__shellLsWB === undefined);
+}
+{
+  // JELA-827: the second, independent kill still works from a key-absent flag.
+  const env = makeEnv({ "jellyfin.shell.lsWriteBehindDisabled": "1" });
+  const before = env.Storage.prototype.setItem;
+  env.install();
+  check(
+    "lsWriteBehindDisabled kills a key-absent (ON) boot",
+    env.Storage.prototype.setItem === before &&
+      env.window.__shellLsWB === undefined,
+  );
 }
 {
   const env = makeEnv({

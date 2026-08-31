@@ -123,6 +123,17 @@ for (const [name, src] of ARTIFACTS) {
     name + ": enable flag present",
     src.includes('"jellyfin.shell.ytApiStub"'),
   );
+  // JELA-827: pin the read EXPRESSION, not the key — "ytApiStub" also
+  // substring-matches "ytApiStubDisabled". Minification preserves the
+  // expression verbatim, so the same literal works for src and min.
+  check(
+    name + ': JELA-827: gate reads ==="0" (opt-OUT)',
+    src.includes('localStorage.getItem("jellyfin.shell.ytApiStub")==="0"'),
+  );
+  check(
+    name + ': JELA-827: old opt-in gate !=="1" is gone',
+    !src.includes('localStorage.getItem("jellyfin.shell.ytApiStub")!=="1"'),
+  );
   check(
     name + ": kill switch present",
     src.includes("jellyfin.shell.ytApiStubDisabled"),
@@ -145,11 +156,11 @@ for (const [name, src] of ARTIFACTS) {
   check(name + ": installs YT.PlayerState", iife.includes("PlayerState:"));
   // ES5 only — this runs pre-polyfill on Chromium 56/63.
   check(name + ": body is ES5 (no arrow functions)", iife.indexOf("=>") === -1);
-  check(name + ": body is ES5 (no template literals)", iife.indexOf("`") === -1);
   check(
-    name + ": body is ES5 (no let/const)",
-    !/\b(let|const)\s/.test(iife),
+    name + ": body is ES5 (no template literals)",
+    iife.indexOf("`") === -1,
   );
+  check(name + ": body is ES5 (no let/const)", !/\b(let|const)\s/.test(iife));
   check(name + ": no eval", iife.indexOf("eval(") === -1);
   // Content-pattern based, never plugin-name coupled.
   check(
@@ -183,9 +194,7 @@ function runStub(
 
   const created = [];
   const inserted = [];
-  const scripts = [
-    { tagName: "SCRIPT", src: "", parentNode: null },
-  ];
+  const scripts = [{ tagName: "SCRIPT", src: "", parentNode: null }];
   scripts[0].parentNode = {
     insertBefore(node) {
       inserted.push(node);
@@ -252,15 +261,33 @@ async function execScenarios(label, iife) {
     return;
   }
 
-  // B1: FLAG-DARK by default — absent the enable key the block does nothing.
+  // B1: JELA-827 — the key is channel-seeded and the JSI channel runs only
+  // after the lite->SPA handoff (JELA-802), so a cold boot has NO key. Absent
+  // must therefore mean ON, or the stub is dead on every fresh install.
   {
     const r = runStub(iife, { flag: null });
     check(
-      label + " B1: default is inert (no window.YT)",
+      label + " B1: JELA-827 flag ABSENT -> stub installed (opt-OUT)",
+      !!r.win.YT && typeof r.win.YT.Player === "function",
+    );
+    check(
+      label + " B1: JELA-827 flag ABSENT -> diag set",
+      r.win.__shellYtApiStub === 1,
+    );
+  }
+
+  // B1b: JELA-827 kill switch — the flag itself set to "0" stands the block
+  // down, proving the gate is live and not merely deleted. Note this kill is
+  // NOT durable: the JELA-725 seeder re-writes ytApiStub="1" unless
+  // ytApiStubDisabled==="1" (B4), which is the durable per-TV kill.
+  {
+    const r = runStub(iife, { flag: "0" });
+    check(
+      label + ' B1b: flag "0" -> inert (no window.YT)',
       r.win.YT === undefined,
     );
     check(
-      label + " B1: default leaves diag undefined",
+      label + ' B1b: flag "0" -> diag undefined',
       r.win.__shellYtApiStub === undefined,
     );
   }
@@ -308,7 +335,10 @@ async function execScenarios(label, iife) {
     const r = runStub(iife, {
       store: { "jellyfin.shell.ytIframeCapDisabled": "1" },
     });
-    check(label + " B5: stands down when JEL-238 cap disabled", r.win.YT === undefined);
+    check(
+      label + " B5: stands down when JEL-238 cap disabled",
+      r.win.YT === undefined,
+    );
   }
 
   // B6: never clobber a real API that already loaded. Flag is ON here — the
@@ -329,11 +359,12 @@ async function execScenarios(label, iife) {
   // B7: INTEGRATION against the real loadYouTubeAPI body.
   {
     // Control: flag OFF -> the media bar DOES create the youtube.com tag.
-    const ctl = runStub(iife, { flag: null });
+    // JELA-827: the OFF arm must SEED "0" — an absent key is now an ON arm.
+    const ctl = runStub(iife, { flag: "0" });
     vm.runInContext(LOAD_YT_API_SRC, ctl.sandbox);
     ctl.win.__loadYouTubeAPI();
     check(
-      label + " B7 control: flag off still creates the youtube tag",
+      label + ' B7 control: flag "0" still creates the youtube tag',
       ctl.created.length === 1 &&
         ctl.created[0].src.indexOf("youtube.com/iframe_api") !== -1,
       "created=" + JSON.stringify(ctl.created.map((c) => c.src)),

@@ -54,8 +54,12 @@
  * ---------------------------------------------------------------------------
  * The gate in the SERVED bytes reads, verbatim:
  *
- *   enabled = localStorage.getItem("jellyfin.shell.lsWriteBehind") === "1"
+ *   enabled = localStorage.getItem("jellyfin.shell.lsWriteBehind") !== "0"
  *          && localStorage.getItem("jellyfin.shell.lsWriteBehindDisabled") !== "1"
+ *
+ * JELA-827 flipped the first clause from `=== "1"` to `!== "0"`: this channel
+ * runs only after the lite->SPA handoff, while installLsWriteBehind() runs at
+ * the TOP of the shell, so the seeded "1" could never arm a cold boot.
  *
  * The kill switch always wins, so seeding the flag can never override a TV
  * that opted out via `...Disabled`. The seeder additionally honours the
@@ -65,7 +69,7 @@
  * ROLLBACK IS A REMOVER, NOT A DELETE (JELA-789). Deleting this entry leaves
  * every TV latched ON forever, because the flag is already in their
  * localStorage. `--rollback` swaps the seeder body for one that writes `"0"`,
- * which both fails the shell's `=== "1"` gate and blocks this seeder's own
+ * which both trips the shell's `!== "0"` enable clause and blocks this seeder's own
  * `!== "0"` re-write. (Re-flipping ON later therefore needs a remover of that
  * `"0"` first.)
  *
@@ -106,7 +110,8 @@ export const SEED_SRC =
   `(function(){try{var k="${FLAG_KEY}";if(localStorage.getItem(k)!=="0"){localStorage.setItem(k,"1");}}catch(e){}})();\n`;
 
 /**
- * The remover. Writes "0", which fails the shell's `=== "1"` gate AND blocks
+ * The remover. Writes "0", which trips the shell's `!== "0"` enable clause
+ * (JELA-827; it failed the older `=== "1"` gate too) AND blocks
  * the seeder's `!== "0"` re-write. Deliberately does NOT touch KILL_KEY — a TV
  * that set it itself keeps it.
  */
@@ -121,7 +126,9 @@ export const ROLLBACK_SRC =
 /** Reject anything the M63-class Q60R engine would throw on. */
 export function assertEs5(src) {
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "");
-  if (/=>|`|\blet\b|\bconst\b|\bclass\b|\basync\b|\?\.|\?\?|catch\s*\{/.test(code)) {
+  if (
+    /=>|`|\blet\b|\bconst\b|\bclass\b|\basync\b|\?\.|\?\?|catch\s*\{/.test(code)
+  ) {
     throw new Error("jp806: seeder introduced non-ES5 syntax");
   }
   new vm.Script(src, { filename: "jp806.js" });
@@ -137,12 +144,17 @@ export function patchConfig(cfg, { rollback = false } = {}) {
   if (!Array.isArray(entries)) {
     throw new Error("jp806: config has no CustomJavaScripts array");
   }
-  const mine = entries.filter((e) => (e.Script || "").includes(MARKER) ||
-    (e.Script || "").includes(ROLLBACK_MARKER));
+  const mine = entries.filter(
+    (e) =>
+      (e.Script || "").includes(MARKER) ||
+      (e.Script || "").includes(ROLLBACK_MARKER),
+  );
 
   if (rollback) {
     if (mine.length !== 1) {
-      throw new Error(`jp806 rollback: found ${mine.length} jp806 entries (want 1)`);
+      throw new Error(
+        `jp806 rollback: found ${mine.length} jp806 entries (want 1)`,
+      );
     }
     assertEs5(ROLLBACK_SRC);
     mine[0].Script = ROLLBACK_SRC;

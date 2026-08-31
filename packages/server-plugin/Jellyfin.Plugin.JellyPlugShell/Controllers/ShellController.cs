@@ -431,11 +431,11 @@ public class ShellController : ControllerBase
     }
 
     /// <summary>
-    /// JELA-30 (WS-C): ingest an opt-in per-boot diag beacon (the shell's
-    /// bootPhases ring + __shellTx* counters). Anonymous like the rest of
-    /// /shell/ — a TV posts this before login, exactly as it fetches the shell
-    /// assets. Opt-in lives on the TV (the shell only posts when
-    /// localStorage["jellyfin.shell.diagBeacon"]==="1"); an operator can also
+    /// JELA-30 (WS-C): ingest a per-boot diag beacon (the shell's bootPhases
+    /// ring + __shellTx* counters). Anonymous like the rest of /shell/ — a TV
+    /// posts this before login, exactly as it fetches the shell assets. The
+    /// opt-OUT lives on the TV (JELA-827: the shell posts unless
+    /// localStorage["jellyfin.shell.diagBeacon"]==="0"); an operator can also
     /// refuse all ingest server-side via the plugin config. The body is fully
     /// re-sanitized in DiagIngestService — nothing here trusts its shape.
     ///

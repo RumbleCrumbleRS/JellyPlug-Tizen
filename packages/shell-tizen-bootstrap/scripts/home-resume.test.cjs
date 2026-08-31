@@ -44,7 +44,8 @@ const text = fs.readFileSync(SRC, "utf8");
 function shimSource() {
   const lines = text.split("\n");
   const flag = lines.findIndex(
-    (l) => l.includes("jellyfin.shell.homeResume") && l.includes('!=="1"'),
+    // JELA-827: the gate is opt-OUT now — locate it by the new expression.
+    (l) => l.includes("jellyfin.shell.homeResume") && l.includes('==="0"'),
   );
   assert(flag !== -1, "could not find the homeResume shim in " + SRC);
   let a = flag;
@@ -327,10 +328,12 @@ function render(root, rows) {
 
 // -------------------------------------------------------------------------
 async function run() {
-  // --- 1. default OFF: inert, and the CONTROL that proves the rebuild ------
+  // --- 1. JELA-827 kill switch: flag "0" -> inert. Also the CONTROL that
+  //        proves the rebuild. Rollback for this flag is setItem(key,"0"),
+  //        NEVER removeItem — an absent key is now an ON arm (see arm 1b).
   {
-    const app = launch({});
-    assert.strictEqual(app.D, null, "no flag must leave __shellHR unset");
+    const app = launch({ "jellyfin.shell.homeResume": "0" });
+    assert.strictEqual(app.D, null, 'flag "0" must leave __shellHR unset');
     app.pushChunk([18119], HOMETAB_MODULE);
 
     const r1 = mount();
@@ -350,6 +353,41 @@ async function run() {
       r2.querySelector(".sections").rows(),
       0,
       "off: the new mount starts empty (home goes blank)",
+    );
+  }
+
+  // --- 1b. JELA-827: key ABSENT must behave exactly like the seeded "1" arm.
+  //         The "1" is written by the jp789seed JSI channel entry, which only
+  //         runs after the lite->SPA handoff (JELA-802) — that seeder's own
+  //         header says the shell reads the key BEFORE the channel executes —
+  //         so every cold boot read null and got the blank-home rebuild.
+  {
+    const app = launch({});
+    assert(
+      app.D && app.D.on === 1,
+      "key absent must publish __shellHR (opt-OUT)",
+    );
+    app.pushChunk([18119], HOMETAB_MODULE);
+    assert.strictEqual(app.D.found, 1, "absent: the hometab factory is found");
+
+    const r1 = mount();
+    const c1 = await visit(app, r1);
+    assert.strictEqual(app.log.load, 1, "absent/mount1: full loadSections");
+    render(r1, 18);
+
+    const r2 = mount();
+    const c2 = await visit(app, r2);
+    assert.strictEqual(c2, c1, "absent: the SAME controller comes back");
+    assert.strictEqual(app.D.hits, 1, "absent: the arm fired (hits>0)");
+    assert.strictEqual(
+      app.log.load,
+      1,
+      "absent: mount2 issues NO loadSections",
+    );
+    assert.strictEqual(
+      r2.querySelector(".sections").rows(),
+      18,
+      "absent: all 18 rows moved to the new mount",
     );
   }
 
@@ -394,7 +432,10 @@ async function run() {
       "the homeSectionsContainer class travels with the rows",
     );
     assert.strictEqual(c1.sectionsContainer, sec2, "controller re-pointed");
-    assert.strictEqual(c1.view, r2.querySelector(".tabContent[data-index='0']"));
+    assert.strictEqual(
+      c1.view,
+      r2.querySelector(".tabContent[data-index='0']"),
+    );
 
     // settingschange must still force a full rebuild on the adopted node
     sec2.dispatch("settingschange");
@@ -459,7 +500,11 @@ async function run() {
       await app.W.fetch("/Users/u1/PlayedItems/x", { method: "POST" });
     else new app.W.XMLHttpRequest().open("POST", "/Users/u1/PlayedItems/x");
     await visit(app, mount());
-    assert.strictEqual(app.log.load, 2, via + ": AC4 — a POST forces a rebuild");
+    assert.strictEqual(
+      app.log.load,
+      2,
+      via + ": AC4 — a POST forces a rebuild",
+    );
     assert.strictEqual(app.D.dirty, 1, via + ": …counted as dirty");
   }
   {
@@ -542,11 +587,14 @@ async function run() {
     );
   }
   {
+    // JELA-827: no flag at all is now an ON arm — the chunk-loading global IS
+    // hooked. This pins the polarity flip at the hook site, not just at the
+    // diag object. Rollback is setItem(key,"0"), NEVER removeItem.
     const app = launch({});
     assert.strictEqual(
       app.W.webpackChunk.__shellHR,
-      undefined,
-      "no flag at all: the chunk-loading global is never hooked",
+      1,
+      "JELA-827: no flag at all -> the chunk-loading global IS hooked",
     );
   }
 
