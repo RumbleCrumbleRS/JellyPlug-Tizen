@@ -1573,17 +1573,21 @@
       // ALSO detects on the play path (playbackManager's pre-play
       // detectBitrate()), so even a suppressed ladder cannot break playback.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.deferBitrateTest"]="1".
-      // Kill switch for the JELA-737 half only:
-      //   localStorage["jellyfin.shell.deferBitrateTestGate"]="paint"
-      // restores the JELA-684 first-paint release byte-for-byte.
+      // JELA-823: fleet-ON (opt-OUT). The original opt-in gate was never armed
+      // on a first boot — the JSI channel that seeds "1" runs only after the
+      // lite→SPA handoff (JELA-802), so any cold boot with no prior "1" in LS
+      // (fresh install, wipe, eviction) skipped the deferral and paid the full
+      // 5.77 MB probe pre-paint. Read for the kill switch instead so a
+      // key-absent boot defers. Kill switch: set "jellyfin.shell.deferBitrateTest"
+      // to "0" to run the probe undeferred (old opt-in "1" still works too).
+      // Settle-gate kill switch: localStorage["jellyfin.shell.deferBitrateTestGate"]="paint".
       // Post-release delay is tunable via "jellyfin.shell.deferBitrateTestMs"
       // (default 4000), the quiet window via "...QuietMs" (default 3000) and
       // the ceiling via "...MaxMs" (default 45000).
       // Diag: window.__shellBT = {on,gate,inst,cleared,sets,armed,fired,tHold,
       // tArm,why,polls,cards,cardsLoose,stable,tAuth,net,inflight,tBusy}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")==="0")return;',
       "    var D=4000;",
       '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
       '    var G="settle";',
@@ -1935,7 +1939,8 @@
       "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
       '      var rel=d.entries[__txFnv(String(code||""))];',
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
-      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      // JELA-824: wait for bulk pre-fetch, serve from map if present.
+      '      var hash=rel.slice(3,-3);return(d.bulkReady||Promise.resolve()).then(function(){if(d.bulkBodies&&typeof d.bulkBodies[hash]==="string"){var b=d.bulkBodies[hash];if(!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});});',
       "    }",
       // JELA-183: handoff-safe lazy Babel for the dynamic pipelines + primer.
       // The widget-side window.__ensureBabel (bootstrap index.html) loads
@@ -6797,6 +6802,28 @@
       f: 0,
     };
     window.__shellTxDrop = d;
+    // JELA-824: pre-fetch all tx bodies in one POST instead of 65-68
+    // individual GETs. The manifest already lists every hash, so we know
+    // the full id set here. bulkReady settles once the map is populated
+    // (or fails silently — txDropResolve falls back to per-body fetch).
+    if (!txBundleDisabled()) {
+      var ids = Object.keys(e);
+      d.bulkReady = fetch(u + "/shell/tx-bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "omit",
+        body: JSON.stringify(ids),
+      })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (map) {
+          if (map && typeof map === "object") d.bulkBodies = map;
+        })
+        .catch(function () {});
+    } else {
+      d.bulkReady = Promise.resolve();
+    }
     return d;
   }
   function ceTxmRead(u) {
@@ -6841,10 +6868,19 @@
   //   Counters (QA): window.__shellTxDrop {h:hits, m:manifest-misses,
   //   r:oracle-rejects, f:drop-fetch-fails}.
   var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  // JELA-824: absent or !== "1" means bulk ON (opt-out polarity, per convention).
+  var TXBUNDLE_DISABLED_KEY = "jellyfin.shell.txBundleDisabled";
   var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
   function txDropDisabled() {
     try {
       return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function txBundleDisabled() {
+    try {
+      return localStorage.getItem(TXBUNDLE_DISABLED_KEY) === "1";
     } catch (_) {
       return false;
     }
@@ -6929,31 +6965,50 @@
           d.m++;
           return null;
         }
-        return fetch(d.base + rel, { credentials: "omit" })
-          .then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.text();
-          })
-          .then(function (body) {
-            if (
-              typeof body !== "string" ||
-              !body.length ||
-              !loweredBodyOk(body)
-            ) {
-              d.r++;
-              return null;
+        // JELA-824: wait for the bulk pre-fetch to settle, then serve from the
+        // map if present; fall back to individual fetch on any miss or failure.
+        var hash = rel.slice(3, -3); // strip leading "tx/" and trailing ".js"
+        return (d.bulkReady || Promise.resolve())
+          .then(function () {
+            if (d.bulkBodies && typeof d.bulkBodies[hash] === "string") {
+              var body = d.bulkBodies[hash];
+              if (!body.length || !loweredBodyOk(body)) {
+                d.r++;
+                return null;
+              }
+              d.h++;
+              // JELA-187: a drop hit means this static body needs lowering.
+              try {
+                localStorage.setItem(DROP_NEEDED_KEY, "1");
+              } catch (_) {}
+              return body;
             }
-            d.h++;
-            // JELA-187: a drop hit means this static body needs lowering —
-            // the warm-boot string fast path must never replay its raw src.
-            try {
-              localStorage.setItem(DROP_NEEDED_KEY, "1");
-            } catch (_) {}
-            return body;
-          })
-          .catch(function () {
-            d.f++;
-            return null;
+            return fetch(d.base + rel, { credentials: "omit" })
+              .then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.text();
+              })
+              .then(function (body) {
+                if (
+                  typeof body !== "string" ||
+                  !body.length ||
+                  !loweredBodyOk(body)
+                ) {
+                  d.r++;
+                  return null;
+                }
+                d.h++;
+                // JELA-187: a drop hit means this static body needs lowering —
+                // the warm-boot string fast path must never replay its raw src.
+                try {
+                  localStorage.setItem(DROP_NEEDED_KEY, "1");
+                } catch (_) {}
+                return body;
+              })
+              .catch(function () {
+                d.f++;
+                return null;
+              });
           });
       })
       .catch(function () {

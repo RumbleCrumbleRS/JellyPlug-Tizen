@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
@@ -333,6 +334,100 @@ public class ShellController : ControllerBase
         }
 
         return PhysicalFile(path, "application/javascript");
+    }
+
+    /// <summary>
+    /// JELA-824: bulk tx-body endpoint — collapses the 65–68 per-body GETs on
+    /// a cold boot to a single round trip. The client POSTs the full id list it
+    /// already knows from the manifest and receives a hash→body JSON map.
+    ///
+    /// Cache policy: no-store. The request body (id set) can vary per client
+    /// and per JSI scripts deploy (ceInvalidate clears every TX_PFX key so the
+    /// whole set is re-fetched on the next boot). Vary: Origin for the M63
+    /// cache-mode-collision reason shared with the per-body route and documented
+    /// on ContentAddressed — the bundle is fetch()ed and must never inherit a
+    /// no-cors cache slot.
+    ///
+    /// Compression: the whole JSON response is gzip-encoded when the client
+    /// explicitly asks (Accept-Encoding: gzip). Individual bodies inside the
+    /// map stay as raw text regardless — the hash in the manifest is fnv1a of
+    /// the SOURCE text, not of the wire bytes, so mixing encodings would not
+    /// invalidate the hashes, but keeping them raw is simpler and the outer
+    /// gzip already covers the bulk of the savings.
+    ///
+    /// The per-body route is not removed; the client falls back to it on any
+    /// bundle miss or when the kill switch ("jellyfin.shell.txBundleDisabled"
+    /// === "1") is set.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("tx-bundle")]
+    [Consumes("application/json")]
+    public async Task<IActionResult> PostTxBundle()
+    {
+        // Hard cap: each body is ≤12 KB and the drop is ~70 entries.
+        // 200 gives comfortable headroom without allowing abuse.
+        const int MaxIds = 200;
+
+        string[] ids;
+        try
+        {
+            using var reader = new System.IO.StreamReader(Request.Body);
+            var raw = await reader.ReadToEndAsync().ConfigureAwait(false);
+            ids = JsonSerializer.Deserialize<string[]>(raw) ?? [];
+        }
+        catch
+        {
+            return BadRequest();
+        }
+
+        if (ids.Length == 0)
+        {
+            return BadRequest();
+        }
+
+        if (ids.Length > MaxIds)
+        {
+            ids = ids[..MaxIds];
+        }
+
+        var result = new Dictionary<string, string>(ids.Length, StringComparer.Ordinal);
+        foreach (var hash in ids)
+        {
+            if (!HashRe.IsMatch(hash))
+            {
+                continue; // skip invalid hashes (also forecloses path traversal)
+            }
+
+            var path = Path.Combine(_drop.TxDir, hash + ".js");
+            if (!System.IO.File.Exists(path))
+            {
+                continue;
+            }
+
+            result[hash] = await System.IO.File.ReadAllTextAsync(path).ConfigureAwait(false);
+        }
+
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.Vary = HeaderNames.Origin;
+
+        if (AcceptsGzip(Request.Headers.AcceptEncoding))
+        {
+            var json = JsonSerializer.SerializeToUtf8Bytes(result);
+            using var ms = new MemoryStream(json.Length / 2);
+            using (var gz = new GZipStream(ms, CompressionLevel.SmallestSize, leaveOpen: true))
+            {
+                gz.Write(json, 0, json.Length);
+            }
+
+            var gzBytes = ms.ToArray();
+            if (gzBytes.Length < json.Length)
+            {
+                Response.Headers.ContentEncoding = "gzip";
+                return File(gzBytes, "application/json");
+            }
+        }
+
+        return Ok(result);
     }
 
     /// <summary>

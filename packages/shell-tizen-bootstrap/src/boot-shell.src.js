@@ -1365,11 +1365,11 @@
       // Release needs card counts stable for Q ms, zero in-flight XHR/fetch and
       // no request activity for Q ms, and an authed ApiClient; a ceiling M ms
       // after first auth guarantees a deferral never becomes a never.
-      // Flag-dark: localStorage["jellyfin.shell.deferBitrateTest"]="1".
+      // JELA-823: fleet-ON (opt-OUT). Kill switch: set "0" to disable.
       // JELA-737 kill switch: "jellyfin.shell.deferBitrateTestGate"="paint".
       // Diag: window.__shellBT.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")==="0")return;',
       "    var D=4000;",
       '    try{var dv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMs")||"",10);if(dv>=0&&dv<=600000)D=dv;}catch(_){}',
       '    var G="settle";',
@@ -1645,7 +1645,8 @@
       "      if(!d||!d.ok||!d.entries)return Promise.resolve(null);",
       '      var rel=d.entries[__txFnv(String(code||""))];',
       '      if(typeof rel!=="string"||!rel){d.m++;return Promise.resolve(null);}',
-      '      return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});',
+      // JELA-824: wait for bulk pre-fetch, serve from map if present.
+      '      var hash=rel.slice(3,-3);return(d.bulkReady||Promise.resolve()).then(function(){if(d.bulkBodies&&typeof d.bulkBodies[hash]==="string"){var b=d.bulkBodies[hash];if(!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}return window.fetch(d.base+rel,{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(b){if(typeof b!=="string"||!b.length||!__loweredOk(b)){d.r++;return null;}d.h++;return b;}).catch(function(){d.f++;return null;});});',
       "    }",
       // JELA-183: handoff-safe lazy Babel for the dynamic pipelines + primer.
       // The widget-side window.__ensureBabel (bootstrap index.html) loads
@@ -5484,6 +5485,26 @@
       f: 0,
     };
     window.__shellTxDrop = d;
+    // JELA-824: pre-fetch all tx bodies in one POST instead of 65-68
+    // individual GETs. bulkReady settles once the map is populated.
+    if (!txBundleDisabled()) {
+      var ids = Object.keys(e);
+      d.bulkReady = fetch(u + "/shell/tx-bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "omit",
+        body: JSON.stringify(ids),
+      })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (map) {
+          if (map && typeof map === "object") d.bulkBodies = map;
+        })
+        .catch(function () {});
+    } else {
+      d.bulkReady = Promise.resolve();
+    }
     return d;
   }
   function ceTxmRead(u) {
@@ -5520,10 +5541,18 @@
   // shell.js (JEL-624 EXPECTED_MIRRORED).
   // Kill switch: localStorage["jellyfin.shell.txDropDisabled"]="1".
   var TXDROP_DISABLED_KEY = "jellyfin.shell.txDropDisabled";
+  var TXBUNDLE_DISABLED_KEY = "jellyfin.shell.txBundleDisabled";
   var TXDROP_MANIFEST_PATH = "/shell/tx-manifest.json";
   function txDropDisabled() {
     try {
       return localStorage.getItem(TXDROP_DISABLED_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+  function txBundleDisabled() {
+    try {
+      return localStorage.getItem(TXBUNDLE_DISABLED_KEY) === "1";
     } catch (_) {
       return false;
     }
@@ -5608,31 +5637,49 @@
           d.m++;
           return null;
         }
-        return fetch(d.base + rel, { credentials: "omit" })
-          .then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.text();
-          })
-          .then(function (body) {
-            if (
-              typeof body !== "string" ||
-              !body.length ||
-              !loweredBodyOk(body)
-            ) {
-              d.r++;
-              return null;
+        // JELA-824: wait for the bulk pre-fetch to settle, then serve from
+        // the map if present; fall back to individual fetch on any miss.
+        var hash = rel.slice(3, -3); // strip "tx/" and ".js"
+        return (d.bulkReady || Promise.resolve())
+          .then(function () {
+            if (d.bulkBodies && typeof d.bulkBodies[hash] === "string") {
+              var body = d.bulkBodies[hash];
+              if (!body.length || !loweredBodyOk(body)) {
+                d.r++;
+                return null;
+              }
+              d.h++;
+              try {
+                localStorage.setItem(DROP_NEEDED_KEY, "1");
+              } catch (_) {}
+              return body;
             }
-            d.h++;
-            // JELA-187: a drop hit means this static body needs lowering —
-            // the warm-boot string fast path must never replay its raw src.
-            try {
-              localStorage.setItem(DROP_NEEDED_KEY, "1");
-            } catch (_) {}
-            return body;
-          })
-          .catch(function () {
-            d.f++;
-            return null;
+            return fetch(d.base + rel, { credentials: "omit" })
+              .then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.text();
+              })
+              .then(function (body) {
+                if (
+                  typeof body !== "string" ||
+                  !body.length ||
+                  !loweredBodyOk(body)
+                ) {
+                  d.r++;
+                  return null;
+                }
+                d.h++;
+                // JELA-187: a drop hit means this static body needs lowering —
+                // the warm-boot string fast path must never replay its raw src.
+                try {
+                  localStorage.setItem(DROP_NEEDED_KEY, "1");
+                } catch (_) {}
+                return body;
+              })
+              .catch(function () {
+                d.f++;
+                return null;
+              });
           });
       })
       .catch(function () {
