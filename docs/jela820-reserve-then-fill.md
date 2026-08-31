@@ -1,9 +1,10 @@
 # JELA-820 — reserve-then-fill for the mid-home rows (`jp820`)
 
 **Date:** 2026-08-31 · **Parent finding:** JELA-815 · **Status: deployed DARK on
-the live JSI channel (`jellyplug.rows.reservefill`, seeded nowhere). AC1 and AC4
-PASS. AC2 failed at 21 px on the first cut; §5b diagnoses it and §5c is the
-fix.** §6 is what is left.
+the live JSI channel (`jellyplug.rows.reservefill`, seeded nowhere).
+AC2 PASSES at 0 px (§5d) and AC4 PASSES as a same-boot differential (§5f).
+AC1 is NOT settled and its old 61 → 26 pair is stale — the production shell moved
+mid-ticket (§5e). AC3 not measured.** §6 is what is left.
 
 Measured on the JELA-112 virtual Tizen 5.0 rig against the LIVE production
 shell `d41a3d7a` and the LIVE JSI channel. **The endpoint is a request COUNT,
@@ -275,13 +276,106 @@ clamp modelled, and the fake pool returns one wrapping title. With `pin820`
 neutered the suite fails with `AC2: section 4 moved 20 px` — the production
 number.
 
+### 5d. AC2 re-measured: **0 px**
+
+Matched pair `ON3` / `OFF3`, shell **`b358bd10`** (not the `d41a3d7a` the numbers
+in §5 were taken on — see §5e).
+
+```
+ #  section (hydrated)                boot  after  delta   hB   hA  ph     reserved
+ 0  Top 10 Today                         0      0     +0  335  335 -      -
+ 1  Top Picks for Test                 732    732     +0  401  401 near   401px
+ 2  Watch It Again                    1157   1157     +0  401  401 near   401px
+ 3  My List                           3409   3409     +0  401  401 near   401px
+ 5  Latest Shows                      1948   1948     +0  341  341 -      -
+ 6  Because You Watched Cars          2313   2313     +0  341  341 -      -
+ 7  Latest Movies                     1582   1582     +0  341  341 -      -
+ 8  Because You Watched The Proposal  2679   2679     +0  341  341 -      -
+ 9  Because You Watched World War Z   3044   3044     +0  341  341 -      -
+10  Continue Watching / Next Up        359    359     +0  349  349 -      -
+```
+
+**Worst |Δ| = 0 px against an 8 px budget — AC2 PASSES.** The reserved rows report
+the same height in both states (401 → 401) where they previously grew 333 → 353.
+
+Two things make this readable as a real pass rather than a quiet one:
+
+- All three rows released on the **geometric** term (`why="near"`), not the
+  fail-open belt, with `reserved=3 pinned=3 fired=3`.
+- **Zero** sections were still marked `ph` in the after-state. A truncated settle
+  leaves the placeholders in place and every Δ trivially 0 — `ac2.mjs` now VOIDs a
+  capture with that signature rather than printing PASS.
+
+AC2 is a **within-capture** comparison, so unlike §5e it is unaffected by the
+shell moving between runs.
+
+**Known slack.** The reservation is 401 px where the hydrated row is 353 px: about
+48 px of reserved space per gated row. `pin820` adds two whole `.cardText` boxes
+(34 px each), but a box is one 20 px line **plus 14 px of padding**, so true
+worst-case growth is 2 × 20 = 40 px and the reservation over-shoots by 28 px. A
+tighter version would read `getComputedStyle(cardText).lineHeight`. Deliberately
+NOT shipped: the conservative version is measured at 0 px, the tighter one is not,
+and under-reserving reintroduces exactly the shift this ticket removes. It belongs
+in flip review, not in an unmeasured commit.
+
+### 5e. AC1 is NOT settled, and the old 61 → 26 pair is stale
+
+`ON3` ran on shell **`b358bd10`**; §5's 61 → 26 was measured on **`d41a3d7a`**.
+JELA-823/824/826 and JELA-817's `bitrateCache` seeder have landed since. A delta
+against the old arm would be a fabrication, so here is the fresh pair only:
+
+| bucket, at boot | OFF3 | ON3 |
+| --------------- | ---: | --: |
+| top-picks + watch-it-again + my-list | **10** | **0** |
+| hss-native | 12 | 14 |
+| card-hydration | 22 | 26 |
+| match-score | 8 | 8 |
+| other-row | 6 | 6 |
+| **home-row total** | **58** | **54** |
+
+The producers come off the boot path completely (**10 → 0**, and the three buckets
+are absent from `ON3`'s boot census entirely) — that is AC4, below. But the
+home-row total moves only **58 → 54**, because in the ON arm `card-hydration`
+(+4) and `hss-native` (+2) are HIGHER.
+
+The likely mechanism is that deferring the producers frees boot concurrency, which
+the rest of the fan-out immediately consumes, so more of it lands inside the fixed
+45 s settle. That is a redistribution, not a regression — but it also means
+**"home-row requests at boot" is not a clean endpoint at n=1 per arm**, because the
+settle window truncates a variable amount of work and the two boots ran at
+different load (5.77 vs 10.55). AC1 needs `boot`-phase arms with repeats, and the
+hypothesis above is what they should be designed to separate.
+
+`OFF3`'s scroll leg additionally stalled (10 sections at boot, still 10 at the
+end; `lastPos` frozen at −1298 after two steps) because without the reserved slots
+and with the genre rows never arriving the home is barely taller than the
+viewport. That costs nothing here — every number above is a **boot**-phase
+measurement, taken before the first key — but it is why `OFF3` must not be read as
+a scroll-phase result.
+
+### 5f. AC4, as a same-boot differential
+
+`OFF3` had `jellyplug.rows.reservefill` **removed pre-nav and not re-seeded**
+(`fl820=null`), with jp815's flag left on so only jp820's half changed:
+
+```
+OFF3  gate820: flag=false reserved=0 pinned=0 fired=0 polls=0   producers @boot 10
+ON3   gate820: flag=true  reserved=3 pinned=3 fired=3 why=near  producers @boot  0
+```
+
+jp820 is completely inert with its key absent, and all ten producer requests are
+back on the boot path exactly as they are today. **AC4 PASSES.**
+
 ## 6. What is left, precisely
 
-1. **Measure AC3** with `boot`-phase arms (`run820.mjs <tag> 1 1 boot`), which is
-   the only phase where a cold-boot total is meaningful — a scroll-phase total is
-   necessarily a wash (527 vs 528) because the deferred work lands inside the
-   same capture.
-2. Then request the fleet flip for `jellyplug.rows.reservefill`.
+1. **Settle AC1 and measure AC3** with `boot`-phase arms
+   (`run820.mjs <tag> 1 1 boot`), repeated, and designed to separate the
+   redistribution effect in §5e — the question is whether the 10 producer requests
+   actually leave the boot or are simply replaced by fan-out that would otherwise
+   have landed later. A scroll-phase total is necessarily a wash because the
+   deferred work lands inside the same capture.
+2. Decide the `getComputedStyle().lineHeight` tightening in §5d.
+3. Then request the fleet flip for `jellyplug.rows.reservefill`.
 
 ## 7. Rollback
 
