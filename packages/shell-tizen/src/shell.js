@@ -4178,6 +4178,12 @@
       // __shellDHHeld there). Reveal timing: settled or the <= 23 s
       // settlecap; Back/Return/Esc stays the mandatory escape hatch.
       'function flg(k){try{return localStorage.getItem(k)==="1"}catch(_){return!1}}' +
+      // Opt-OUT companion to flg (JELA-827 shape): an ABSENT key means ON, and
+      // only the literal "0" stands the feature down. Fail-closed on a THROWING
+      // localStorage — not for symmetry with flg, but because a device whose
+      // getItem throws can never read its own kill switch, and an un-killable
+      // feature is the one state no rollback can reach.
+      'function flgO(k){try{return localStorage.getItem(k)!=="0"}catch(_){return!1}}' +
       'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=23000)return v}catch(_){}return 23000}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
@@ -4928,17 +4934,25 @@
       // BEFORE any waiter is resolved, so a mid-slice throw cannot leave half
       // the batch resolved and half replayed.
       //
-      // SHIPS DARK. Its own opt-in flag, seeded nowhere until a board flip:
-      // localStorage['jellyfin.shell.fcIdsUnion']='1' arms it. With the key
-      // absent the shim is not installed at all and every request is on the
-      // wire. Window: localStorage['jellyfin.shell.fcIdsUnionWindowMs']
+      // JELA-831: FLEET-ON, opt-OUT. This shipped opt-in under JELA-830 and
+      // was seeded nowhere. It could not stay opt-in: the read site is here in
+      // instantHomeBody(), which runs at shell boot, while any JSI-channel seed
+      // lands only AFTER the lite->SPA handoff (JELA-802), so a seeded "1"
+      // would arm ONE BOOT LATE (JELA-821/827). The burst this coalesces is a
+      // COLD-boot burst, so boot-1-dark is precisely where the prize lives —
+      // arming by seeder would have shipped the flip with its effect removed.
+      // An absent key therefore now means ON.
+      // Per-TV kill: localStorage['jellyfin.shell.fcIdsUnion'] = '0' — a SET,
+      // never a removeItem, which is now an ON arm. Setting the window to '0'
+      // (below) is a second, independent stand-down.
+      // Window: localStorage['jellyfin.shell.fcIdsUnionWindowMs']
       // (0..2000, default 250; 0 stands the shim down).
       // Counters: window.__shellFCU {on,w,seen,skip,batch,fire,sing,serve,
       // items,short,absent,fb,err}. The saving is (batch - fire - sing);
       // `short` is the correctness invariant and must stay 0 — it counts ids a
       // waiter asked for that WERE in the union response and yet did not reach
       // its slice, which is the only way the id normalisation could be wrong.
-      'if(flg("jellyfin.shell.fcIdsUnion")&&!W.__shellFCU&&typeof W.fetch==="function"&&typeof Response==="function"&&typeof Promise==="function"){try{' +
+      'if(flgO("jellyfin.shell.fcIdsUnion")&&!W.__shellFCU&&typeof W.fetch==="function"&&typeof Response==="function"&&typeof Promise==="function"){try{' +
       'var iuW=250;try{var iuwv=localStorage.getItem("jellyfin.shell.fcIdsUnionWindowMs");' +
       'if(iuwv!==null&&iuwv!==""){iuwv=parseInt(iuwv,10);if(iuwv>=0&&iuwv<=2000)iuW=iuwv}}catch(_){}' +
       "if(iuW>0){" +
