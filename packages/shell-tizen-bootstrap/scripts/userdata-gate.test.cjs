@@ -75,7 +75,9 @@ const MIN = SRC.endsWith("boot-shell.src.js")
 
 const FLAG = "jellyfin.shell.udcGate";
 const KNOB = "jellyfin.shell.udcCoalesceMs";
-const KILL_LINE = 'localStorage.getItem("' + FLAG + '")!=="1"';
+// JELA-827: gate flipped to opt-OUT — an absent key means ON.
+const KILL_LINE = 'localStorage.getItem("' + FLAG + '")==="0"';
+const OLD_OPTIN_LINE = 'localStorage.getItem("' + FLAG + '")!=="1"';
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -126,8 +128,27 @@ function buildSeed() {
 const seed = buildSeed();
 
 function extractShim() {
+  // JELA-827: pin the read EXPRESSION in src AND min, and pin that the old
+  // fail-closed opt-in form is gone.
   const kill = seed.indexOf(KILL_LINE);
-  check(srcLabel + ": built seed contains the opt-in gate line", kill !== -1);
+  check(srcLabel + ": built seed contains the opt-OUT gate line", kill !== -1);
+  check(
+    srcLabel + ": built seed no longer contains the opt-in gate line",
+    seed.indexOf(OLD_OPTIN_LINE) === -1,
+  );
+  for (const [label, text] of [
+    [srcLabel, src],
+    [minLabel, min],
+  ]) {
+    check(
+      label + ': JELA-827: carries the opt-OUT gate ("==="0"")',
+      text.includes(KILL_LINE),
+    );
+    check(
+      label + ': JELA-827: old opt-in gate ("!=="1"") is gone',
+      !text.includes(OLD_OPTIN_LINE),
+    );
+  }
   if (kill === -1) return null;
   const start = seed.lastIndexOf("try{(function(){", kill);
   const endMark = "\n  })();}catch(_){}";
@@ -261,7 +282,10 @@ function makeDom(ids, opts) {
 function boot(opts) {
   opts = opts || {};
   const store = Object.assign({}, opts.ls || {});
-  if (opts.on !== false) store[FLAG] = "1";
+  // JELA-827: the gate is opt-OUT — an ABSENT key is an ON arm. `on:false`
+  // must therefore SEED "0"; `on:"absent"` leaves the key unset (also ON).
+  if (opts.on === false) store[FLAG] = "0";
+  else if (opts.on !== "absent") store[FLAG] = "1";
   if (opts.coalesceMs !== undefined) store[KNOB] = String(opts.coalesceMs);
 
   const WS = makeWebSocketClass();
@@ -345,18 +369,39 @@ const ON_SCREEN = "aaaaaaaabbbbccccddddeeeeeeeeeeee";
 const OFF_SCREEN = "ffffffff1111222233334444ffffffff";
 const OTHER_OFF = "0123456789abcdef0123456789abcdef";
 
-// --- B0: inert without the flag --------------------------------------------
+// --- B0: JELA-827 kill switch — flag "0" -> inert. This is the arm that proves
+//     the gate is still live and was not merely deleted, AND it is the control
+//     that reproduces the original defect. Rollback for this flag is
+//     setItem(FLAG,"0"), NEVER removeItem.
 {
   const s = boot({ on: false, ids: [ON_SCREEN] });
   const { ws, seen } = s.open();
   ws.__recv(udc([OFF_SCREEN]));
   ws.__recv(udc([OFF_SCREEN]));
-  check("B0: no flag -> no diag object", s.diag() === undefined);
+  check('B0: flag "0" -> no diag object', s.diag() === undefined);
   check(
-    "B0: no flag -> the vendor handler sees the rebuild trigger (defect reproduced)",
+    'B0: flag "0" -> the vendor handler sees the rebuild trigger (defect reproduced)',
     seen.length === 2,
     "delivered " + seen.length,
   );
+}
+
+// --- B0b: JELA-827 — key ABSENT must behave EXACTLY like the seeded "1" arm.
+//     The "1" is written by the jp807seed JSI channel entry, which runs only
+//     after the lite->SPA handoff (JELA-802), so every cold boot reads null
+//     here. Under the old `!== "1"` gate those boots swallowed nothing.
+{
+  const s = boot({ on: "absent", ids: [ON_SCREEN] });
+  const { ws, seen } = s.open();
+  ws.__recv(udc([OFF_SCREEN]));
+  check("B0b: key absent -> diag object published (opt-OUT)", !!s.diag());
+  check("B0b: key absent -> off-screen id dropped", seen.length === 0);
+  check(
+    "B0b: key absent -> counted as dropNoHit",
+    s.diag() && s.diag().dropNoHit === 1,
+  );
+  ws.__recv(udc([ON_SCREEN]));
+  check("B0b: key absent -> on-screen id still delivered", seen.length === 1);
 }
 
 // --- B1/B2: the diff --------------------------------------------------------

@@ -1251,13 +1251,21 @@
       // removeEventListener are wrapped too so a vendor switch of transport
       // cannot silently un-gate this.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.udcGate"]="1".
+      // JELA-827: fleet-ON (opt-OUT). This shipped as `!== "1"` -> bail, but
+      // the "1" is written by the jp807seed JSI channel entry, which only
+      // runs AFTER the lite→SPA handoff (JELA-802), so on a cold boot the
+      // key is absent and every UserDataChanged push landed unswallowed —
+      // the JELA-807 prize is 16.00 reqs / 59,680 B per swallowed push, and
+      // a fresh install paid all of it. Read for the kill switch instead:
+      // absent key means ON.
+      // Per-TV kill: localStorage["jellyfin.shell.udcGate"]="0" (the jp807
+      // seeder guards on !== "0", so a "0" survives the channel).
       // Tunable: "jellyfin.shell.udcCoalesceMs" (default 3000; 0 = no
       // coalescing, diff only).
       // Diag: window.__shellUdc =
       //   {on,seen,pass,dropNoHit,dropDup,held,ids,err}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.udcGate")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.udcGate")==="0")return;',
       "    if(window.__shellUdc)return;",
       "    var P=window.WebSocket&&window.WebSocket.prototype;if(!P)return;",
       "    var G=window.__shellUdc={on:1,seen:0,pass:0,dropNoHit:0,dropDup:0,held:0,ids:0,err:0};",

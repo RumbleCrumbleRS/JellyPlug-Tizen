@@ -222,8 +222,10 @@ const INTENTIONAL_DIVERGENCES = [
     // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
     // JELA-827 (3/5): re-pinned — the homeResume gate flipped from opt-in to
     // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
-    retail: "605fda07d6bc96ac",
-    boot: "9f09ea4ba637b010",
+    // JELA-827 (4/5): re-pinned — the udcGate gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
+    retail: "50aff9f20214f577",
+    boot: "b8d6bfca4d3e9351",
   },
   {
     name: "buildDiagSeedScript",
