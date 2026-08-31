@@ -203,6 +203,18 @@ export const MOUNT_MAX = 20;
  * `-webkit-line-clamp:2`, so two is the exact worst case, not a guess.
  */
 export const TEXT_LINE_SLACK = 2;
+/**
+ * How many polls a held row keeps RE-measuring its reservation.
+ *
+ * `pin820` clears the inline `min-height` and reads `offsetHeight`, which forces
+ * a synchronous document layout. A row can be held for as long as the user
+ * looks at the home without scrolling, so re-measuring forever would mean
+ * hundreds of forced layouts on a Tizen 5.0 panel during exactly the window
+ * jp820 exists to make cheap. The re-measure only exists to survive a first
+ * measurement taken before the theme CSS lands, and that is settled inside a
+ * couple of seconds, so eight polls (~6 s at 750 ms) is generous.
+ */
+export const PIN_POLLS = 8;
 /** Lookahead floor, px. Normally `innerHeight` dominates; this covers a 0/NaN. */
 export const LOOKAHEAD_MIN_PX = 540;
 
@@ -220,7 +232,9 @@ export const LOOKAHEAD_MIN_PX = 540;
 export const HOLD_EL_SRC =
   "/*jp820*/" +
   "var EQ=[],EK={},eH=null,eF=0,eP=0,eO=0,eW=null,RES=0,NOM=0,PIN=0," +
-  "SL=" +
+  "PP=" +
+  PIN_POLLS +
+  ",SL=" +
   TEXT_LINE_SLACK +
   ",MM=" +
   MOUNT_MAX +
@@ -295,9 +309,10 @@ export const HOLD_EL_SRC =
   "for(i=0;i<EQ.length;i++){it=EQ[i];nd=node820(it);" +
   // Bounded give-up: never let a row hang because its slot never mounted.
   'if(!nd){if(++it.m>=MM){NOM++;fire820(it,"nomount");continue}keep.push(it);continue}' +
-  // Re-measure BEFORE the near test so the reservation is refreshed right up to
-  // the poll that releases the row — by then the theme CSS has certainly landed.
-  "pin820(nd);" +
+  // Re-measure BEFORE the near test, but only for the first PP polls: this
+  // forces a layout, and a row can be held for as long as the user does not
+  // scroll.
+  "if(it.p<PP){pin820(nd);it.p++}" +
   'if(scr&&nearEl(nd)){fire820(it,"near");continue}' +
   "keep.push(it)}" +
   "EQ=keep;if(EQ.length)esched()}" +
@@ -309,7 +324,7 @@ export const HOLD_EL_SRC =
   'if(typeof fn!="function")return!1;' +
   "if(!on820()){try{fn()}catch(e){}return!1}" +
   "if(EK[k])return!0;" +
-  "var it={k:k,el:el,fn:fn,m:0};" +
+  "var it={k:k,el:el,fn:fn,m:0,p:0};" +
   // Resolve once now so the placeholder is in the DOM at boot, not a poll later.
   "var nd=node820(it);" +
   // Pin before the immediate-fire branch too. It cannot be taken at boot (`scr`
