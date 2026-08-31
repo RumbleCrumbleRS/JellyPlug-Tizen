@@ -1,7 +1,14 @@
 /*
  * JELA-707 (JELA-699 follow-up): defer the JellyfinEnhanced injection until
- * after firstCard — opt-in via localStorage['jellyfin.shell.deferJe']='1',
- * default OFF.
+ * after firstCard.
+ *
+ * JELA-821 flipped the gate to opt-OUT: default ON, disabled only by an
+ * explicit localStorage['jellyfin.shell.deferJe']='0'. It shipped opt-in, and
+ * the jp773 channel seed of '1' arms ONE BOOT LATE (the JSI channel runs only
+ * after the lite->SPA handoff, JELA-802), so every key-absent boot — first
+ * install, re-install, localStorage eviction — read null !== '1' and paid the
+ * full pre-paint JE module storm (152 modules / 670,857 B in 9/9 valid boots
+ * across two rigs; JELA-813/819). B0/B0b/B3 below are the regression pins.
  *
  * THE LEVER. JELA-699 ring A on the calibrated JELA-690 harness measured
  * blocking JE's script injection at firstCard −3,340 ms [−4,589, −2,338],
@@ -16,15 +23,20 @@
  * the JEL-406/407 dynamic-script interceptors (transpile + JEL-557 cache).
  *
  * WHAT THIS PINS
- *   PART A — CONTRACT (src + minified sibling): opt-in flag, delay knob,
- *            diag object, injection marker, ES5-only seed text.
+ *   PART A — CONTRACT (src + minified sibling): opt-OUT read site pinned by
+ *            its exact expression (the file also contains 'deferJeMs' — an
+ *            unscoped substring check would pass on the wrong key), delay
+ *            knob, diag object, injection marker, ES5-only seed text.
  *   PART B — STRIP (the REAL stripJeScriptsForDefer, lifted from source):
- *     B0. no flag -> html unchanged, no diag object installed.
+ *     B0. key ABSENT -> JE tags stripped, diag installed (JELA-821).
+ *     B0b. key = "0" -> html unchanged, no diag object (kill switch).
  *     B1. flag on -> JE tags (either name shape, any case, defer attr,
  *         entity-escaped query) removed; non-JE tags byte-identical; URLs
  *         captured in document order as raw attribute text.
  *     B2. flag on, no JE tags -> the exact input reference is returned.
- *     B3. a throwing localStorage -> fail-safe passthrough.
+ *     B3. a throwing localStorage -> still defers (the kill switch is
+ *         unreadable, and unreadable storage is exactly the key-absent case
+ *         the fleet default covers; same shape as stripDeadMediaBarJs).
  *     B4. src is the ONLY match surface — a non-JE src with "JellyfinEnhanced"
  *         elsewhere in the tag stays.
  *   PART C — RE-INJECTOR (the shim IIFE lifted from the SHIPPED seed):
@@ -131,7 +143,20 @@ for (const [label, text] of [
   [srcLabel, src],
   [minLabel, min],
 ]) {
-  check(label + ": opt-in flag survives", text.includes(FLAG));
+  // Scope the pin to the READ EXPRESSION, not the key: the bare substring
+  // "jellyfin.shell.deferJe" also matches "jellyfin.shell.deferJeMs", so a
+  // key-only check cannot tell an armed gate from the delay knob, nor an
+  // opt-out read site from the JELA-821 opt-in bug it replaced.
+  check(
+    label + ': gate is opt-OUT (=== "0"), not opt-in',
+    text.includes('getItem("' + FLAG + '")==="0"') ||
+      text.includes('getItem("' + FLAG + '") === "0"'),
+  );
+  check(
+    label + ": no opt-in read site remains",
+    !text.includes('getItem("' + FLAG + '")!=="1"') &&
+      !text.includes('getItem("' + FLAG + '") !== "1"'),
+  );
   check(label + ": delay knob survives", text.includes(DELAY_KEY));
   check(label + ": diag object present", text.includes("__shellJeDefer"));
   check(
@@ -190,12 +215,50 @@ const HTML =
   KEEP_DATA +
   "</head><body></body></html>";
 
-// B0 — flag off.
+// B0 — key ABSENT: the JELA-821 regression pin. This is the first-install /
+// post-eviction boot, which the shipped opt-in gate left un-deferred.
 {
   const { fn, win } = makeStrip(lsWith({}));
   const out = fn(HTML);
-  check("B0: flag off -> html untouched", out === HTML);
-  check("B0: flag off -> no diag object", !("__shellJeDefer" in win));
+  const d = win.__shellJeDefer;
+  check(
+    "B0: key absent -> JE tags stripped (JELA-821)",
+    out.indexOf("JellyfinEnhanced/script") === -1 &&
+      out.indexOf("Jellyfin-Enhanced@main") === -1,
+  );
+  check("B0: key absent -> non-JE tags intact", out.indexOf(KEEP_TAG) !== -1);
+  check(
+    "B0: key absent -> diag proves the arm",
+    d && d.on === 1 && d.held === 2,
+    d && "on=" + d.on + " held=" + d.held,
+  );
+}
+// B0b — kill switch: an explicit "0" still opts the device out.
+{
+  const { fn, win } = makeStrip(lsWith({ [FLAG]: "0" }));
+  const out = fn(HTML);
+  check('B0b: flag "0" -> html untouched', out === HTML);
+  check('B0b: flag "0" -> no diag object', !("__shellJeDefer" in win));
+}
+// B0c — an unrelated value is NOT a kill switch (only "0" disables).
+{
+  const { fn, win } = makeStrip(lsWith({ [FLAG]: "" }));
+  check(
+    'B0c: empty value is not "0" -> still defers',
+    fn(HTML).indexOf("JellyfinEnhanced/script") === -1 &&
+      win.__shellJeDefer &&
+      win.__shellJeDefer.held === 2,
+  );
+}
+// B0d — the delay knob must not be mistaken for the gate.
+{
+  const { fn, win } = makeStrip(lsWith({ [DELAY_KEY]: "0" }));
+  check(
+    "B0d: deferJeMs=0 does not disable the gate",
+    fn(HTML).indexOf("JellyfinEnhanced/script") === -1 &&
+      win.__shellJeDefer &&
+      win.__shellJeDefer.held === 2,
+  );
 }
 // B1 — flag on, JE tags stripped, everything else intact.
 {
@@ -239,14 +302,24 @@ const HTML =
     win.__shellJeDefer && win.__shellJeDefer.held === 0,
   );
 }
-// B3 — throwing localStorage.
+// B3 — throwing localStorage: the kill switch is unreadable, so the fleet
+// default applies and we defer (matches stripDeadMediaBarJs's shape).
 {
-  const { fn } = makeStrip({
+  const { fn, win } = makeStrip({
     getItem() {
       throw new Error("quota");
     },
   });
-  check("B3: throwing localStorage -> passthrough", fn(HTML) === HTML);
+  const out = fn(HTML);
+  check(
+    "B3: throwing localStorage -> still defers",
+    out.indexOf("JellyfinEnhanced/script") === -1,
+  );
+  check("B3: non-JE tags intact", out.indexOf(KEEP_TAG) !== -1);
+  check(
+    "B3: diag proves the arm",
+    win.__shellJeDefer && win.__shellJeDefer.held === 2,
+  );
 }
 
 // ===========================================================================
