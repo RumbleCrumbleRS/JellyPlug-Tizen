@@ -136,7 +136,25 @@ function mkDom(opts) {
       tagName: String(tag).toUpperCase(),
       className: "",
       id: "",
-      style: {},
+      // A real browser reflows the instant a `min-height` lands. This fixture's
+      // layout is manual, so that has to be modelled explicitly — otherwise a
+      // reservation applied AFTER the section was laid out reads as a shift the
+      // browser would never show, and (worse) the reverse would let a pin that
+      // never reflowed look like it worked.
+      style: (() => {
+        const st = { _mh: "" };
+        Object.defineProperty(st, "minHeight", {
+          enumerable: true,
+          get() {
+            return this._mh;
+          },
+          set(v) {
+            this._mh = v;
+            layout();
+          },
+        });
+        return st;
+      })(),
       attrs: Object.create(null),
       children: [],
       parentNode: null,

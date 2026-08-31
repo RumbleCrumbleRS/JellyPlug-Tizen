@@ -344,10 +344,12 @@ export const HOLD_EL_SRC =
   "var b=null;try{b=o.build?o.build():null}catch(e2){b=null}" +
   "if(!b)return null;" +
   'sane820(b);mark820(b,"ph");' +
-  // Reserve the tall state the moment the slot exists, not one poll later.
-  "pin820(b);" +
   "var ok=!1;try{ok=!!(o.mount&&o.mount(b))}catch(e3){ok=!1}" +
   "if(!ok)return null;" +
+  // Pin AFTER the mount: a detached node measures 0, so pinning before it
+  // would silently do nothing and leave the slot unreserved until the first
+  // poll. The reservation has to exist from the instant the slot does.
+  "pin820(b);" +
   "RES++;nd=b;return nd}}" +
   "function stats820(){return{flag:on820(),gate815:on(),reserved:RES,pinned:PIN,held:EQ.length,fired:eF," +
   "polls:eP,opened:eO,why:eW,nomount:NOM,scrolled:scr,vh:vh(),look:look1()}}" +
