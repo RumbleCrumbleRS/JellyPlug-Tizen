@@ -331,7 +331,8 @@ Board approved the deploy on interaction `0b2aa86c` (accepted 2026-08-31 20:17 Z
 | `release-server-plugin` (dispatch-only, `confirm_version=1.0.46.0`) | run `33435750040` **success**; release `server-plugin-v1.0.46.0` with `jellyplug-shell_1.0.46.0.zip`; `plugin-repo/manifest.json` spliced |
 | merged shell bytes vs the pre-release pin                           | **exact match** on both shells                                                                                                            |
 
-**AC1 is NOT yet met at the close of this run.** A publish is not a deploy: the
+**AC1 is NOT yet met at the close of this run** — it was met later, under
+JELA-832; see **§9.2**. A publish is not a deploy: the
 Jellyfin server auto-pulls the plugin zip **and restarts** on its own cadence
 (`docs/deploy-runbook.md` §1), which the release step does not control. At close,
 9 minutes of `verify-shell-deploy.sh --poll` (18 polls) still read:
@@ -351,3 +352,120 @@ Because the flip is opt-**OUT**, the AC2 two-boot proof inverts relative to
 JELA-830: `window.__shellFCU` must be present on **boot 1**. The JELA-829 §4 gate
 still applies — boot-1 `lsPost` ∩ boot-2 `lsPre` must be large, or boot 2
 silently re-ran boot 1 and the pair is VOID.
+
+## 9. JELA-832 — acceptance against the shipped artifact
+
+### 9.1 Propagation was driven, not waited on
+
+The §8.5 close-state above was not a slow cadence; it was a **stalled** one. The
+`Update Plugins` scheduled task had last run at 18:17 Z and had never seen the
+20:23 Z release, so no amount of polling was going to pick it up.
+
+| step                                     | result                                           |
+| ---------------------------------------- | ------------------------------------------------ |
+| `POST /ScheduledTasks/Running/f9b057c0…` | `204`                                            |
+| `GET /Plugins` litmus **before** restart | `1.0.45.0 Superseded` + **`1.0.46.0 Restart`**   |
+| `POST /System/Restart`                   | `204`, unreachable ~110 s, live again 20:48:50 Z |
+
+No second approval gate was opened: interaction `0b2aa86c` approved the deploy,
+and the restart is the documented mechanism of that approved deploy rather than
+a new decision.
+
+### 9.2 AC1 — the released sha is on the wire, as bytes
+
+| check                                   | value                                                              |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| `/shell/manifest.json` `sha256`         | `f3fdc2df8988134aee22c7e36336abc67d6fb0c13e5ac7b3eb07cd7cf797bfad` |
+| `curl /shell/shell.min.js \| sha256sum` | **identical**                                                      |
+| `/Plugins`                              | `JellyPlug Shell 1.0.46.0 Active`                                  |
+
+Hashing the manifest's _claim_ would have been the JELA-821 trap in reverse; the
+served body is the artifact. The release zip was independently audited too — zip
+md5 matches the `plugin-repo/manifest.json` entry, and the DLL embeds
+`shell.min.js` byte-identical to the tracked artifact at `5488559`, containing
+**1 ×** `flgO("jellyfin.shell.fcIdsUnion")` and **0 ×** stale `flg(...)`.
+
+One correction to the JELA-832 hand-off table: it pins `boot-shell.min.js`
+`4e8c61fb…` as "intended". The tracked artifact does hash to exactly that, but
+`boot-shell.min.js` is the **`.wgt` bootstrap** — it does not travel through the
+plugin channel and is **not verifiable on this wire at all**. It is not an AC1
+check and is not claimed as one.
+
+### 9.3 The captures
+
+Six cold boots plus one warm, all on the shipped `f3fdc2df` shell with
+`shellProvenanceOk=true`. `queryAuth` seeded in **both** arms (JELA-829 §1);
+`preflight.sh` CLEAR before the sequence; every boot load-gated.
+
+| capture      | arm | armSeed        | `__shellFCU`  | seen | wire | saved | short | err | idsGETs |
+| ------------ | --- | -------------- | ------------- | ---- | ---- | ----- | ----- | --- | ------- |
+| ON1-b1       | ON  | absent         | **PRESENT**   | 10   | 8    | −2    | 0     | 0   | 8       |
+| ON1-b2       | ON  | absent         | **PRESENT**   | 11   | 10   | −1    | 0     | 0   | 9       |
+| ON1-b3(warm) | ON  | absent         | **PRESENT**   | 10   | 7    | −3    | 0     | 0   | 6       |
+| ON2-b1       | ON  | absent         | **PRESENT**   | 11   | 9    | −2    | 0     | 0   | 8       |
+| ON3-b1       | ON  | absent         | **PRESENT**   | 14   | 11   | −3    | 0     | 0   | 9       |
+| OFF1-b1      | OFF | `setItem("0")` | **UNDEFINED** | —    | —    | —     | —     | —   | 10      |
+| OFF3-b1      | OFF | `setItem("0")` | **UNDEFINED** | —    | —    | —     | —     | —   | 10      |
+
+### 9.4 AC2 — boot-1 arming: PASS, and the carry guard needed repairing
+
+The substantive claim passes directly and four times over: on a **wiped** profile
+with `jellyfin.shell.fcIdsUnion` **absent pre-nav**, `__shellFCU` is PRESENT and
+doing real work. Nothing has to carry for an opt-OUT flag, which is the whole
+point of the flip.
+
+The JELA-829 §4 carry guard, however, first read VOID — and the cause is the
+**rig**, not the shim:
+
+| pair            | boot-1 `lsPost` | boot-2 `lsPre` | carried   | verdict   |
+| --------------- | --------------- | -------------- | --------- | --------- |
+| ON1 boot1→boot2 | 378             | 25             | **6 %**   | **VOID**  |
+| ON1 boot2→boot3 | 378             | 378            | **100 %** | **VALID** |
+
+Two explanations were tested and **refuted** before the real one was found:
+
+- **Not quota.** Boot-1 `lsPost` totals 3,649,417 UTF-16 code units — 69.6 % of
+  the 5,242,880 cap (JELA-797). Nowhere near it.
+- **Not the JELA-817 late-write loss.** `prof-ON1` was copied and opened by a
+  **second browser process** on the same origin: **378 of 378 keys present**, the
+  full 309-key tx cache included. The `about:blank` + 25 s dwell works.
+
+What the two rows above have in common is the wipe. **The boot immediately after
+`rmSync(profile)` does not durably commit its localStorage tail**; once the
+profile directory pre-exists, commits are fully durable. So on this rig a
+two-boot carry proof must be run as boots **2→3** of a three-boot sequence (or
+against a pre-created profile) — the boot right after a wipe can never be its
+boot 1. That is a harness defect that would silently VOID any future two-boot
+proof, and it is the reason this one first looked VOID.
+
+On the VALID 2→3 pair the polarity is pinned the right way round: the key is
+**absent** pre-nav on both boots and `__shellFCU` is **PRESENT** on both.
+
+### 9.5 AC3 — PASS
+
+Five ON boots on the fleet path with nothing seeded: `short = 0`, `err = 0`,
+`absent = 0`, `fb = 0` on every one. Same-boot `seen → wire` is **−1 to −3**
+(cold mean −2.0), inside the −2…−4 band §7 predicted.
+
+### 9.6 AC4 — PASS
+
+On the shipped artifact, `setItem("jellyfin.shell.fcIdsUnion","0")` leaves
+`__shellFCU` **undefined** — uninstalled, not merely inert — on 2/2 OFF boots,
+against PRESENT on 5/5 ON boots. The OFF arm is built with `setItem("0")` and
+never with `removeItem`, which under an opt-OUT flag is an **ON** arm and would
+have been a fake control (JELA-816).
+
+### 9.7 What §7 this closes, and what it does not
+
+§7 flagged that the **absolute** wire count tracks rendered home size, and that
+one ON boot had landed at 9 rather than ≤ 8. With a matched OFF control on the
+same artifact that ambiguity resolves: every cold ON boot (8, 9, 8, 9) is
+strictly below every OFF boot (10, 10), on a home that built the same 130 cards
+and 11 sections in all six. The absolute count is still the wrong AC shape —
+judge by same-boot `seen → wire` — but the ON/OFF separation is clean.
+
+The **warm** path is still not a _performance_ result. ON1-b3 shows the shim
+arms and behaves correctly when warm (`tx=150/2`, `short=0`, `err=0`), but it is
+a third boot of a decaying profile, so its `reqs=201` / `firstCard=5,024 ms` are
+**not** quotable as a warm measurement. A warm timing arm still requires a replay
+into a fresh profile.
