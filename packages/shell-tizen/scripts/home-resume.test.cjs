@@ -363,7 +363,10 @@ async function run() {
   //         so every cold boot read null and got the blank-home rebuild.
   {
     const app = launch({});
-    assert(app.D && app.D.on === 1, "key absent must publish __shellHR (opt-OUT)");
+    assert(
+      app.D && app.D.on === 1,
+      "key absent must publish __shellHR (opt-OUT)",
+    );
     app.pushChunk([18119], HOMETAB_MODULE);
     assert.strictEqual(app.D.found, 1, "absent: the hometab factory is found");
 
@@ -376,7 +379,11 @@ async function run() {
     const c2 = await visit(app, r2);
     assert.strictEqual(c2, c1, "absent: the SAME controller comes back");
     assert.strictEqual(app.D.hits, 1, "absent: the arm fired (hits>0)");
-    assert.strictEqual(app.log.load, 1, "absent: mount2 issues NO loadSections");
+    assert.strictEqual(
+      app.log.load,
+      1,
+      "absent: mount2 issues NO loadSections",
+    );
     assert.strictEqual(
       r2.querySelector(".sections").rows(),
       18,
@@ -425,7 +432,10 @@ async function run() {
       "the homeSectionsContainer class travels with the rows",
     );
     assert.strictEqual(c1.sectionsContainer, sec2, "controller re-pointed");
-    assert.strictEqual(c1.view, r2.querySelector(".tabContent[data-index='0']"));
+    assert.strictEqual(
+      c1.view,
+      r2.querySelector(".tabContent[data-index='0']"),
+    );
 
     // settingschange must still force a full rebuild on the adopted node
     sec2.dispatch("settingschange");
@@ -490,7 +500,11 @@ async function run() {
       await app.W.fetch("/Users/u1/PlayedItems/x", { method: "POST" });
     else new app.W.XMLHttpRequest().open("POST", "/Users/u1/PlayedItems/x");
     await visit(app, mount());
-    assert.strictEqual(app.log.load, 2, via + ": AC4 — a POST forces a rebuild");
+    assert.strictEqual(
+      app.log.load,
+      2,
+      via + ": AC4 — a POST forces a rebuild",
+    );
     assert.strictEqual(app.D.dirty, 1, via + ": …counted as dirty");
   }
   {

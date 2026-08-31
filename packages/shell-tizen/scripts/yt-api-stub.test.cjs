@@ -156,11 +156,11 @@ for (const [name, src] of ARTIFACTS) {
   check(name + ": installs YT.PlayerState", iife.includes("PlayerState:"));
   // ES5 only — this runs pre-polyfill on Chromium 56/63.
   check(name + ": body is ES5 (no arrow functions)", iife.indexOf("=>") === -1);
-  check(name + ": body is ES5 (no template literals)", iife.indexOf("`") === -1);
   check(
-    name + ": body is ES5 (no let/const)",
-    !/\b(let|const)\s/.test(iife),
+    name + ": body is ES5 (no template literals)",
+    iife.indexOf("`") === -1,
   );
+  check(name + ": body is ES5 (no let/const)", !/\b(let|const)\s/.test(iife));
   check(name + ": no eval", iife.indexOf("eval(") === -1);
   // Content-pattern based, never plugin-name coupled.
   check(
@@ -194,9 +194,7 @@ function runStub(
 
   const created = [];
   const inserted = [];
-  const scripts = [
-    { tagName: "SCRIPT", src: "", parentNode: null },
-  ];
+  const scripts = [{ tagName: "SCRIPT", src: "", parentNode: null }];
   scripts[0].parentNode = {
     insertBefore(node) {
       inserted.push(node);
@@ -337,7 +335,10 @@ async function execScenarios(label, iife) {
     const r = runStub(iife, {
       store: { "jellyfin.shell.ytIframeCapDisabled": "1" },
     });
-    check(label + " B5: stands down when JEL-238 cap disabled", r.win.YT === undefined);
+    check(
+      label + " B5: stands down when JEL-238 cap disabled",
+      r.win.YT === undefined,
+    );
   }
 
   // B6: never clobber a real API that already loaded. Flag is ON here — the

@@ -435,7 +435,10 @@ const OTHER_OFF = "0123456789abcdef0123456789abcdef";
   ws.__recv('{"MessageType":"UserDataChanged"'); // truncated JSON
   ws.__recv(JSON.stringify({ MessageType: "UserDataChanged", Data: {} }));
   ws.__recv(
-    JSON.stringify({ MessageType: "UserDataChanged", Data: { UserDataList: [] } }),
+    JSON.stringify({
+      MessageType: "UserDataChanged",
+      Data: { UserDataList: [] },
+    }),
   );
   ws.__recv(
     JSON.stringify({
@@ -453,7 +456,10 @@ const OTHER_OFF = "0123456789abcdef0123456789abcdef";
   const s = boot({ ids: [ON_SCREEN] }); // DOM carries the dashless lowercase form
   const { ws, seen } = s.open();
   ws.__recv(udc([dashed]));
-  check("B5: dashed/upper socket id matches dashless/lower DOM id", seen.length === 1);
+  check(
+    "B5: dashed/upper socket id matches dashless/lower DOM id",
+    seen.length === 1,
+  );
 }
 
 // --- B6: the current route counts as shown ---------------------------------
@@ -467,7 +473,10 @@ const OTHER_OFF = "0123456789abcdef0123456789abcdef";
   const s = boot({ ids: [], hash: "#/home.html" });
   const { ws, seen } = s.open();
   ws.__recv(udc([OFF_SCREEN]));
-  check("B6: unrelated route does not rescue an off-screen id", seen.length === 0);
+  check(
+    "B6: unrelated route does not rescue an off-screen id",
+    seen.length === 0,
+  );
 }
 
 // --- B7: coalescing ---------------------------------------------------------
@@ -509,7 +518,10 @@ const OTHER_OFF = "0123456789abcdef0123456789abcdef";
   const s = boot({ ids: [ON_SCREEN], hidden: true, coalesceMs: 0 });
   const { ws, seen } = s.open();
   ws.__recv(udc([ON_SCREEN]));
-  check("B9: hidden -> held, not delivered", seen.length === 0 && s.diag().held === 1);
+  check(
+    "B9: hidden -> held, not delivered",
+    seen.length === 0 && s.diag().held === 1,
+  );
   ws.__recv(udc([ON_SCREEN]));
   check("B9: a second hidden frame replaces the held one", seen.length === 0);
   s.doc.visibilityState = "visible";
@@ -630,7 +642,10 @@ const OTHER_OFF = "0123456789abcdef0123456789abcdef";
   // ...and a push that DOES touch a rendered card still rebuilds.
   s.tick(90000);
   ws.__recv(udc([home[7]]));
-  check("C: a push that touches a rendered card still delivers", seen.length === 1);
+  check(
+    "C: a push that touches a rendered card still delivers",
+    seen.length === 1,
+  );
 }
 
 console.log(

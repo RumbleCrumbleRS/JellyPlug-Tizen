@@ -65,11 +65,13 @@ assert(
 // opt-OUT (absent key => ON) because the "1" is channel-seeded and the JSI
 // channel only runs after the lite->SPA handoff (JELA-802).
 assert(
-  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")==="0"') !== -1,
+  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")==="0"') !==
+    -1,
   'JELA-827: diagBeacon gate must read ==="0" (opt-OUT)',
 );
 assert(
-  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")!=="1"') === -1,
+  body.indexOf('localStorage.getItem("jellyfin.shell.diagBeacon")!=="1"') ===
+    -1,
   'JELA-827: old opt-in gate !=="1" must be gone (dead on every cold boot)',
 );
 assert(body.indexOf("/shell/diag") !== -1, "POST target /shell/diag missing");

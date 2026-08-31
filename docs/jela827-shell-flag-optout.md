@@ -14,7 +14,7 @@ A shell gate is boot-1-dead when **both** hold:
 1. the read site is **in the shell**, so it runs before the lite→SPA handoff, and
 2. the key is **channel-seeded** — the JSI channel writes it, i.e. fleet-ON.
 
-The channel only runs *after* the handoff (JELA-802). On a first install, a
+The channel only runs _after_ the handoff (JELA-802). On a first install, a
 localStorage wipe or a quota eviction the key is absent when the shell reads it,
 the fail-closed branch is taken, and the fleet-ON feature does nothing for that
 entire boot. Every post-flip measurement ever taken on these flags was a warm
@@ -26,12 +26,12 @@ this for `deferJe`).
 
 ## The five flags
 
-| flag | shipped under | before | after |
-| --- | --- | --- | --- |
-| `diagBeacon` | JELA-30 / 34 | `!=="1"` → bail | `==="0"` → bail |
-| `ytApiStub` | JELA-725 | `!=="1"` → bail | `==="0"` → bail |
-| `homeResume` | JELA-753 / 789 | `!=="1"` → bail | `==="0"` → bail |
-| `udcGate` | JELA-761 / 807 | `!=="1"` → bail | `==="0"` → bail |
+| flag            | shipped under  | before            | after             |
+| --------------- | -------------- | ----------------- | ----------------- |
+| `diagBeacon`    | JELA-30 / 34   | `!=="1"` → bail   | `==="0"` → bail   |
+| `ytApiStub`     | JELA-725       | `!=="1"` → bail   | `==="0"` → bail   |
+| `homeResume`    | JELA-753 / 789 | `!=="1"` → bail   | `==="0"` → bail   |
+| `udcGate`       | JELA-761 / 807 | `!=="1"` → bail   | `==="0"` → bail   |
 | `lsWriteBehind` | JELA-776 / 806 | `==="1"` → enable | `!=="0"` → enable |
 
 `lsWriteBehind` uses the `==="1"` **assignment** form rather than an early
@@ -39,8 +39,8 @@ return. A grep for the `!=="1"` bail shape misses it entirely — worth
 remembering the next time this audit is run.
 
 `homeResume`'s seeder header had already written the defect down as expected
-behaviour: *"The shell reads the key BEFORE this channel executes, so the seed
-takes effect on the NEXT boot."* It was filed as a deploy-verification caveat,
+behaviour: _"The shell reads the key BEFORE this channel executes, so the seed
+takes effect on the NEXT boot."_ It was filed as a deploy-verification caveat,
 not as a bug.
 
 ## Seeding was re-derived, not trusted
@@ -89,13 +89,13 @@ no-HTTP-cache rule is per PROCESS, not per boot.
 
 Three arms, all five keys set together, one pre-nav difference:
 
-| flag | ABSENT (cold boot) | SEEDED `"1"` (fleet today) | KILL `"0"` | AC1 | AC2 |
-| --- | --- | --- | --- | --- | --- |
-| `udcGate` | `__shellUdc` `{on:1}` | `{on:1}` | absent | PASS | PASS |
-| `homeResume` | `__shellHR` `{on:1}`, hook 1 | `{on:1}`, hook 1 | absent, hook 0 | PASS | PASS |
-| `diagBeacon` | armed | armed | inert | PASS | PASS |
-| `ytApiStub` | stub + `YT.Player` | stub + `YT.Player` | absent | PASS | PASS |
-| `lsWriteBehind` | `__shellLsWB` object | object | absent | PASS | PASS |
+| flag            | ABSENT (cold boot)           | SEEDED `"1"` (fleet today) | KILL `"0"`     | AC1  | AC2  |
+| --------------- | ---------------------------- | -------------------------- | -------------- | ---- | ---- |
+| `udcGate`       | `__shellUdc` `{on:1}`        | `{on:1}`                   | absent         | PASS | PASS |
+| `homeResume`    | `__shellHR` `{on:1}`, hook 1 | `{on:1}`, hook 1           | absent, hook 0 | PASS | PASS |
+| `diagBeacon`    | armed                        | armed                      | inert          | PASS | PASS |
+| `ytApiStub`     | stub + `YT.Player`           | stub + `YT.Player`         | absent         | PASS | PASS |
+| `lsWriteBehind` | `__shellLsWB` object         | object                     | absent         | PASS | PASS |
 
 **AC1** is ABSENT ≡ SEEDED. **AC2** is KILL ≠ SEEDED with the feature off,
 proving each gate is still live and not merely deleted.
@@ -109,15 +109,15 @@ the query; and `prodShellFetched === 0`.
 
 The same three-arm driver, re-pointed at the **unpatched** `f1c1d4c`
 `shell.min.js` (with its GATE1 inverted so it refuses to run unless the bytes
-carry the five *opt-in* expressions):
+carry the five _opt-in_ expressions):
 
-| flag | BASE_ABSENT | BASE_SEEDED (control) | boot-1 bug |
-| --- | --- | --- | --- |
-| `udcGate` | absent | `{on:1}` | reproduced |
-| `homeResume` | absent, hook 0 | `{on:1}`, hook 1 | reproduced |
-| `diagBeacon` | inert | armed | reproduced |
-| `ytApiStub` | absent | stub installed | reproduced |
-| `lsWriteBehind` | absent | object | reproduced |
+| flag            | BASE_ABSENT    | BASE_SEEDED (control) | boot-1 bug |
+| --------------- | -------------- | --------------------- | ---------- |
+| `udcGate`       | absent         | `{on:1}`              | reproduced |
+| `homeResume`    | absent, hook 0 | `{on:1}`, hook 1      | reproduced |
+| `diagBeacon`    | inert          | armed                 | reproduced |
+| `ytApiStub`     | absent         | stub installed        | reproduced |
+| `lsWriteBehind` | absent         | object                | reproduced |
 
 All five are dead on a cold boot of the shipped shell and alive on a warm one.
 This is the measurement that makes the ABSENT column above mean something.
@@ -153,12 +153,12 @@ additionally keeps `lsWriteBehindDisabled`.
   over a per-TV `"0"`. The durable kill is `ytApiStubDisabled="1"`, intact.
 - `diagBeacon` — its seeder guards on `!== "1"`, so it rewrites `"1"` over a
   `"0"` and there is currently **no** durable per-TV kill. This is not a
-  regression: the same seeder also rewrote a *removed* key. The fix is a
+  regression: the same seeder also rewrote a _removed_ key. The fix is a
   one-word channel edit — guard on `!== "0"` like jp789/jp806/jp807 — and is
   raised with the deploy request rather than done here, since editing the live
   channel is a production change.
 
-**`lsWriteBehind` diverges from JELA-823 deliberately:** a *throwing*
+**`lsWriteBehind` diverges from JELA-823 deliberately:** a _throwing_
 localStorage still leaves it OFF. It monkey-patches `Storage.prototype`, and an
 engine whose localStorage cannot be read is the one case to stand down on rather
 than wrap. Only the key-absent path flipped.
