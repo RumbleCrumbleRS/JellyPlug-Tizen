@@ -319,3 +319,35 @@ read expression**: 1 × `flgO("jellyfin.shell.fcIdsUnion")`, 0 × stale `flg(...
 Everything in §7 stands. The absolute wire count still tracks rendered home size, `sing`
 still dominates `fire` at a 250 ms window, and the **warm** path is still unmeasured.
 The flip changes _when_ the shim arms, not what it does once armed.
+
+### 8.5 Rollout record
+
+Board approved the deploy on interaction `0b2aa86c` (accepted 2026-08-31 20:17 Z).
+
+| step                                                                | result                                                                                                                                    |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| PR #257 — the opt-OUT flip                                          | merged `4ddb6e8` → `360cf70`, 6/6 CI green                                                                                                |
+| PR #258 — `.csproj` 1.0.45.0 → **1.0.46.0**                         | merged → `5488559`, 6/6 CI green                                                                                                          |
+| `release-server-plugin` (dispatch-only, `confirm_version=1.0.46.0`) | run `33435750040` **success**; release `server-plugin-v1.0.46.0` with `jellyplug-shell_1.0.46.0.zip`; `plugin-repo/manifest.json` spliced |
+| merged shell bytes vs the pre-release pin                           | **exact match** on both shells                                                                                                            |
+
+**AC1 is NOT yet met at the close of this run.** A publish is not a deploy: the
+Jellyfin server auto-pulls the plugin zip **and restarts** on its own cadence
+(`docs/deploy-runbook.md` §1), which the release step does not control. At close,
+9 minutes of `verify-shell-deploy.sh --poll` (18 polls) still read:
+
+```
+live /shell/manifest.json   sha256=a171f117…  (the OLD bytes)
+installed plugin            1.0.45.0 Active
+plugin-repo/manifest.json   1.0.46.0          (the new bytes are published)
+```
+
+So the release is **cut and published** but **not yet on the wire**. AC1–AC4 are
+carried by the acceptance follow-up, which must run against the **shipped**
+artifact and not against a local build. Do not read "released" as "live"
+(JELA-747: "flag-dark" turned out to mean NOT DEPLOYED).
+
+Because the flip is opt-**OUT**, the AC2 two-boot proof inverts relative to
+JELA-830: `window.__shellFCU` must be present on **boot 1**. The JELA-829 §4 gate
+still applies — boot-1 `lsPost` ∩ boot-2 `lsPre` must be large, or boot 2
+silently re-ran boot 1 and the pair is VOID.
