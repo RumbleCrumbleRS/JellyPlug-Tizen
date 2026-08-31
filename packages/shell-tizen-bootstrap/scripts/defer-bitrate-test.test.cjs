@@ -97,7 +97,9 @@ const FLAG = "jellyfin.shell.deferBitrateTest";
 const GATE_FLAG = "jellyfin.shell.deferBitrateTestGate";
 const QUIET_FLAG = "jellyfin.shell.deferBitrateTestQuietMs";
 const MAX_FLAG = "jellyfin.shell.deferBitrateTestMaxMs";
-const KILL_LINE = 'localStorage.getItem("' + FLAG + '")!=="1"';
+// JELA-823: gate flipped to opt-OUT — absent key means ON (defers).
+const KILL_LINE = 'localStorage.getItem("' + FLAG + '")==="0"';
+const OLD_OPTIN_LINE = 'localStorage.getItem("' + FLAG + '")!=="1"';
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -149,7 +151,11 @@ const seed = buildSeed();
 
 function extractShim() {
   const kill = seed.indexOf(KILL_LINE);
-  check(srcLabel + ": built seed contains the opt-in gate line", kill !== -1);
+  check(srcLabel + ": built seed contains the opt-OUT gate line (JELA-823)", kill !== -1);
+  check(
+    srcLabel + ": built seed does NOT contain the old opt-in gate line",
+    seed.indexOf(OLD_OPTIN_LINE) === -1,
+  );
   if (kill === -1) return null;
   const start = seed.lastIndexOf("try{(function(){", kill);
   const endMark = "\n  })();}catch(_){}";
@@ -167,7 +173,23 @@ const shim = extractShim();
 // ===========================================================================
 // PART A — CONTRACT
 // ===========================================================================
-check(srcLabel + ": opt-in flag present", src.includes(FLAG));
+// PART A pins the read EXPRESSION — FLAG also substring-matches deferBitrateTestMs etc.
+check(
+  srcLabel + ': JELA-823: src carries opt-OUT gate ("==="0"")',
+  src.includes(KILL_LINE),
+);
+check(
+  srcLabel + ': JELA-823: src does NOT carry old opt-in gate ("!=="1"")',
+  !src.includes(OLD_OPTIN_LINE),
+);
+for (const [label, text] of [
+  [srcLabel, src],
+  [minLabel, min],
+]) {
+  check(label + ": opt-OUT gate survives minification", text.includes(KILL_LINE));
+  check(label + ": old opt-in gate absent", !text.includes(OLD_OPTIN_LINE));
+}
+check(srcLabel + ": flag key present", src.includes(FLAG));
 check(
   srcLabel + ": delay knob present",
   src.includes("jellyfin.shell.deferBitrateTestMs"),
@@ -357,23 +379,53 @@ if (!shim) {
   console.error("FAIL: shim not extractable — skipping PART B");
   failures++;
 } else {
-  // --- B0: no flag -> inert, and the vendor probe still fires at 6 s. -------
+  // --- B0: JELA-823 key ABSENT -> defers (opt-OUT, fleet-ON). ---------------
   {
     const r = runShim({});
     const api = makeApi(r.clock);
     r.win.ApiClient = api;
-    r.fireApi();
     vendorSchedule(api, r.clock);
-    r.clock.advance(6000);
-    check("B0: flag absent -> no diag state", r.state() === undefined);
+    r.fireApi();
     check(
-      "B0: flag absent -> vendor probe fires (harness reproduces the defect)",
+      "B0: flag absent -> diag installed (gate active, JELA-823)",
+      r.state() !== undefined && r.state().on === 1,
+    );
+    check(
+      "B0: flag absent -> vendor timer cleared at onApi",
+      api.detectTimeout === null && r.state().cleared === 1,
+    );
+    r.clock.advance(6000);
+    check(
+      "B0: flag absent -> probe still held 6 s after api (no release yet)",
+      api.calls === 0,
+      "calls=" + api.calls,
+    );
+    r.firePaint();
+    r.clock.advance(4000);
+    check(
+      "B0: flag absent -> probe fires after paint+delay",
       api.calls === 1,
       "calls=" + api.calls,
     );
   }
 
-  // --- B1/B2/B3: held from onApi to paint. ---------------------------------
+  // --- B0b: kill switch key="0" -> inert, vendor probe fires. ---------------
+  {
+    const r = runShim({ [FLAG]: "0" });
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(6000);
+    check("B0b: key='0' -> no diag state (kill switch)", r.state() === undefined);
+    check(
+      "B0b: key='0' -> vendor probe fires undeferred",
+      api.calls === 1,
+      "calls=" + api.calls,
+    );
+  }
+
+  // --- B1/B2/B3: held from onApi to paint (key present, not "0"). -----------
   {
     const r = runShim({ [FLAG]: "1" });
     const api = makeApi(r.clock);
@@ -717,16 +769,19 @@ if (!shim || !cacheShim) {
     );
   }
 
-  // --- C3: 686 alone must not defer — the two flags stay independent. ------
+  // --- C3: 686 alone (deferBitrateTest kill-switched to "0") must not defer.
+  // JELA-823: absent key now defers (opt-OUT), so we must explicit-kill it
+  // to isolate the 686 shim. The two flags remain independent — kill the 684
+  // gate and the cache shim stands alone.
   {
-    const r = runBoth({ [CACHE_FLAG]: "1" }, null);
+    const r = runBoth({ [CACHE_FLAG]: "1", [FLAG]: "0" }, null);
     const api = makeCacheApi();
     r.win.ApiClient = api;
     r.fireApi();
     vendorSchedule(api, r.clock);
     r.clock.advance(6000);
     check(
-      "C3: bitrateCache alone leaves the pre-paint probe running (684 is the deferral)",
+      "C3: bitrateCache alone (684 killed) leaves the pre-paint probe running",
       api.calls === 1 && !r.win.__shellBT,
       JSON.stringify({ calls: api.calls, bt: r.win.__shellBT || null }),
     );
