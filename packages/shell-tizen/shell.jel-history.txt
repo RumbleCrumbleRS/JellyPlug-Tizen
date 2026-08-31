@@ -175,6 +175,8 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-623 the sweep (MutationObserver + 400ms interval) arms via
 *JEL-238 never reached. (2) /484 above blanks every youtube iframe
 *JEL-238 That reasoning holds exactly while the cap is armed, so this
+*JEL-238 the boot the cap exists to protect. Read for the kill switch
+*JEL-238 would otherwise re-write ytApiStub back to "1"). The cap kil
 *JEL-407 the src-setter interceptor routes the body through the
 *JEL-1580 v60: synthetic AF self-test harness. Gated by either
 *JEL-623 the self-test depends on the now-gated 600ms auto-

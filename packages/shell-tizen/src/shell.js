@@ -1239,10 +1239,19 @@
       // block stands down whenever the cap is disabled — if someone turns the
       // cap off to debug trailers, they get the real API back along with it.
       // Content-pattern based, no plugin name (plugin-agnostic-shell.test.cjs).
-      // Enable (flag-dark): localStorage["jellyfin.shell.ytApiStub"]="1".
-      // Kill switch: localStorage["jellyfin.shell.ytApiStubDisabled"]="1".
+      // JELA-827: fleet-ON (opt-OUT). This shipped opt-in as `!== "1"`, but
+      // the "1" is written by the JELA-725 JSI channel entry, which only runs
+      // AFTER the lite→SPA handoff (JELA-802) — so on every cold boot (fresh
+      // install, LS wipe, quota eviction) the key was absent, the stub never
+      // installed, and the real YouTube iframe API leaked through for exactly
+      // the boot the JEL-238 cap exists to protect. Read for the kill switch
+      // instead: an absent key now means ON.
+      // Kill switch: localStorage["jellyfin.shell.ytApiStubDisabled"]="1"
+      // (this is the DURABLE per-TV kill — the JELA-725 seeder honours it and
+      // would otherwise re-write ytApiStub back to "1"). The JEL-238 cap kill
+      // "jellyfin.shell.ytIframeCapDisabled"="1" also stands this block down.
       // Diag: window.__shellYtApiStub (1 when the stub was installed).
-      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytApiStub")!=="1")return;if(localStorage.getItem("jellyfin.shell.ytApiStubDisabled")==="1")return;if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;if(window.YT&&window.YT.Player)return;function P(){}var n=["playVideo","pauseVideo","stopVideo","seekTo","mute","unMute","setVolume","destroy","loadVideoById","cueVideoById","addEventListener","removeEventListener","setPlaybackQuality"];for(var i=0;i<n.length;i++){P.prototype[n[i]]=function(){};}P.prototype.getPlayerState=function(){return -1;};P.prototype.getCurrentTime=function(){return 0;};P.prototype.getVolume=function(){return 0;};P.prototype.isMuted=function(){return true;};window.YT={loaded:1,Player:P,PlayerState:{UNSTARTED:-1,ENDED:0,PLAYING:1,PAUSED:2,BUFFERING:3,CUED:5}};window.__shellYtApiStub=1;var f=window.onYouTubeIframeAPIReady;if(typeof f==="function"){try{f();}catch(_){}}})();}catch(_){}',
+      '  try{(function(){if(localStorage.getItem("jellyfin.shell.ytApiStub")==="0")return;if(localStorage.getItem("jellyfin.shell.ytApiStubDisabled")==="1")return;if(localStorage.getItem("jellyfin.shell.ytIframeCapDisabled")==="1")return;if(!/Tizen/.test(navigator.userAgent||""))return;if(window.YT&&window.YT.Player)return;function P(){}var n=["playVideo","pauseVideo","stopVideo","seekTo","mute","unMute","setVolume","destroy","loadVideoById","cueVideoById","addEventListener","removeEventListener","setPlaybackQuality"];for(var i=0;i<n.length;i++){P.prototype[n[i]]=function(){};}P.prototype.getPlayerState=function(){return -1;};P.prototype.getCurrentTime=function(){return 0;};P.prototype.getVolume=function(){return 0;};P.prototype.isMuted=function(){return true;};window.YT={loaded:1,Player:P,PlayerState:{UNSTARTED:-1,ENDED:0,PLAYING:1,PAUSED:2,BUFFERING:3,CUED:5}};window.__shellYtApiStub=1;var f=window.onYouTubeIframeAPIReady;if(typeof f==="function"){try{f();}catch(_){}}})();}catch(_){}',
       // JELA-686 (JELA-679/P2): persist the bitrate detection across boots.
       //
       // jellyfin-apiclient's detectBitrate DOES have a cache, with a sane

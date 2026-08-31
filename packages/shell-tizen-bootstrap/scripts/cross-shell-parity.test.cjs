@@ -218,8 +218,10 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-749: re-pinned — both seeds gained __txAuthed, __txSweepBare and
     // the primer's dynPluginUrls query inheritance (identical blocks in the
     // two shells; the divergence reasons above are unchanged).
-    retail: "146ab6597cb39cc0",
-    boot: "2e004b91056fd267",
+    // JELA-827 (2/5): re-pinned — the ytApiStub gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons unchanged.
+    retail: "260e9d1fe1d381e2",
+    boot: "cf12fc8f791a12fa",
   },
   {
     name: "buildDiagSeedScript",
