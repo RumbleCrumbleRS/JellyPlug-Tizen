@@ -548,3 +548,37 @@ in the ON arm are `card-hydration` 22.7 + `hss-native` 13.3 + `match-score` 8 +
 `other-row` 6.7 — the buckets §2 flagged as having no JSI entry to patch. No
 amount of reserve-then-fill reaches them; they need either a server-side change
 or a fork of the stock web client's home path.
+
+## Appendix — the two validity gates, in full
+
+The rig (`/tmp/jela820-rig-f1f7aaf3/`) is not durable. Both gates below cost
+almost nothing and each one caught a fabricated win in this ticket, so they
+belong in any future fork of `run813/815/820.mjs`. Drop them next to the
+existing `abortedReqs` gate.
+
+```js
+// A 5xx STORM IS NOT A `failed` REQUEST. CDP reports a 502 as a perfectly
+// successful transaction — status 502, no errorText — so a gate keyed on
+// `r.failed` passes a boot whose server was erroring. Those requests never
+// become GETs, so the arm reads LIGHTER than its partner and the difference
+// looks exactly like the lever working.
+rec.status5xxBoot  = order.filter((r) => r.status >= 500 && r.wall <= rec.bootEndWall).length;
+rec.status5xxTotal = order.filter((r) => r.status >= 500).length;
+if (rec.status5xxBoot > 5)
+  v.push(`${rec.status5xxBoot} 5xx at boot — server erroring, capture VOID`);
+
+// TRUNCATION IS IDLE-AT-THE-END. The census cut is a fixed wall
+// (firstCard + SETTLE); the only question is whether it closed MID-fan-out.
+// Do NOT implement this as "the first >= QUIET gap after firstCard" — boot
+// fan-out is bursty, that gap is an early LULL, and cutting there invents a
+// win out of a pause.
+const inb = order.filter((r) => r.wall <= rec.bootEndWall).sort((a, b) => a.wall - b.wall);
+const last = inb.length ? inb[inb.length - 1] : null;
+rec.bootTailIdleMs = last ? Math.round(rec.bootEndWall - last.wall) : null;
+rec.bootTruncated  = !last || rec.bootTailIdleMs < QUIET_MS;   // QUIET_MS = 4000
+if (rec.bootTruncated)
+  v.push(`still fetching at the settle wall (tail idle ${rec.bootTailIdleMs} ms) — census is a FLOOR`);
+```
+
+Read a truncated capture as a **floor**, never a count: a truncated arm always
+understates, so a truncated CONTROL flatters the intervention.
