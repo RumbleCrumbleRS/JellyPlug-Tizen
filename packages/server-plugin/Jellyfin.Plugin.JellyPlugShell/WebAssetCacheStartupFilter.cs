@@ -18,14 +18,11 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// boot. A content-hashed filename cannot go stale by construction, which makes these
 /// the safest possible immutable candidates.
 ///
-/// Deliberately NOT covered:
-/// <list type="bullet">
-/// <item>the 10 bare <c>node_modules.*.bundle.js</c> chunk names — no hash in the
-/// filename, so an immutable entry at that bare url would survive a jellyfin-web
-/// upgrade and go stale (same hazard as babel.min.js in JELA-688/689).</item>
-/// <item><c>config.json</c>, <c>index.html</c>, <c>themes/*/theme.css</c> — mutable
-/// content at stable urls.</item>
-/// </list>
+/// JELA-826. Unhashed stable assets (<c>blurhash.worker.bundle.js</c>,
+/// <c>themes/*/theme.css</c>) get a short revalidatable policy instead of immutable —
+/// they can change on a jellyfin-web upgrade. <c>config.json</c> gets <c>no-cache</c>
+/// so every boot revalidates configuration. All three also get <c>Vary: Origin</c>
+/// to prevent the M63 cache-mode collision (JELA-688).
 ///
 /// <c>Vary: Origin</c> is mandatory alongside <c>immutable</c>: the M63 HTTP cache is
 /// not partitioned by request mode, so a no-cors entry would otherwise poison a later
@@ -34,6 +31,14 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 public class WebAssetCacheStartupFilter : IStartupFilter
 {
     private const string CacheControlValue = "public, max-age=604800, immutable";
+
+    // Short-lived policy for unhashed but stable assets (blurhash.worker.bundle.js,
+    // themes/*/theme.css). 1-hour max-age lets a warm TV skip the network on the
+    // same day while still revalidating after a jellyfin-web upgrade overnight.
+    private const string RevalidatableCacheControlValue = "public, max-age=3600, must-revalidate";
+
+    // config.json is configuration — force a conditional GET on every boot.
+    private const string NoCacheCacheControlValue = "no-cache";
 
     /// <summary>
     /// A webpack content hash segment. jellyfin-web emits exactly 20 lowercase hex
@@ -52,36 +57,42 @@ public class WebAssetCacheStartupFilter : IStartupFilter
         {
             app.Use(async (context, nextMiddleware) =>
             {
-                if (IsImmutableWebAsset(context.Request.Path.Value))
+                var path = context.Request.Path.Value;
+                var cacheControlOverride = GetWebAssetCacheControl(path);
+
+                if (cacheControlOverride is not null)
                 {
-                    context.Response.OnStarting(static state =>
-                    {
-                        var response = ((HttpContext)state).Response;
-
-                        // Status is only final here, not at middleware entry. Never stamp
-                        // a 404/500 immutable — that would pin an error for a week.
-                        var status = response.StatusCode;
-                        if (status is not (StatusCodes.Status200OK
-                            or StatusCodes.Status206PartialContent
-                            or StatusCodes.Status304NotModified))
+                    context.Response.OnStarting(
+                        state =>
                         {
+                            var (ctx, cc) = ((HttpContext, string))state;
+                            var response = ctx.Response;
+
+                            // Status is only final here, not at middleware entry. Never stamp
+                            // a 404/500 — that would cache an error.
+                            var status = response.StatusCode;
+                            if (status is not (StatusCodes.Status200OK
+                                or StatusCodes.Status206PartialContent
+                                or StatusCodes.Status304NotModified))
+                            {
+                                return Task.CompletedTask;
+                            }
+
+                            response.Headers["Cache-Control"] = cc;
+
+                            var vary = response.Headers["Vary"].ToString();
+                            if (string.IsNullOrEmpty(vary))
+                            {
+                                response.Headers["Vary"] = "Accept-Encoding, Origin";
+                            }
+                            else if (vary.IndexOf("Origin", StringComparison.OrdinalIgnoreCase) < 0)
+                            {
+                                response.Headers["Vary"] = vary + ", Origin";
+                            }
+
                             return Task.CompletedTask;
-                        }
-
-                        response.Headers["Cache-Control"] = CacheControlValue;
-
-                        var vary = response.Headers["Vary"].ToString();
-                        if (string.IsNullOrEmpty(vary))
-                        {
-                            response.Headers["Vary"] = "Accept-Encoding, Origin";
-                        }
-                        else if (vary.IndexOf("Origin", StringComparison.OrdinalIgnoreCase) < 0)
-                        {
-                            response.Headers["Vary"] = vary + ", Origin";
-                        }
-
-                        return Task.CompletedTask;
-                    }, context);
+                        },
+                        (context, cacheControlOverride));
                 }
 
                 await nextMiddleware().ConfigureAwait(false);
@@ -91,24 +102,43 @@ public class WebAssetCacheStartupFilter : IStartupFilter
         };
     }
 
-    internal static bool IsImmutableWebAsset(string? path)
+    /// <summary>
+    /// Returns the Cache-Control value to apply to a /web/ asset, or null if the
+    /// path is not a /web/ asset we manage.
+    /// </summary>
+    internal static string? GetWebAssetCacheControl(string? path)
     {
         if (path is null || !path.StartsWith("/web/", StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return null;
         }
 
         var lastSlash = path.LastIndexOf('/');
         var filename = path[(lastSlash + 1)..];
 
-        // Mutable content at stable urls. None of these carry a hash segment, so the
-        // pattern below already rejects them; kept explicit so the intent survives.
-        if (filename.Equals("config.json", StringComparison.OrdinalIgnoreCase)
-            || filename.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+        if (filename.Equals("config.json", StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return NoCacheCacheControlValue;
         }
 
-        return ContentHashPattern.IsMatch(filename);
+        if (filename.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (ContentHashPattern.IsMatch(filename))
+        {
+            return CacheControlValue;
+        }
+
+        // Unhashed but stable /web/ assets (blurhash.worker.bundle.js, themes/*/theme.css,
+        // and any other bare-name webpack output). Short revalidatable policy — safe to
+        // cache briefly but not permanently, because these can change on a jellyfin-web
+        // upgrade without a filename change. All still need Vary: Origin (JELA-826).
+        return RevalidatableCacheControlValue;
     }
+
+    // Kept for callers that relied on the old boolean form (tests).
+    internal static bool IsImmutableWebAsset(string? path) =>
+        GetWebAssetCacheControl(path) == CacheControlValue;
 }
