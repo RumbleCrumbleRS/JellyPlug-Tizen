@@ -187,6 +187,22 @@ start, not assume it.** Compare the boot-1 `lsPost` key set against the boot-2
 silently re-ran boot 1 reads as "the warm path is the same as the cold path", which
 is the most expensive possible false negative.
 
+The fix works: with a nav to `about:blank` and a 25 s idle before shutdown
+(`J829_CLOSE_DWELL_MS`), the re-run carried **378 of 378 keys** into boot 2, and
+`__shellLsWB` read `st:"flushed", q:0` at close, so write-behind was not holding
+anything either. But the warm boot still could not be measured: boot 2 rendered
+**0 cards on 49 requests** and boot 3 tripped the rig's own
+`login triplet + 0 cards = seed failed` gate. That is the JELA-750 profile-poisoning
+signature (a profile dies after ~3 boots), not a warm-path defect — and it is exactly
+why the count is reported here as **not measured** rather than as zero.
+
+**The instrument the warm question actually needs is a replay, not a re-boot.** Dump
+boot 1's `lsPost` values and seed them into a _fresh_ profile pre-nav. That gets warm
+state without spending the profile's remaining boots, and it makes the warm arm a
+declared input rather than a hope about what survived. Anything measured this way must
+still be read against §1's rule: `queryAuth` has to be in that dump or the warm arm
+quietly doubles itself in preflights.
+
 ---
 
 ## Reproducing
