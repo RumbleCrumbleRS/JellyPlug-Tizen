@@ -4103,22 +4103,31 @@
       //                          the server truncates somebody's items.
       //   Fields                 unioned. `Fields` is purely additive on top of
       //                          the base DTO, so a union is always a superset.
-      //   EnableImages           absent means TRUE -> OR. Superset.
       //   EnableUserData         absent means TRUE -> OR. Superset.
-      //   EnableImageTypes       absent means ALL types. If ANY member omits
-      //                          it, it is DROPPED from the union rather than
-      //                          unioned — unioning "Primary" with "absent"
-      //                          would strip Backdrop/Logo from the member that
-      //                          asked for everything.
-      //   ImageTypeLimit         same rule: any member omitting it drops it.
       //   EnableTotalRecordCount forced FALSE on the wire and SYNTHESIZED per
       //                          slice — see below.
       //
-      // Everything else (api_key, SortBy, IncludeItemTypes, ParentId, …) is
-      // part of the batch key, so it is never merged across. The base path is
-      // in the key too, which is what keeps `/Items?Ids=` and
+      // Everything else — api_key, SortBy, IncludeItemTypes, ParentId, AND THE
+      // THREE IMAGE-SHAPE PARAMETERS (EnableImages, EnableImageTypes,
+      // ImageTypeLimit) — is part of the batch key, so it is never merged
+      // across and is carried onto the union URL verbatim. The base path is in
+      // the key too, which is what keeps `/Items?Ids=` and
       // `/Users/{u}/Items?Ids=` — different routes, one of which ignores user
       // data — in separate batches.
+      //
+      // The image parameters are in the KEY and not in the union because the
+      // first rig A/B measured what unioning them costs. `EnableImageTypes`
+      // absent means ALL image types and `ImageTypeLimit` absent means
+      // unlimited, so a union has to DROP them whenever one member omits them —
+      // unioning "Primary" with "absent" would strip Backdrop/Logo from the
+      // member that asked for everything. Dropping them is correct, and it is
+      // also expensive: the boot tail (21 + 21 + 6 ids at 171 / 213 / 204 B per
+      // item, 9,298 B in three requests) came back as ONE 24-id union at 493 B
+      // per item — 11,835 B. Two requests saved, 2.5 KB paid. That is the wrong
+      // trade, and it is not a tuning problem: an unrestricted image shape is
+      // ~2.5x the per-item cost. Keyed instead, the same tail merges the two
+      // members that share an image shape and leaves the third alone — one
+      // request saved and bytes DOWN.
       //
       // EnableTotalRecordCount: the census listed "only merge ETRC=false" as a
       // constraint, on the grounds that a caller wanting the count cannot be
@@ -4181,14 +4190,14 @@
       'else if(typeof h2.forEach==="function"){h2.forEach(function(v3,n3){pu(n3,v3)})}' +
       "else{for(n2 in h2)pu(n2,h2[n2])}" +
       'if(!a2)return null;a2.sort();return a2.join("|")}catch(_){return null}};' +
-      "var iuUn=/^(ids|limit|fields|enableimagetypes|imagetypelimit|enableimages|enableuserdata|enabletotalrecordcount|startindex)$/;" +
+      "var iuUn=/^(ids|limit|fields|enableuserdata|enabletotalrecordcount|startindex)$/;" +
       // Parse one candidate URL. Returns null for anything not an /Items route
       // with a non-empty Ids list, or anything whose Limit/StartIndex would
       // make the synthesized TotalRecordCount wrong (see the note above).
       'var iuPr=function(u){var h3=u.indexOf("#");if(h3>=0)u=u.slice(0,h3);' +
       'var q3=u.indexOf("?");if(q3<0)return null;var bs=u.slice(0,q3);' +
       'if(bs.length<7||bs.slice(-6)!=="/Items")return null;' +
-      "var o={b:bs,ids:[],lim:null,si:null,fl:[],eit:null,itl:null,ei:1,eu:1,ot:[]};" +
+      "var o={b:bs,ids:[],lim:null,si:null,fl:[],eu:1,ot:[]};" +
       'var ps=u.slice(q3+1).split("&"),i3,e3,k3,v3,lk;' +
       "for(i3=0;i3<ps.length;i3++){if(!ps[i3])continue;" +
       'e3=ps[i3].indexOf("=");k3=e3<0?ps[i3]:ps[i3].slice(0,e3);v3=e3<0?"":ps[i3].slice(e3+1);lk=k3.toLowerCase();' +
@@ -4197,9 +4206,6 @@
       'else if(lk==="limit"){o.lim=parseInt(iuDe(v3),10)}' +
       'else if(lk==="startindex"){o.si=parseInt(iuDe(v3),10)}' +
       'else if(lk==="fields"){o.fl=iuDe(v3).split(",")}' +
-      'else if(lk==="enableimagetypes"){o.eit=iuDe(v3).split(",")}' +
-      'else if(lk==="imagetypelimit"){o.itl=parseInt(iuDe(v3),10)}' +
-      'else if(lk==="enableimages"){o.ei=iuDe(v3)==="false"?0:1}' +
       'else if(lk==="enableuserdata"){o.eu=iuDe(v3)==="false"?0:1}}' +
       "var il=[],j3;for(j3=0;j3<o.ids.length;j3++)if(o.ids[j3])il.push(o.ids[j3]);" +
       "if(!il.length)return null;o.ids=il;" +
@@ -4212,9 +4218,6 @@
       'qs.push("Limit="+b.ids.length);' +
       'qs.push("EnableTotalRecordCount=false");' +
       'if(b.fl.length)qs.push("Fields="+encodeURIComponent(b.fl.join(",")));' +
-      'if(b.eit&&b.eit.length)qs.push("EnableImageTypes="+encodeURIComponent(b.eit.join(",")));' +
-      'if(b.itl!==null)qs.push("ImageTypeLimit="+b.itl);' +
-      'if(!b.ei)qs.push("EnableImages=false");' +
       'if(!b.eu)qs.push("EnableUserData=false");' +
       'return b.b+"?"+qs.join("&")};' +
       // 34 = a GUID plus its %2C separator; the constant only has to be an
@@ -4255,15 +4258,11 @@
       "var b=iuB[k4],j4;" +
       "if(b&&(b.ids.length+p.ids.length>iuMx||iuLn(b,p.ids.length)>iuUL)){iuFi(k4);b=null}" +
       'if(!b){b=iuB[k4]={b:p.b,ot:p.ot,otl:p.ot.join("&").length,ids:[],set:{},fl:[],' +
-      "eit:p.eit?p.eit.slice():null,itl:p.itl,ei:p.ei,eu:p.eu,m:[],o:o2,t:null};" +
+      "eu:p.eu,m:[],o:o2,t:null};" +
       "b.t=setTimeout(function(){try{iuFi(k4)}catch(_){IU.err++}},iuW)}" +
       "for(j4=0;j4<p.ids.length;j4++){var nz4=iuNz(p.ids[j4]);if(!b.set[nz4]){b.set[nz4]=1;b.ids.push(p.ids[j4])}}" +
       "for(j4=0;j4<p.fl.length;j4++)if(p.fl[j4]&&b.fl.indexOf(p.fl[j4])<0)b.fl.push(p.fl[j4]);" +
-      // Absent means unrestricted for these two, so one absent member drops the
-      // parameter for the whole batch.
-      "if(!p.eit)b.eit=null;else if(b.eit)for(j4=0;j4<p.eit.length;j4++)if(b.eit.indexOf(p.eit[j4])<0)b.eit.push(p.eit[j4]);" +
-      "if(p.itl===null)b.itl=null;else if(b.itl!==null&&p.itl>b.itl)b.itl=p.itl;" +
-      "b.ei=b.ei||p.ei;b.eu=b.eu||p.eu;" +
+      "b.eu=b.eu||p.eu;" +
       "var m4={ids:p.ids,set:{},u:u,o:o2,res:null,rej:null};" +
       "for(j4=0;j4<p.ids.length;j4++)m4.set[iuNz(p.ids[j4])]=1;" +
       "b.m.push(m4);IU.batch++;" +

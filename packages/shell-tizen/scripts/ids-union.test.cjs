@@ -26,8 +26,9 @@
  * Pinned:
  *   - DARK BY DEFAULT: with jellyfin.shell.fcIdsUnion absent the shim is not
  *     installed at all and all eleven requests are on the wire (AC4's shape)
- *   - armed at the default 250 ms window the eleven collapse to SIX, and the
- *     339 id lookups to 144 (AC1: <= 8)
+ *   - armed at the default 250 ms window the eleven collapse to SEVEN, and the
+ *     339 id lookups to 144 (AC1: <= 8). At 150 ms it is 11 -> 9, which does
+ *     NOT clear AC1 — pinned, because a shorter window is a weaker lever
  *   - AC2, on every one of the eleven waiters: it receives exactly the ids it
  *     asked for — no foreign id, none short — in the server's own order, with
  *     TotalRecordCount equal to its own slice length
@@ -35,10 +36,13 @@
  *     headers, or any non-unionable query parameter
  *   - the TotalRecordCount proof's preconditions are ENFORCED: StartIndex > 0
  *     and Limit < |Ids| are both refused the batch
- *   - union rules: Fields/EnableImageTypes unioned, EnableImages/EnableUserData
- *     OR'd, ImageTypeLimit maxed, Limit set to the union count, ETRC forced
- *     false on the wire; and the ABSENT-IS-PERMISSIVE rule — one member
- *     omitting EnableImageTypes or ImageTypeLimit drops it for the whole batch
+ *   - union rules: Fields unioned, EnableUserData OR'd, Limit set to the union
+ *     count, ETRC forced false on the wire
+ *   - the three IMAGE-SHAPE parameters (EnableImages, EnableImageTypes,
+ *     ImageTypeLimit) are KEY, not union: an identical shape still merges and
+ *     is carried verbatim, any difference (including absent vs present) splits
+ *     the batch. Unioning them cost 2.5 KB to save two requests on the first
+ *     rig A/B — an unrestricted image shape is ~2.5x the per-item cost
  *   - a batch that closes with one member is re-issued VERBATIM (original url
  *     and init), so a singleton takes on no rewrite risk
  *   - fallback: a non-2xx union, an unparseable body, or a body with no Items
@@ -560,7 +564,7 @@ async function main() {
   // ---- 2. AC1: the census collapses ---------------------------------------
   let armed;
   await check(
-    "armed at the default 250 ms window: 11 census GETs collapse to 6 (AC1 <= 8)",
+    "armed at the default 250 ms window: 11 census GETs collapse to 7 (AC1 <= 8)",
     async () => {
       armed = await replayCensus();
       const IU = armed.env.window.__shellFCU;
@@ -572,8 +576,8 @@ async function main() {
       );
       assert.strictEqual(
         armed.env.net.length,
-        6,
-        "simulated field-union figure at 250 ms",
+        7,
+        "field-union with the image shape KEYED, at 250 ms",
       );
       assert.strictEqual(IU.batch, 11, "all eleven enrolled in a batch");
       assert.strictEqual(IU.err, 0, "no shim errors");
@@ -691,113 +695,146 @@ async function main() {
   });
 
   // ---- 6. union rules ------------------------------------------------------
+  await check("union: Ids/Limit/Fields/EnableUserData", async () => {
+    const env = makeEnv().run();
+    const ids = idsOf(5, 1);
+    const pool = makePool(ids);
+    const a = ask(
+      env,
+      q(
+        ids.slice(0, 3),
+        "Fields=Overview,Genres&EnableUserData=false&EnableTotalRecordCount=true&SortBy=SortName",
+      ),
+    );
+    const b = ask(
+      env,
+      q(
+        ids.slice(2),
+        "Fields=Genres,DateCreated&EnableUserData=true&EnableTotalRecordCount=false&SortBy=SortName",
+      ),
+    );
+    await env.drain();
+    await env.advance(300);
+    assert.strictEqual(env.net.length, 1, "one union request");
+    const p = paramsOf(env.net[0].url);
+    assert.deepStrictEqual(
+      p.get("Ids").split(",").sort(),
+      ids.slice().sort(),
+      "Ids unioned, deduped",
+    );
+    assert.strictEqual(p.get("Limit"), "5", "Limit == union id count");
+    assert.deepStrictEqual(
+      p.get("Fields").split(",").sort(),
+      ["DateCreated", "Genres", "Overview"],
+      "Fields unioned",
+    );
+    assert.strictEqual(
+      p.has("EnableUserData"),
+      false,
+      "EnableUserData OR'd to the default true (omitted)",
+    );
+    assert.strictEqual(
+      p.get("EnableTotalRecordCount"),
+      "false",
+      "ETRC forced false on the wire",
+    );
+    assert.strictEqual(p.get("SortBy"), "SortName", "key params carried over");
+    await serveAll(env, pool, 0);
+    assertExact({ ...a, url: q(ids.slice(0, 3)) }, pool, "a");
+    // The ETRC=true caller still gets a correct count off the slice.
+    assert.strictEqual(a.json.TotalRecordCount, 3, "synthesized count for a");
+    assert.strictEqual(b.json.TotalRecordCount, 3, "synthesized count for b");
+  });
+
   await check(
-    "union: Ids/Limit/Fields/EnableImageTypes/ImageTypeLimit/booleans",
+    "EnableUserData=false survives only when EVERY member says false",
     async () => {
       const env = makeEnv().run();
-      const ids = idsOf(5, 1);
+      const ids = idsOf(4, 1);
       const pool = makePool(ids);
-      const a = ask(
-        env,
-        q(
-          ids.slice(0, 3),
-          "Fields=Overview,Genres&EnableImageTypes=Primary&ImageTypeLimit=1&EnableImages=false&EnableUserData=false&EnableTotalRecordCount=true&SortBy=SortName",
-        ),
-      );
-      const b = ask(
-        env,
-        q(
-          ids.slice(2),
-          "Fields=Genres,DateCreated&EnableImageTypes=Backdrop&ImageTypeLimit=3&EnableImages=true&EnableUserData=true&EnableTotalRecordCount=false&SortBy=SortName",
-        ),
-      );
+      ask(env, q(ids.slice(0, 2), "EnableUserData=false"));
+      ask(env, q(ids.slice(2), "EnableUserData=false"));
       await env.drain();
       await env.advance(300);
-      assert.strictEqual(env.net.length, 1, "one union request");
-      const p = paramsOf(env.net[0].url);
-      assert.deepStrictEqual(
-        p.get("Ids").split(",").sort(),
-        ids.slice().sort(),
-        "Ids unioned, deduped",
-      );
-      assert.strictEqual(p.get("Limit"), "5", "Limit == union id count");
-      assert.deepStrictEqual(
-        p.get("Fields").split(",").sort(),
-        ["DateCreated", "Genres", "Overview"],
-        "Fields unioned",
-      );
-      assert.deepStrictEqual(
-        p.get("EnableImageTypes").split(",").sort(),
-        ["Backdrop", "Primary"],
-        "EnableImageTypes unioned",
-      );
-      assert.strictEqual(p.get("ImageTypeLimit"), "3", "ImageTypeLimit maxed");
       assert.strictEqual(
-        p.has("EnableImages"),
-        false,
-        "EnableImages OR'd to the default true (omitted)",
-      );
-      assert.strictEqual(
-        p.has("EnableUserData"),
-        false,
-        "EnableUserData OR'd to the default true (omitted)",
-      );
-      assert.strictEqual(
-        p.get("EnableTotalRecordCount"),
+        paramsOf(env.net[0].url).get("EnableUserData"),
         "false",
-        "ETRC forced false on the wire",
       );
-      assert.strictEqual(
-        p.get("SortBy"),
-        "SortName",
-        "key params carried over",
-      );
-      await serveAll(env, pool, 0);
-      assertExact({ ...a, url: q(ids.slice(0, 3)) }, pool, "a");
-      // The ETRC=true caller still gets a correct count off the slice.
-      assert.strictEqual(a.json.TotalRecordCount, 3, "synthesized count for a");
-      assert.strictEqual(b.json.TotalRecordCount, 3, "synthesized count for b");
-    },
-  );
-
-  await check(
-    "both booleans stay false only when EVERY member says false",
-    async () => {
-      const env = makeEnv().run();
-      const ids = idsOf(4, 1);
-      const pool = makePool(ids);
-      ask(env, q(ids.slice(0, 2), "EnableImages=false&EnableUserData=false"));
-      ask(env, q(ids.slice(2), "EnableImages=false&EnableUserData=false"));
-      await env.drain();
-      await env.advance(300);
-      const p = paramsOf(env.net[0].url);
-      assert.strictEqual(p.get("EnableImages"), "false");
-      assert.strictEqual(p.get("EnableUserData"), "false");
       await serveAll(env, pool, 0);
     },
   );
 
-  await check(
-    "absent is permissive: one member omitting EnableImageTypes/ImageTypeLimit drops it",
-    async () => {
+  // The image-shape parameters are KEY, not union. Unioning them cost 2.5 KB
+  // to save two requests on the first rig A/B, because a union has to DROP
+  // EnableImageTypes/ImageTypeLimit whenever one member omits them (absent
+  // means "all types" / "unlimited") and an unrestricted image shape is ~2.5x
+  // the per-item cost. Keyed, an identical image shape still merges.
+  for (const [label, extraA, extraB, merges] of [
+    [
+      "EnableImageTypes: absent vs Primary does NOT merge",
+      "EnableImageTypes=Primary",
+      "",
+      false,
+    ],
+    [
+      "EnableImageTypes: Primary vs Backdrop does NOT merge",
+      "EnableImageTypes=Primary",
+      "EnableImageTypes=Backdrop",
+      false,
+    ],
+    [
+      "EnableImageTypes: identical DOES merge, carried verbatim",
+      "EnableImageTypes=Primary",
+      "EnableImageTypes=Primary",
+      true,
+    ],
+    [
+      "ImageTypeLimit: 1 vs absent does NOT merge",
+      "ImageTypeLimit=1",
+      "",
+      false,
+    ],
+    [
+      "EnableImages: false vs true does NOT merge",
+      "EnableImages=false",
+      "EnableImages=true",
+      false,
+    ],
+    [
+      "EnableImages: identical false DOES merge, carried verbatim",
+      "EnableImages=false",
+      "EnableImages=false",
+      true,
+    ],
+  ]) {
+    await check("image shape is part of the key — " + label, async () => {
       const env = makeEnv().run();
       const ids = idsOf(4, 1);
       const pool = makePool(ids);
-      ask(env, q(ids.slice(0, 2), "EnableImageTypes=Primary&ImageTypeLimit=1"));
-      ask(env, q(ids.slice(2)));
+      ask(env, q(ids.slice(0, 2), extraA));
+      ask(env, q(ids.slice(2), extraB));
       await env.drain();
       await env.advance(300);
-      assert.strictEqual(env.net.length, 1, "still merged");
-      const p = paramsOf(env.net[0].url);
       assert.strictEqual(
-        p.has("EnableImageTypes"),
-        false,
-        "dropped, or the omitting member would lose Backdrop/Logo",
+        env.net.length,
+        merges ? 1 : 2,
+        merges ? "merged" : "split",
       );
-      assert.strictEqual(p.has("ImageTypeLimit"), false, "dropped");
+      if (merges) {
+        const p = paramsOf(env.net[0].url);
+        for (const kv of extraA.split("&").filter(Boolean)) {
+          const [k, v] = kv.split("=");
+          assert.strictEqual(
+            p.get(k),
+            v,
+            k + " carried verbatim onto the union",
+          );
+        }
+      }
       await serveAll(env, pool, 0);
-    },
-  );
+      assert.strictEqual(env.window.__shellFCU.short, 0);
+    });
+  }
 
   // ---- 7. key separation ---------------------------------------------------
   await check(
@@ -1017,12 +1054,15 @@ async function main() {
     );
   });
 
-  await check("a 150 ms window still meets AC1 on the census", async () => {
+  // 250 ms is the shipped default because 150 ms does NOT clear AC1: the
+  // census's own inter-arrival gaps (0 -> 1 is 243 ms, 2 -> 4 is 194 ms) are
+  // just wider than a 150 ms window, so two of the three merges are lost.
+  // Recorded rather than asserted away — a shorter window is a weaker lever,
+  // not a free one.
+  await check("a 150 ms window is measurably weaker: 11 -> 9", async () => {
     const { env } = await replayCensus({ [WKEY]: "150" });
-    assert(
-      env.net.length <= 8,
-      "AC1 at 150 ms: " + env.net.length + " requests, want <= 8",
-    );
+    assert.strictEqual(env.net.length, 9, "11 -> 9 at 150 ms");
+    assert(env.net.length > 8, "and therefore does NOT clear AC1");
   });
 
   // ---- 12. id normalisation ------------------------------------------------
