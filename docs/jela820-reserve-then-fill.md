@@ -6,9 +6,11 @@ AC2 PASSES at 0 px (§5d) and AC4 PASSES as a same-boot differential (§5f).
 AC1 is NOT settled and its old 61 → 26 pair is stale — the production shell moved
 mid-ticket (§5e). AC3 not measured.** §6 is what is left.
 
-Measured on the JELA-112 virtual Tizen 5.0 rig against the LIVE production
-shell `d41a3d7a` and the LIVE JSI channel. **The endpoint is a request COUNT,
-never a timing** (JELA-805).
+Measured on the JELA-112 virtual Tizen 5.0 rig against the LIVE JSI channel.
+**The endpoint is a request COUNT, never a timing** (JELA-805). §5 was measured
+on production shell `d41a3d7a`; §5d–§5f on `b358bd10` after JELA-823/824/826 and
+JELA-817 landed — **the shell sha is quoted per section on purpose, because the
+two are not comparable**.
 
 ---
 
