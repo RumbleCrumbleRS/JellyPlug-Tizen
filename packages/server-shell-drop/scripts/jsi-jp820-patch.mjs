@@ -54,9 +54,46 @@
  *
  * The stub items carry NO `imageTag`, and every card builder guards its poster
  * on `e.imageTag && api.getImageUrl`, so a placeholder issues zero requests. It
- * takes the `--noart` fallback branch, which is the same box. Both card text
- * lines are present (name and year set to U+00A0) so the text block is the
- * height of a two-line real card, which is the tallest real state.
+ * takes the `--noart` fallback branch, which is the same box: both branches put
+ * their content in an absolutely-positioned child of a `.cardImageContainer`
+ * whose height comes entirely from `padding-top:150%`, so poster and fallback
+ * are byte-identical geometry. (The `--wide` variants drop to `56.25%`, i.e.
+ * SHORTER, so a non-wide stub is the tall case there too.)
+ *
+ * ---------------------------------------------------------------------------
+ * Why structural identity is still not enough: the row height is data-dependent
+ * ---------------------------------------------------------------------------
+ * The first cut stopped there and AC2 failed at 21 px. The cause is one shipped
+ * theme rule:
+ *
+ *   .layout-tv .jp-picks-row .jp-picks-card .cardText, ...
+ *       {white-space:normal;-webkit-line-clamp:2;overflow:hidden}
+ *
+ * A card title is clamped at TWO lines but is free to occupy one, so a row is
+ * one line taller as soon as ANY card in it has a title that wraps. The stub
+ * names are U+00A0 and never wrap, so a placeholder is always the ONE-line
+ * form. Measured: top-picks and my-list hydrated 333 -> 353 px (+1 line) while
+ * watch-it-again hydrated 333 -> 333, i.e. the stub was not wrong in general —
+ * the row height is simply a function of the ITEMS, and a placeholder cannot
+ * know them. No stub content can fix that, and neither could the "make the
+ * stubs take the poster branch" theory: the poster is absolutely positioned and
+ * contributes no height at all.
+ *
+ * So the placeholder reserves the row's TALLEST state instead of its own. Both
+ * `.cardText` rows can independently grow by one line, so `pin820` measures the
+ * placeholder's natural height plus TEXT_LINE_SLACK times the height of one
+ * real (rendered) `.cardText`, and writes that on the SECTION as an inline
+ * `min-height`. That is deliberately the one thing the patch leaves behind on a
+ * node that survives hydration: `fill` replaces the whole `.itemsContainer`, so
+ * a min-height on the section is what keeps the reserved box after the swap.
+ * Hydrated content is <= the reservation by construction, so the section's
+ * height — and every section below it — is unchanged across the swap.
+ *
+ * The measurement is re-taken on every poll and kept as a running MAXIMUM, with
+ * the existing min-height cleared first so it cannot feed back into its own
+ * input. That is what makes it safe against being taken too early: the theme
+ * CSS is injected by another channel entry, and a measurement made before it
+ * lands under-reserves (degrading to today's behaviour) rather than compounding.
  *
  * Placeholder cards are stripped of `href` and given `tabindex="-1"` +
  * `aria-hidden` so D-pad focus cannot land on a blank card. That sanitation is
@@ -159,6 +196,13 @@ export const FLAG820_KEY = "jellyplug.rows.reservefill";
 export const STUB_CARDS = 3;
 /** Give up on mounting a placeholder after this many polls (~15 s at 750 ms). */
 export const MOUNT_MAX = 20;
+/**
+ * Extra `.cardText` lines to reserve on top of the placeholder's own height.
+ * Every one of the three producers builds at most two `.cardText` rows per card
+ * (primary name/sub, secondary year/name) and the shipped theme clamps each at
+ * `-webkit-line-clamp:2`, so two is the exact worst case, not a guess.
+ */
+export const TEXT_LINE_SLACK = 2;
 /** Lookahead floor, px. Normally `innerHeight` dominates; this covers a 0/NaN. */
 export const LOOKAHEAD_MIN_PX = 540;
 
@@ -175,8 +219,10 @@ export const LOOKAHEAD_MIN_PX = 540;
  */
 export const HOLD_EL_SRC =
   "/*jp820*/" +
-  "var EQ=[],EK={},eH=null,eF=0,eP=0,eO=0,eW=null,RES=0,NOM=0," +
-  "MM=" +
+  "var EQ=[],EK={},eH=null,eF=0,eP=0,eO=0,eW=null,RES=0,NOM=0,PIN=0," +
+  "SL=" +
+  TEXT_LINE_SLACK +
+  ",MM=" +
   MOUNT_MAX +
   ",LK1=" +
   LOOKAHEAD_MIN_PX +
@@ -205,6 +251,33 @@ export const HOLD_EL_SRC =
   "if(!(r.width>0||r.height>0))return 0;" +
   "return r.top<=vh()+look1()?1:0}" +
   'function mark820(nd,v){try{if(nd&&nd.setAttribute)nd.setAttribute("data-jp820",v)}catch(e){}}' +
+  // Height of ONE rendered text line, taken from the placeholder's own first
+  // `.cardText` (its content is a single U+00A0, so it is exactly one line).
+  // Measuring the live node beats any constant: it tracks font-size, the panel's
+  // vw-derived card width and whatever the theme does to line-height.
+  "function line820(nd){var t=null;" +
+  'try{t=nd.querySelector?nd.querySelector(".cardText"):null}catch(e){return 0}' +
+  "return t&&t.offsetHeight>0?t.offsetHeight:0}" +
+  // Reserve the row's TALLEST state, not the placeholder's. A `.cardText` is
+  // clamped at two lines but free to use one, so hydrating a row whose items
+  // have wrapping titles grows it by up to SL lines and shifts everything below
+  // — the measured AC2 failure. The min-height goes on the SECTION because that
+  // is the node that survives `fill` replacing the whole `.itemsContainer`.
+  // The running maximum lives on the NODE, as an attribute, so mount-time and
+  // poll-time callers share one source of truth and the rig can read the
+  // reservation back without instrumenting the gate.
+  "function pin820(nd){" +
+  'if(!nd||!nd.style||typeof nd.offsetHeight!="number")return 0;' +
+  "var p=0,h,l,w;" +
+  'try{p=parseFloat(nd.getAttribute("data-jp820h"))||0}catch(e0){p=0}' +
+  // Clear first: otherwise the reservation is read back as the natural height
+  // on the next poll and compounds. No paint can happen inside this task, so
+  // the clear is not observable.
+  'try{nd.style.minHeight=""}catch(e1){return p}' +
+  "h=nd.offsetHeight||0;l=line820(nd);" +
+  "if(h>0&&l>0){w=h+l*SL;if(w>p){if(!p)PIN++;p=w;" +
+  'try{nd.setAttribute("data-jp820h",String(p))}catch(e2){}}}' +
+  'if(p>0){try{nd.style.minHeight=p+"px"}catch(e3){}}return p}' +
   // `w` is the RELEASE REASON, and it is written onto the node as well as into
   // the counters. JELA-815: without it you cannot tell a gate that opened on
   // geometry from one the fail-open belt let through, and those are very
@@ -222,6 +295,9 @@ export const HOLD_EL_SRC =
   "for(i=0;i<EQ.length;i++){it=EQ[i];nd=node820(it);" +
   // Bounded give-up: never let a row hang because its slot never mounted.
   'if(!nd){if(++it.m>=MM){NOM++;fire820(it,"nomount");continue}keep.push(it);continue}' +
+  // Re-measure BEFORE the near test so the reservation is refreshed right up to
+  // the poll that releases the row — by then the theme CSS has certainly landed.
+  "pin820(nd);" +
   'if(scr&&nearEl(nd)){fire820(it,"near");continue}' +
   "keep.push(it)}" +
   "EQ=keep;if(EQ.length)esched()}" +
@@ -236,6 +312,10 @@ export const HOLD_EL_SRC =
   "var it={k:k,el:el,fn:fn,m:0};" +
   // Resolve once now so the placeholder is in the DOM at boot, not a poll later.
   "var nd=node820(it);" +
+  // Pin before the immediate-fire branch too. It cannot be taken at boot (`scr`
+  // is 0 until the first scroll), but a row registered after a scroll would
+  // otherwise mount a one-line placeholder and grow it a moment later.
+  "if(nd)pin820(nd);" +
   "if(nd&&scr&&nearEl(nd)){try{fn()}catch(e){}return!1}" +
   "EK[k]=1;EQ.push(it);esched();return!0}" +
   // Neutral items: no imageTag => every card builder takes its no-poster branch
@@ -264,10 +344,12 @@ export const HOLD_EL_SRC =
   "var b=null;try{b=o.build?o.build():null}catch(e2){b=null}" +
   "if(!b)return null;" +
   'sane820(b);mark820(b,"ph");' +
+  // Reserve the tall state the moment the slot exists, not one poll later.
+  "pin820(b);" +
   "var ok=!1;try{ok=!!(o.mount&&o.mount(b))}catch(e3){ok=!1}" +
   "if(!ok)return null;" +
   "RES++;nd=b;return nd}}" +
-  "function stats820(){return{flag:on820(),gate815:on(),reserved:RES,held:EQ.length,fired:eF," +
+  "function stats820(){return{flag:on820(),gate815:on(),reserved:RES,pinned:PIN,held:EQ.length,fired:eF," +
   "polls:eP,opened:eO,why:eW,nomount:NOM,scrolled:scr,vh:vh(),look:look1()}}" +
   "/*jp820*/";
 

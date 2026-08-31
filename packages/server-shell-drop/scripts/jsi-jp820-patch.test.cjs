@@ -117,6 +117,10 @@ function mkCfg() {
  */
 function mkDom(opts) {
   const o = opts || {};
+  /** One rendered `.cardText` line, and the poster box `padding-top` fixes. */
+  const LINE_PX = 20;
+  const CARD_IMG_PX = 300;
+
   const state = {
     innerHeight: o.innerHeight || 540,
     pageYOffset: 0,
@@ -199,14 +203,35 @@ function mkDom(opts) {
           width: h > 0 ? 800 : 0,
         };
       },
+      get offsetHeight() {
+        return this.boxHeight();
+      },
       boxHeight() {
         if (this.h) return this.h;
-        // A section's height is its title row plus its tallest card.
+        const cls = String(this.className).split(/\s+/);
+        // The AC2 failure, modelled. The shipped theme clamps a card title at
+        // `-webkit-line-clamp:2` but lets it use ONE line, so a `.cardText` is
+        // one or two lines deep depending on the ITEM — which a placeholder
+        // cannot know. A fixture that hardcodes card height cannot see this;
+        // the first cut of this test did exactly that and passed while the rig
+        // measured a 21 px shift.
+        if (cls.includes("cardText")) {
+          return LINE_PX * (String(this.textContent).trim().length > 8 ? 2 : 1);
+        }
+        if (cls.includes("jp-card")) {
+          let t = 0;
+          for (const c of this.querySelectorAll(".cardText")) t += c.boxHeight();
+          return CARD_IMG_PX + t;
+        }
+        // A section's height is its title row plus its tallest card, floored by
+        // any reservation jp820 has pinned on it.
         let cards = 0;
         for (const c of this.querySelectorAll(".jp-card")) {
-          cards = Math.max(cards, c.h || 0);
+          cards = Math.max(cards, c.boxHeight());
         }
-        return cards ? 40 + cards : 0;
+        const natural = cards ? 40 + cards : 0;
+        const pinned = parseFloat(this.style && this.style.minHeight);
+        return pinned > natural ? pinned : natural;
       },
     };
     return el;
@@ -914,7 +939,7 @@ async function main() {
         "while(ic.firstChild)ic.removeChild(ic.firstChild);" +
         "for(var q=0;q<items.length;q++){var it=items[q];" +
         "if(it.imageTag&&api)__fetches.push('img');" +
-        "var a=__d.mkEl('a');a.className='jp-card';a.h=300;a.setAttribute('href','#/d?id='+it.id);" +
+        "var a=__d.mkEl('a');a.className='jp-card';a.setAttribute('href','#/d?id='+it.id);" +
         "var t1=__d.mkEl('div');t1.className='cardText';t1.textContent=it.name;a.appendChild(t1);" +
         "if(it.year){var t2=__d.mkEl('div');t2.className='cardText';t2.textContent=it.year;a.appendChild(t2)}" +
         "ic.appendChild(a)}sec.jpPicksItems=items;__d.layout()}" +
@@ -923,7 +948,8 @@ async function main() {
         "if(rk>22){ct.insertBefore(nd,ch[q]);__d.layout();return}}ct.appendChild(nd);__d.layout()}" +
         "function _e(api,f){f(null)}" +
         "function je(api,uid){__fetches.push('pool');return {then:function(ok){ok([" +
-        "{id:'a',name:'Real A',year:'2001'},{id:'b',name:'Real B',year:'2002'}," +
+        "{id:'a',name:'Real A With A Title That Wraps',year:'2001'}," +
+        "{id:'b',name:'Real B',year:'2002'}," +
         "{id:'c',name:'Real C',year:'2003'},{id:'d',name:'Real D',year:'2004'}" +
         "]);return this}}}";
       const patched = mod.applyPatch(TP_BODY, mod.PATCH_TOP_PICKS);
@@ -947,6 +973,10 @@ async function main() {
         r.ph().getAttribute("data-jp820"),
         null,
         "with no placeholder marker anywhere",
+      );
+      assert.ok(
+        !r.ph().style.minHeight && !r.ph().getAttribute("data-jp820h"),
+        "and no reservation left on the section — the row sizes itself",
       );
     }
 
@@ -975,6 +1005,19 @@ async function main() {
       assert.strictEqual(kids.indexOf(ph), 3, "reserved at its own rank");
       assert.strictEqual(kids[kids.length - 1], r.below, "and above the tail");
 
+      // The reservation itself, not just its effect: the slot must be pinned at
+      // its TALLEST state from the moment it mounts, because the row height is
+      // a function of the items and a placeholder cannot know them. Natural
+      // placeholder height here is 40 (title) + 300 (poster) + 20 + 20 (two
+      // one-line `.cardText`s) = 380; both can grow one line, so 420.
+      assert.strictEqual(
+        ph.getAttribute("data-jp820h"),
+        "420",
+        "AC2: the slot reserves TEXT_LINE_SLACK extra lines at mount time",
+      );
+      assert.strictEqual(ph.style.minHeight, "420px", "and pins it inline");
+      assert.strictEqual(r.g.stats820().pinned, 1);
+
       // --- the anti-shift criterion -----------------------------------------
       const topsBefore = kids.map((c) => c._top);
       r.d.scrollBy(1200, "window");
@@ -997,7 +1040,7 @@ async function main() {
       );
       assert.strictEqual(
         ph.querySelector(".cardText").textContent,
-        "Real A",
+        "Real A With A Title That Wraps",
         "hydrated in place",
       );
       assert.strictEqual(
