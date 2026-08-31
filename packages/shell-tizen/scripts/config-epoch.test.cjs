@@ -350,16 +350,19 @@ async function driveShell(label, code) {
   e.api.ceTxmWrite(S, { deadbeef: "tx/deadbeef.js" });
   await e.api.loadConfigEpoch(S);
   const n = e.fetchLog.length;
-  const d = await e.api.loadTxDropManifest(S);
+  await e.api.loadTxDropManifest(S);
+  // JELA-824 routes the manifest through the tx-bundle pre-fetch, so
+  // loadTxDropManifest() no longer RETURNS the descriptor - it publishes it on
+  // window.__shellTxDrop. Assert the published state, which is what every
+  // consumer actually reads. The suppression property is unchanged: a matched
+  // epoch must serve from localStorage with ZERO fetches.
   check(
     label + ": matched boot serves tx-drop manifest from LS (no ?__sb=)",
-    d &&
-      d.ok &&
-      d.entries.deadbeef === "tx/deadbeef.js" &&
+    e.window.__shellTxDrop &&
+      e.window.__shellTxDrop.ok === true &&
+      e.window.__shellTxDrop.entries.deadbeef === "tx/deadbeef.js" &&
       e.fetchLog.length === n &&
-      e.window.__shellConfigEpoch.sup.txm === 1 &&
-      e.window.__shellTxDrop &&
-      e.window.__shellTxDrop.ok === true,
+      e.window.__shellConfigEpoch.sup.txm === 1,
   );
 
   e = mkEnv(code);
@@ -371,11 +374,11 @@ async function driveShell(label, code) {
   });
   await e.api.loadConfigEpoch(S);
   const before = e.fetchLog.length;
-  const d2 = await e.api.loadTxDropManifest(S);
+  await e.api.loadTxDropManifest(S);
   check(
     label + ": non-matched boot does the busted fetch + persists a copy",
-    d2 &&
-      d2.ok &&
+    e.window.__shellTxDrop &&
+      e.window.__shellTxDrop.ok === true &&
       e.fetchLog.length === before + 1 &&
       e.fetchLog[before].indexOf("?__sb=") > 0 &&
       JSON.parse(e.store.get("jellyfin.shell.txDropCache")).e.h1 === "tx/h1.js",
