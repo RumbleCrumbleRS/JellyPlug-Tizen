@@ -103,12 +103,13 @@ Fresh profile per boot, arms interleaved, all against `d41a3d7a`. `genre@boot`
 counts GET **and** its CORS preflight, so the headline number cannot be quietly
 halved.
 
-| arm            | phase  | genre@boot   | genre total | home-row@boot   | cold-boot reqs | final sections | final cards |
-| -------------- | ------ | ------------ | ----------- | --------------- | -------------- | -------------- | ----------- |
-| **OFF** (ctrl) | boot   | **28**       | 14 GET      | 80 / 313,911 B  | 500            | –              | –           |
-| **OFF** (ctrl) | scroll | **28**       | 14 GET      | 87 / 343,933 B  | 511            | 18             | 274         |
-| **ON**         | boot   | **0**        | **0**       | 63 / 273,608 B  | 479            | 10             | 114         |
-| **ON**         | scroll | **0**        | 14 GET      | 58 / 276,953 B  | 473            | **19**         | **290**     |
+| arm            | phase  | genre@boot | genre total | home-row@boot  | cold-boot reqs | cold-boot bytes | final sections | final cards |
+| -------------- | ------ | ---------- | ----------- | -------------- | -------------- | --------------- | -------------- | ----------- |
+| **OFF** (ctrl) | boot   | **28**     | 14 GET      | 80 / 313,911 B | 500            | –               | –              | –           |
+| **OFF** (ctrl) | scroll | **28**     | 14 GET      | 87 / 343,933 B | 511            | 11,285,330      | 18             | 274         |
+| **ON**         | boot   | **0**      | **0**       | 63 / 273,608 B | 479            | 11,205,097      | 10             | 114         |
+| **ON**         | scroll | **0**      | 14 GET      | 58 / 276,953 B | 473            | 11,202,248      | **19**         | **290**     |
+| **ON** (rep)   | scroll | **0**      | 14 GET      | 60 / 251,276 B | 478            | 11,178,498      | **19**         | **290**     |
 
 - **AC1 — genre rows off the boot path: PASS, 28 → 0**, deterministic in every
   ON boot. Home-row requests at boot 87 → 58 and 80 → 63 on the matched pairs.
@@ -118,11 +119,11 @@ halved.
   genre rows populated. The gate released one D-pad step (~7 s) into the walk
   and the rows were present at the next step — no placeholder anywhere near one
   screenful of dwell.
-- **AC3 — cold-boot request count: 511 → 473 (−38, −7.4%)** on the matched
-  scroll pair and 500 → 479 on the boot pair, against JELA-813's 498–512
-  baseline. Cold-boot bytes 11,285,330 → 11,202,248. n=1 per arm; the −38 is
-  larger than the 28 gated requests because the genre cards' own follow-up
-  queries go with them.
+- **AC3 — cold-boot request count drops: PASS.** OFF 500 / 511, ON 479 / 473 /
+  478 — mean 505.5 → 476.7, **Δ ≈ −29**, against JELA-813's 498–512 baseline.
+  The size of the drop is what the mechanism predicts (28 gated requests), which
+  is the check that matters more than the n here. Cold-boot bytes 11,285,330 →
+  11,178,498–11,205,097.
 - **AC4 — kill switch as a DIFFERENTIAL: PASS.** The flag is `removeItem`-ed
   **pre-nav in every arm** and re-seeded only for ON (JELA-809 idiom), so the
   control is an explicit removal rather than an assumption about the channel.
@@ -135,16 +136,23 @@ Every ON boot carries the gate's own counters, and the harness voids a capture
 that does not:
 
 ```
-ON  @boot end:   flag=true  held=1  fired=0  polls=50  scrolled=0  why=null
-OFF @boot end:   flag=false held=0  fired=0  polls=0   scrolled=0  why=null
+ON  @boot end:    flag=true  held=1 fired=0 polls=48 scrolled=0 opened=0 why=null   geo.b= 4144
+ON  @scroll end:  flag=true  held=0 fired=1 polls=61 scrolled=1 opened=1 why="near" geo.b=-2497
+OFF @boot end:    flag=false held=0 fired=0 polls=0  scrolled=0 opened=0 why=null
 ```
 
-`held=1 fired=0 scrolled=0` after 50 polls (~37 s) is the claim stated as a
+`held=1 fired=0 scrolled=0` after 48 polls (~36 s) is the hold stated as a
 counter: the burst was queued, the gate was armed, and it never opened because
-nothing scrolled. An ON boot reporting `gatePresent=false`, `flag!==true`, or
-neither held nor fired is discarded as VOID, not recorded as a null. The OFF
-arm has the symmetric gate: fewer than 10 genre queries means the capture was
-truncated by box load and is discarded.
+nothing scrolled. The scroll-end read is the release stated as a counter, and
+`why="near"` at **poll 61 of a 800-poll belt** is the load-bearing part — the
+gate opened on the *geometric* term, not because the fail-open belt timed out.
+An ON boot reporting `gatePresent=false`, `flag!==true`, or neither held nor
+fired is discarded as VOID, not recorded as a null. The OFF arm has the
+symmetric gate: fewer than 10 genre queries means the capture was truncated by
+box load and is discarded.
+
+Timing, for AC2: the burst fires at boot-end **+10.6 s**, i.e. inside the
+second D-pad step's dwell, and step 2 already reads 19 sections / 290 cards.
 
 ## 5. What AC1's "76 → ≤30" would take, and why it is not here
 
@@ -161,15 +169,27 @@ a D-pad TV that moves the focused card out from under the user. Solving
 mid-list insertion (reserve the slot, then fill it) is real work and belongs in
 its own ticket.
 
-## 6. Found on the way, filed separately
+## 6. Interaction with JELA-816
 
-`genre-rows` fires **14 candidate queries to render 8 rows**. `F()` selects the
-first `O`=8 candidates with at least `M`=6 items that are not already covered by
-another section, so on a healthy library the last 6 candidates — Romance,
-Documentary, Family, Crime, Fantasy, Mystery — are fetched and discarded on
-every boot. Confirmed in the census: 14 queries at t+16.4 s, 8 genre sections
-rendered. That is ~12 requests / ~40 KB thrown away per boot, and unlike this
-ticket's lever it is a win whether or not the user scrolls.
+`genre-rows` fires **14 candidate queries to render 8 rows** — `F()` selects the
+first `O`=8 candidates with at least `M`=6 items not already covered, so the
+last 6 are fetched and discarded on a healthy library. That was found
+independently while reading this entry and is **already fixed by JELA-816
+(`jp816`, merged flag-dark `db0910a`)**; it is a win whether or not the user
+scrolls, and it composes with this one — jp816 shrinks the burst, jp815 moves
+what is left off the boot path.
+
+**The two patchers are order-dependent, and jp815 must go first.** jp816's
+`rows:fanout-open` anchor is a substring of jp815's `rows:hold` anchor; jp815
+re-emits the fan-out verbatim so jp816 still matches afterwards, but jp816
+rewrites the tail of jp815's anchor so the reverse cannot. Both directions fail
+CLOSED with a named anchor error, so the hazard is a confusing message rather
+than a corrupt entry, and the composition test pins the supported order.
+Verified against the live channel: **jp816 applies cleanly on top of the
+jp815-carrying config**, so the JELA-816 deploy is unblocked.
+
+At the time of writing jp816 is merged but **not yet on the channel** (`jp816`
+x0 in the served bundle), so none of the arms above are confounded by it.
 
 ## 7. Rollback
 

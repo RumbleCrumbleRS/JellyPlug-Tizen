@@ -47,6 +47,19 @@ const GR_BODY =
   "L[l]=J(h),x++,G(t)},function(h){if(i!==jpUid)return;L[l]=null,x++,G(t)})" +
   "})(f[a])}V(t),ve()}}}}";
 
+/** genre-rows fixture extended with the anchors jp816 also needs. */
+const GR_BODY_816 =
+  "function G(e){A||x<f.length||(A=F(f,L,Q(),o),n.log(\"sel\"),V(e),jpIdle())}" +
+  "var $=!1,jpBz=!1,jpId=!1,jpFs=null,jpUid=null;" +
+  "function jpRst320(){$=!1,L={},w={},p={},A=null,x=0,jpBz=!1}" +
+  GR_BODY;
+
+function mkCfg816() {
+  const c = mkCfg();
+  c.CustomJavaScripts[2].Script = GR_BODY_816;
+  return c;
+}
+
 function mkCfg() {
   return {
     CustomJavaScripts: [
@@ -459,6 +472,37 @@ async function main() {
         before.CustomJavaScripts[i].Script,
         `stripping jp815 from "${after.CustomJavaScripts[i].Name}" must ` +
           "reproduce the fetched body byte-for-byte",
+      );
+    }
+  }
+
+  // --- 7. composition with jp816, which edits the same fan-out ------------
+  // jp816's `rows:fanout-open` anchor is a SUBSTRING of this patch's
+  // `rows:hold` anchor. jp815-then-jp816 works because jp815 re-emits the
+  // fan-out verbatim; the reverse cannot, because jp816 rewrites the tail of
+  // jp815's anchor. Both directions fail CLOSED, so the hazard is a confusing
+  // error rather than a corrupt entry — this pins which order is supported so
+  // nobody "fixes" the reverse by loosening an anchor.
+  {
+    let jp816 = null;
+    try {
+      jp816 = await import("./jsi-jp816-patch.mjs");
+    } catch (_) {
+      console.log("  (jsi-jp816-patch.mjs absent — composition check skipped)");
+    }
+    if (jp816) {
+      const fwd = mkCfg816();
+      mod.patchConfig(fwd);
+      jp816.patchConfig(fwd); // must not throw
+      const gr = fwd.CustomJavaScripts[2].Script;
+      assert.ok(gr.includes("jp815") && gr.includes("jp816"), "both applied");
+
+      const rev = mkCfg816();
+      jp816.patchConfig(rev);
+      assert.throws(
+        () => mod.patchConfig(rev),
+        /anchor "rows:hold" matched 0 times/,
+        "jp816-then-jp815 must fail CLOSED with a named anchor, not silently",
       );
     }
   }

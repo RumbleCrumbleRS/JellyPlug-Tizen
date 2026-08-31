@@ -88,6 +88,15 @@
  * healthy library the last 6 queries are fetched and discarded every boot).
  * That is a pure win independent of scrolling and gets its own ticket.
  *
+ * ORDERING vs jp816. Both patches edit the genre-rows fan-out, and jp816's
+ * `rows:fanout-open` anchor is a SUBSTRING of this patch's `rows:hold` anchor.
+ * Apply **jp815 first**: jp815's replacement re-emits the fan-out verbatim, so
+ * jp816 still matches afterwards, but jp816 rewrites the tail of jp815's
+ * anchor, so the reverse order cannot match. Both directions fail CLOSED with a
+ * named anchor error — the wrong order is a confusing message, never a silent
+ * corruption. Asserted in the test; on the live channel jp815 is already
+ * applied, so jp816 lands on top cleanly.
+ *
  * Dark by default. Nothing changes until `jellyplug.rows.viewgate` is `"1"` in
  * localStorage. With the flag off `hold()` invokes its callback synchronously
  * and the shipped code path runs verbatim — which is exactly the AC4
