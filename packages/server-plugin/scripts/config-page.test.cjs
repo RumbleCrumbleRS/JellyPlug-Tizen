@@ -159,6 +159,7 @@ const anonRoutes = [
   '[HttpGet("babel.min.js")]',
   '[HttpGet("tx-manifest.json")]',
   '[HttpGet("tx/{hash}.js")]',
+  '[HttpPost("tx-bundle")]', // JELA-824: bundled tx bodies, fetched pre-login like tx/{hash}.js
   '[HttpGet("fonts/{name}")]', // JELA-710: self-hosted webfonts, fetched pre-login like shell.min.js
   '[HttpPost("diag")]',
 ];
