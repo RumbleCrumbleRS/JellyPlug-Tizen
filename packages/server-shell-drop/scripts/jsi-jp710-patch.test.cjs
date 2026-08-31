@@ -20,6 +20,9 @@
  *    URLs (a locked-down webview must not lose fonts).
  * 5) ENTRY SELECTION: the media-bar matcher must not catch the mediabar-*
  *    sibling entries (guard/rescue/hero-types).
+ * 6) --only SELECTOR (JELA-814): the live channel already carries jp716's
+ *    media-bar rewrite, so the fonts half must be shippable ALONE — and an
+ *    unknown selector id must throw rather than patch nothing and report ok.
  */
 "use strict";
 
@@ -179,5 +182,39 @@ function run() {
   assert.ok(cfg.CustomJavaScripts[3].Script === "var x=1;", "decoys untouched");
 
   assert.strictEqual(PATCHES.length, 2);
-  console.log("OK: jsi-jp710-patch (JELA-710)");
+
+  // ---- 6. --only selector (JELA-814) ---------------------------------------
+
+  const { selectPatches } = mod;
+  assert.deepStrictEqual(selectPatches(null), PATCHES, "no selector = all");
+  assert.deepStrictEqual(selectPatches("fonts"), [PATCH_FONTS]);
+  assert.deepStrictEqual(selectPatches("mediabar"), [PATCH_MEDIABAR]);
+  assert.deepStrictEqual(selectPatches("fonts,mediabar"), [
+    PATCH_FONTS,
+    PATCH_MEDIABAR,
+  ]);
+  assert.throws(() => selectPatches("mediabr"), /unknown --only id/);
+  assert.throws(() => selectPatches("shell"), /unknown --only id/);
+
+  // fonts-only must leave the media-bar entry byte-identical: on the live
+  // channel jp716Css already owns that href, so a second rewrite is not ours
+  // to ship.
+  const cfgFontsOnly = {
+    CustomJavaScripts: [
+      { Name: "JellyPlug — theme-css (JELA-107, generated from src/css — do not edit)", Script: LIVE_THEME_FONTS_LINE },
+      { Name: "JellyPlug — media-bar", Script: LIVE_MEDIABAR_PUSH },
+    ],
+  };
+  const fontsReport = patchConfig(cfgFontsOnly, selectPatches("fonts"));
+  assert.deepStrictEqual(fontsReport.map((r) => r.name), [
+    "JellyPlug — theme-css (JELA-107, generated from src/css — do not edit)",
+  ]);
+  assert.strictEqual(
+    cfgFontsOnly.CustomJavaScripts[1].Script,
+    LIVE_MEDIABAR_PUSH,
+    "--only fonts must not touch the media-bar entry",
+  );
+  assert.ok(cfgFontsOnly.CustomJavaScripts[0].Script.includes(LOCAL_FONTS_URL));
+
+  console.log("OK: jsi-jp710-patch (JELA-710, --only JELA-814)");
 }
