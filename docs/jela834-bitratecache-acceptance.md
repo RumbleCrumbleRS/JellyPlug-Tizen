@@ -12,7 +12,7 @@ read site opt-in:
 if (localStorage.getItem("jellyfin.shell.bitrateCache") !== "1") return;
 ```
 
-The key is written by the JSI channel, which only runs *after* the lite→SPA
+The key is written by the JSI channel, which only runs _after_ the lite→SPA
 handoff (JELA-802). On a cold boot with no prior `"1"` in localStorage (fresh
 install, wipe, eviction) the key is **absent** when this line executes, so the
 whole cache block returns. The boot then spends the full 5.77 MB
@@ -48,13 +48,13 @@ the **executed** body, never the request URL.
 
 ## Results
 
-| arm | `lsPre` key | `lsPost` key | `__shellBitrate` | on | hits | miss | saves | BitrateTest reqs | bytes |
-|---|---|---|---|---|---|---|---|---|---|
-| ABSENT (fix) | *absent* | `"1"` | **present** | 1 | 0 | 1 | 1 | 6 | 5,770,648 |
-| SEED1 (fix) | `"1"` | `"1"` | **present** | 1 | 0 | 1 | 1 | 6 | 5,770,632 |
-| OFF (fix) | `"0"` | `"0"` | **absent** | — | — | — | — | 6 | 5,770,627 |
-| BOOT2 (fix) | `"1"` | `"1"` | **present** | 1 | **1** | 0 | 0 | **0** | **0** |
-| ABSENT (**control**, unflipped) | *absent* | `"1"` | **absent** | — | — | — | — | 6 | 5,770,635 |
+| arm                             | `lsPre` key | `lsPost` key | `__shellBitrate` | on  | hits  | miss | saves | BitrateTest reqs | bytes     |
+| ------------------------------- | ----------- | ------------ | ---------------- | --- | ----- | ---- | ----- | ---------------- | --------- |
+| ABSENT (fix)                    | _absent_    | `"1"`        | **present**      | 1   | 0     | 1    | 1     | 6                | 5,770,648 |
+| SEED1 (fix)                     | `"1"`       | `"1"`        | **present**      | 1   | 0     | 1    | 1     | 6                | 5,770,632 |
+| OFF (fix)                       | `"0"`       | `"0"`        | **absent**       | —   | —     | —    | —     | 6                | 5,770,627 |
+| BOOT2 (fix)                     | `"1"`       | `"1"`        | **present**      | 1   | **1** | 0    | 0     | **0**            | **0**     |
+| ABSENT (**control**, unflipped) | _absent_    | `"1"`        | **absent**       | —   | —     | —    | —     | 6                | 5,770,635 |
 
 The arm oracle is `window.__shellBitrate`: the gate installs it only when it does
 **not** return early, so presence/absence is the arm independent of the network
@@ -76,8 +76,14 @@ Durability: the OFF arm's `lsPost` is still `"0"`. The channel seeder guards on
 `!== "0"`, read out of the served `/JavaScriptInjector/public.js`:
 
 ```js
-(function(){try{var k="jellyfin.shell.bitrateCache";
-if(localStorage.getItem(k)!=="0"){localStorage.setItem(k,"1");}}catch(e){}})();
+(function () {
+  try {
+    var k = "jellyfin.shell.bitrateCache";
+    if (localStorage.getItem(k) !== "0") {
+      localStorage.setItem(k, "1");
+    }
+  } catch (e) {}
+})();
 ```
 
 so a per-TV `"0"` is **not** overwritten — unlike the `ytApiStub` / `diagBeacon`
@@ -98,7 +104,7 @@ boot 2 lsPre  : {"bps":146489350,"t":1788249591101,"id":"ced3b2e3…|https:…
 ### Negative control — the rig discriminates
 
 The same `ABSENT` arm on the **unflipped** shell leaves `__shellBitrate`
-**absent** while its `lsPost` key is `"1"` — the key written *during* the boot it
+**absent** while its `lsPost` key is `"1"` — the key written _during_ the boot it
 was supposed to govern. One character of shell difference flips armed/unarmed,
 so the pass above is caused by the fix and not by the harness.
 
