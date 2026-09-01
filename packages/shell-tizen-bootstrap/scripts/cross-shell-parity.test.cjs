@@ -236,8 +236,14 @@ const INTENTIONAL_DIVERGENCES = [
     // `?v=unknown`) classifies 1 instead of 0, and __txFam strips that key so
     // the slot gets a "gqk:" family index ceInvalidate can reach on a plugin
     // bump. Identical blocks in both seeds; reasons unchanged.
-    retail: "250a61173d8b238a",
-    boot: "d842011140023fc7",
+    // JELA-848: re-pinned — the drop fetch+eval moved into a shared
+    // __babelFromDrop(tag) helper, and both interception paths (rewrite +
+    // srcPipeline) now short-circuit a babel.min.js src into __babelRepoint
+    // instead of fetching the bootstrap's relative URL. Identical block in
+    // both seeds; the divergence reason (retail's __txResolve vs boot's
+    // per-call-site __dp/pre gate) is unchanged.
+    retail: "f219f9bf9618f34a",
+    boot: "a5a896e33c4edba2",
   },
   {
     name: "buildDiagSeedScript",
