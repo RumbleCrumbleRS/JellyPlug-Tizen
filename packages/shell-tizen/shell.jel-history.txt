@@ -122,6 +122,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-619 JEL-178 version-keyed plugin FETCH caching. 's per-boot &__sb=
 *JEL-178 network; ANY token change still misses -> busted fetch (the
 *JEL-619 boot stays a fresh busted read (pre- behaviour).
+*JEL-619 bytes on EVERY boot, forever, as 's 152-modules-to-3 win sil
 *JEL-557 capture shell.js IIFE entry timestamp so the diag HUD can re
 *JEL-617 boot-phase ring. Persists per-boot launch→connect→login→home
 *JEL-616 rehaul can be read on-device without host tooling (Q60R bloc
@@ -326,6 +327,7 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-619 JEL-178 version-keyed plugin FETCH caching. 's per-boot &__sb=
 *JEL-178 network; ANY token change still misses -> busted fetch (the
 *JEL-619 boot stays a fresh busted read (pre- behaviour).
+*JEL-619 bytes on EVERY boot, forever, as 's 152-modules-to-3 win sil
 *JEL-554 v34): record first 10 missed URLs to expose static/dynamic
 *JEL-619 version-keyed eligibility gate (see txQueryClass above).
 *JEL-619 deref a version-slot pointer to its content-addressed body.

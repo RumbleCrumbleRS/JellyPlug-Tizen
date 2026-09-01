@@ -103,6 +103,12 @@ function compile(src, label) {
     "txLruTouch",
     "txLruForget",
     "txPruneStatic",
+    // JELA-844: txSetStatic's quota arm now forks through the value-ranked
+    // reclaim — lift it or txSetStatic reference-errors.
+    "txBudgetOn",
+    "txNsScan",
+    "txReclaim",
+    "txStaticVal",
     "txRecordQuerySlot",
     "txGetStatic",
     "txSetStatic",
@@ -122,6 +128,9 @@ function compile(src, label) {
     "__txFam",
     "__txGenRec",
     "__txGet",
+    "__txBudgetOn",
+    "__txNsScan",
+    "__txReclaim",
     "__txSet",
   ]
     .map((n) => liftSeedFn(src, n, label))
@@ -140,7 +149,11 @@ function compile(src, label) {
     '";var __TXLRUKEY="' +
     LRU +
     '";var __TXREF="@@shellref:";' +
-    'var __TXGENK="jellyfin.shell.txGenSweep";';
+    'var __TXGENK="jellyfin.shell.txGenSweep";' +
+    // JELA-844 flag key (dark by default, so every existing case here keeps
+    // exercising the pre-844 fixed-ten prune path).
+    'var TX_BUDGET_KEY="jellyfin.shell.txBudget";var TX_RECLAIM_SLACK=8192;' +
+    'var __TXBK="jellyfin.shell.txBudget";';
   // eslint-disable-next-line no-new-func
   return new Function(
     "localStorage",

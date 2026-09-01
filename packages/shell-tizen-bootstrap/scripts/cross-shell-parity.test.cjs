@@ -228,8 +228,12 @@ const INTENTIONAL_DIVERGENCES = [
     // d.bulkReady and now calls the shared d.want() coalescer on
     // window.__shellTxDrop. Identical block in both seeds (both go through
     // the same batcher installed by txBundleAttach); reasons unchanged.
-    retail: "ecb2af648d7e2bd9",
-    boot: "353482310345646b",
+    // JELA-844: re-pinned — both seeds gained the byte-targeted, value-ranked
+    // tx reclaim (__TXBK/__txBudgetOn/__txNsScan/__txReclaim, plus __txSet's
+    // quota arm routing through it), byte-identical in the two shells; only
+    // the surrounding buildSeedScript stays divergent.
+    retail: "e565e3a76cedf20b",
+    boot: "a3ba29022488380d",
   },
   {
     name: "buildDiagSeedScript",
@@ -256,8 +260,11 @@ const INTENTIONAL_DIVERGENCES = [
     name: "transpileLegacyScriptsInner",
     class: "hsb-feature",
     why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    retail: "a54675d8d5761528",
-    boot: "f61a753964cad2e7",
+    // JELA-844: re-pinned — the three txSetStatic call sites now pass the
+    // admission value (txStaticVal(url), or a literal 0 on the tx-drop path
+    // which never records a version slot). Identical change in both shells.
+    retail: "d94ade4b479d8638",
+    boot: "310f71181341a069",
   },
   {
     name: "patchPlaybackBundles",
