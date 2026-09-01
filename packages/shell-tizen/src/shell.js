@@ -7534,15 +7534,60 @@
       p = Promise.resolve();
     }
     if (!p || typeof p.then !== "function") p = Promise.resolve();
-    return p.then(function () {
-      var ok = typeof window.Babel !== "undefined";
-      if (ok) {
-        try {
-          localStorage.setItem(BABEL_NEEDED_KEY, "1");
-        } catch (_) {}
-      }
-      return ok;
-    });
+    return p
+      .then(function () {
+        // JELA-841: absolute-URL safety net for the STATIC transpile path.
+        // The widget hook resolves its <script src> against the CURRENT
+        // document, so any future change to WHEN <base href="${server}/web/">
+        // lands can send it to a 404 and settle with window.Babel undefined —
+        // which skips every legacy transpile and, on M63, hangs the boot
+        // outright. The DYNAMIC pipelines already survive that through the
+        // seed's __ensureBabelDyn (JELA-183); give the static walk the same
+        // fetch of the ABSOLUTE server drop copy so the worst case is a slow
+        // boot (~26 s, measured in the JELA-837 census) rather than an app
+        // that never loads. Only fires when Babel is still missing after the
+        // widget hook, so healthy boots pay nothing. Cached on window (one
+        // fetch per document) and cleared on failure so a later script retries.
+        if (typeof window.Babel !== "undefined") return true;
+        if (window.__shellBabelAbsP) return window.__shellBabelAbsP;
+        var base = String(loadServerUrl() || "").replace(/\/+$/, "");
+        if (!base) return false;
+        window.__shellBabelAbsP = fetch(base + "/shell/babel.min.js", {
+          credentials: "omit",
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (t) {
+            try {
+              (0, eval)(t);
+            } catch (_) {}
+            var ok = typeof window.Babel !== "undefined";
+            if (!ok) window.__shellBabelAbsP = null;
+            shellLog(
+              ok
+                ? "babel loaded from server drop (static)"
+                : "server-drop babel failed to init (static)",
+            );
+            return ok;
+          })
+          .catch(function () {
+            window.__shellBabelAbsP = null;
+            shellLog("server-drop babel fetch failed (static)");
+            return false;
+          });
+        return window.__shellBabelAbsP;
+      })
+      .then(function () {
+        var ok = typeof window.Babel !== "undefined";
+        if (ok) {
+          try {
+            localStorage.setItem(BABEL_NEEDED_KEY, "1");
+          } catch (_) {}
+        }
+        return ok;
+      });
   }
 
   function transpileLegacyScriptsInner(doc, baseUrl) {
