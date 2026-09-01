@@ -81,7 +81,7 @@ async function main() {
   assert.strictEqual(csConst("ScrapeTplSrc"), builder.SCRAPE_TPL_SRC, "ScrapeTplSrc");
 
   // Semantic pins on the C# ScrapeDynamicRefs transcription: the seed caps
-  // (80 names, 6 dirs, 64-char dirs) and the dir rank regex must survive.
+  // (6 dirs, 64-char dirs) and the dir rank regex must survive.
   const csBuilder = fs.readFileSync(
     path.join(
       __dirname,
@@ -92,7 +92,7 @@ async function main() {
     "utf8",
   );
   for (const pin of [
-    "names.Count >= 80",
+    "names.Count >= nameCap",
     "dirs.Count >= 6",
     "d.Length > 64",
     '"/(js|scripts|modules)$"',
@@ -100,6 +100,67 @@ async function main() {
     assert.ok(
       csBuilder.includes(pin),
       "C# ScrapeDynamicRefs lost the seed semantic: " + pin,
+    );
+  }
+
+  // JELA-850: the name cap is the one seed semantic the builder deliberately
+  // does NOT inherit — the seed bounds speculative TV requests, the builder
+  // bounds a loopback fetch loop, and sharing 80 truncated the JE loader's
+  // 152-name module list so 63 scripts were Babel'd on the TV every cold
+  // boot. Pin BOTH sides numerically so the divergence stays intentional:
+  // the two builders must agree with each other, and the seed reference must
+  // stay 80 (raising it would change what TVs prefetch, which is a separate
+  // decision with a separate cost).
+  function csInt(name) {
+    const m = cs.match(new RegExp("const int " + name + "\\s*=\\s*(\\d+);"));
+    assert.ok(m, "missing C# const int " + name);
+    return Number(m[1]);
+  }
+  assert.strictEqual(
+    csInt("SeedScrapeNameCap"),
+    builder.SCRAPE_NAME_CAP_SEED,
+    "seed scrape name cap drifted between C# and the builder",
+  );
+  assert.strictEqual(
+    csInt("SeedScrapeNameCap"),
+    80,
+    "seed scrape name cap must stay 80 — it is lockstep with the shells' " +
+      "__txScrapeBodies literal, which this test cannot see",
+  );
+  assert.strictEqual(
+    csInt("BuilderScrapeNameCap"),
+    builder.SCRAPE_NAME_CAP_BUILD,
+    "builder scrape name cap drifted between C# and the builder",
+  );
+  assert.ok(
+    csInt("BuilderScrapeNameCap") > csInt("SeedScrapeNameCap"),
+    "JELA-850: the builder must scrape WIDER than the seed primer",
+  );
+  assert.strictEqual(
+    csInt("DynScanFetchCap"),
+    builder.DYN_FETCH_CAP,
+    "dynamic-scan fetch cap drifted between C# and the builder",
+  );
+  assert.ok(
+    csInt("DynScanFetchCap") > csInt("BuilderScrapeNameCap"),
+    "JELA-850: the fetch cap must exceed the name cap or it becomes the " +
+      "new truncation point",
+  );
+  assert.ok(
+    csScanTask().includes("const int FetchCap = TxDropConstants.DynScanFetchCap;"),
+    "TxDropRebuildTask must take its fetch cap from TxDropConstants",
+  );
+
+  function csScanTask() {
+    return fs.readFileSync(
+      path.join(
+        __dirname,
+        "..",
+        "Jellyfin.Plugin.JellyPlugShell",
+        "ScheduledTasks",
+        "TxDropRebuildTask.cs",
+      ),
+      "utf8",
     );
   }
 

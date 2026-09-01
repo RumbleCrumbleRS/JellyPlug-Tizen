@@ -447,6 +447,55 @@ async function main() {
       tpl.groups.length === 1 &&
         tpl.groups[0].names.join(",") === "rel-tpl.js",
     );
+
+    // JELA-850: the builder used to inherit the seed's 80-name cap. The
+    // measured Jellyfin Enhanced loader lists 152 module names, so names
+    // 80..151 were never fetched and 63 of them were Babel-transpiled on the
+    // TV main thread every cold boot. The builder now scrapes to
+    // SCRAPE_NAME_CAP_BUILD; the seed value stays available and must still
+    // truncate, so the divergence is explicit rather than accidental.
+    const many =
+      "var base = '/acme/js';\n" +
+      Array.from({ length: 152 }, (_, i) => `'mod${i}.js'`).join(",") +
+      ";\n";
+    const wide = builder.scrapeDynamicRefs(many, "http://s/loader.js");
+    check(
+      "scrape: builder default admits a 152-name loader (was truncated at 80)",
+      wide.groups.length === 1 && wide.groups[0].names.length === 152,
+    );
+    check(
+      "scrape: last name of a 152-name loader survives",
+      wide.groups[0].names[151] === "mod151.js",
+    );
+    const seedWide = builder.scrapeDynamicRefs(
+      many,
+      "http://s/loader.js",
+      builder.SCRAPE_NAME_CAP_SEED,
+    );
+    check(
+      "scrape: explicit seed cap still truncates at 80",
+      seedWide.groups[0].names.length === builder.SCRAPE_NAME_CAP_SEED,
+    );
+    check(
+      "scrape: builder cap is wider than the seed primer cap",
+      builder.SCRAPE_NAME_CAP_BUILD > builder.SCRAPE_NAME_CAP_SEED,
+    );
+    const tooMany =
+      "var base = '/acme/js';\n" +
+      Array.from(
+        { length: builder.SCRAPE_NAME_CAP_BUILD + 40 },
+        (_, i) => `'big${i}.js'`,
+      ).join(",") +
+      ";\n";
+    check(
+      "scrape: builder cap still bounds a runaway body",
+      builder.scrapeDynamicRefs(tooMany, "http://s/loader.js").groups[0].names
+        .length === builder.SCRAPE_NAME_CAP_BUILD,
+    );
+    check(
+      "scrape: fetch cap exceeds the name cap so it is not the new truncation point",
+      builder.DYN_FETCH_CAP > builder.SCRAPE_NAME_CAP_BUILD,
+    );
   }
 
   // Unit: discoverDynamicSources probes dirs in rank order, commits to the

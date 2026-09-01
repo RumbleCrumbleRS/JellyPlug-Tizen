@@ -165,7 +165,8 @@ public class TxDropRebuildTask : IScheduledTask
     /// JEL-181/203/240): scrape each body, resolve candidates against the
     /// body's own URL, probe candidate dirs with the group's first name and
     /// commit to the first dir that answers with JS (rank order equals the
-    /// seed probe's lowest-rank-success). Capped at 200 fetch attempts.
+    /// seed probe's lowest-rank-success). Capped at
+    /// TxDropConstants.DynScanFetchCap fetch attempts.
     /// </summary>
     private async Task<List<TxSource>> DiscoverDynamicSourcesAsync(
         HttpClient http,
@@ -173,7 +174,7 @@ public class TxDropRebuildTask : IScheduledTask
         HashSet<string> seenUrls,
         CancellationToken cancellationToken)
     {
-        const int FetchCap = 200;
+        const int FetchCap = TxDropConstants.DynScanFetchCap;
         var outSources = new List<TxSource>();
         var attempts = 0;
 

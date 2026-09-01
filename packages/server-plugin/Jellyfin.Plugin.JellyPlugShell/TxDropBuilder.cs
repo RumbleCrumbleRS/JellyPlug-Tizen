@@ -82,15 +82,18 @@ public class TxDropBuilder
     /// directory; the caller probes names[0] across them and commits to the
     /// dir that answers with JS. Absolute .js literals are exact candidates.
     /// Plugin-agnostic by construction — URLs come from parsing the body.
+    /// JELA-850: nameCap defaults to the BUILDER bound, not the seed's 80 —
+    /// see TxDropConstants.BuilderScrapeNameCap for why the two diverge.
+    /// Pass TxDropConstants.SeedScrapeNameCap to reproduce seed behaviour.
     /// </summary>
-    public static TxScrapeResult ScrapeDynamicRefs(string body, string from)
+    public static TxScrapeResult ScrapeDynamicRefs(string body, string from, int nameCap = TxDropConstants.BuilderScrapeNameCap)
     {
         var exact = new List<string>();
         var names = new List<string>();
         var seenN = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match m in TxDropConstants.ScrapeRelRe.Matches(body ?? string.Empty))
         {
-            if (names.Count >= 80)
+            if (names.Count >= nameCap)
             {
                 break;
             }
@@ -115,7 +118,7 @@ public class TxDropBuilder
         // chrome-56 Babel output keeps backtick URLs like `/a/b.js?v=${v}`.
         foreach (Match m in TxDropConstants.ScrapeTplRe.Matches(body ?? string.Empty))
         {
-            if (names.Count >= 80)
+            if (names.Count >= nameCap)
             {
                 break;
             }
