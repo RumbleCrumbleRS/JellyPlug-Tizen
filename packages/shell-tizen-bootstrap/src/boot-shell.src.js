@@ -6023,6 +6023,11 @@
         return r && r.ok ? r.json() : null;
       })
       .then(function (m) {
+        // JELA-865: park the whole manifest body, not just the epoch fields.
+        // patchPlaybackBundles reads `patchedBundle` off it, and this is the
+        // one manifest read the shell already makes before document.write —
+        // re-fetching it there would put another RTT on the critical path.
+        g.mf = m;
         if (!m || !m.configEpoch || !m.components) {
           g.st = m ? "nofield" : "err";
           return g;
@@ -6986,6 +6991,36 @@
       !isLegacyChromium())
     )
       return ((window.__shellBundlePatchSkipped = 1), Promise.resolve());
+    // JELA-865: keep the patch, stop inlining it. When the drop is armed and
+    // the server advertises a patched body for THIS jellyfin-web build, the
+    // tag is repointed and everything below is skipped — no bundle fetch, no
+    // regex pass, no ~500 KB of localStorage. Waiting on __shellEpochReady
+    // costs nothing new: it is a never-rejecting, 3 s-bounded promise kicked
+    // at the top of loadRemoteWebClient that the tx-drop manifest — and
+    // therefore document.write — already chains on.
+    if (!patchedBundleDropOn())
+      return patchPlaybackBundlesInner(doc, baseUrl, prefetched);
+    var epochReady = window.__shellEpochReady;
+    return (
+      epochReady && typeof epochReady.then === "function"
+        ? epochReady
+        : Promise.resolve(null)
+    ).then(function () {
+      if (patchedBundleDropApply(doc, baseUrl)) {
+        patchedBundleDropCommit();
+        return;
+      }
+      return patchPlaybackBundlesInner(doc, baseUrl, prefetched);
+    });
+  }
+
+  //@@SHELL_CORE:patchedBundleDropOn@@
+
+  //@@SHELL_CORE:patchedBundleDropApply@@
+
+  //@@SHELL_CORE:patchedBundleDropCommit@@
+
+  function patchPlaybackBundlesInner(doc, baseUrl, prefetched) {
     var pfBundleUrl = prefetched && prefetched.url,
       pfBundleFetch = prefetched && prefetched.fetch;
     window.__shellBundlePrefetchAdopted = 0;

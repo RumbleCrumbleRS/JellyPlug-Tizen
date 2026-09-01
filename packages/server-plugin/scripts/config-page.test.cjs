@@ -161,6 +161,7 @@ const anonRoutes = [
   '[HttpGet("tx/{hash}.js")]',
   '[HttpPost("tx-bundle")]', // JELA-824: bundled tx bodies, fetched pre-login like tx/{hash}.js
   '[HttpGet("fonts/{name}")]', // JELA-710: self-hosted webfonts, fetched pre-login like shell.min.js
+  '[HttpGet("patched/{v}/{name}")]', // JELA-865: the patched main bundle — loaded by a <script> tag in the pre-login boot document
   '[HttpPost("diag")]',
 ];
 for (const route of anonRoutes) {
