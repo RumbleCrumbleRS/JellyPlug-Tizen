@@ -2185,7 +2185,23 @@
       // to the static-side cachedTranspile (see TX_PFX).
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
+      // JELA-844: seed twin of the widget-side txReclaim (see the block comment
+      // at TX_BUDGET_KEY for the full argument). __txPrune above drops TEN keys
+      // whatever their size, so it reclaims an arbitrary number of UNITS — the
+      // retry of a body bigger than what those ten happened to hold throws
+      // again and the write is lost for good. It also cannot see a `txc:` body
+      // at all (nothing on this side ever tracks one), which is how a
+      // 923,476-unit transpile-only blob survives while 113 request-saving
+      // module entries are evicted around it. __txReclaim scans the namespace
+      // instead of the LRU map, so no entry is unreachable, targets BYTES, and
+      // ranks by requests-saved-per-unit: unreferenced `txc:` bodies first,
+      // then largest-first. Every seed write saves a download, so it is allowed
+      // to displace at most ONE other such entry.
+      '    var __TXBK="jellyfin.shell.txBudget";',
+      '    function __txBudgetOn(){try{return localStorage.getItem(__TXBK)==="1"&&localStorage.getItem(__TXBK+"Disabled")!=="1";}catch(_){return false;}}',
+      '    function __txNsScan(){var o={e:[],ref:{}};var n=0;try{n=localStorage.length;}catch(_){return o;}for(var i=0;i<n;i++){var k=null;try{k=localStorage.key(i);}catch(_){}if(!k||k.lastIndexOf(__TXPFX,0)!==0)continue;var s=k.substring(__TXPFX.length);if(s.lastIndexOf("vqk:",0)===0||s.lastIndexOf("gqk:",0)===0||s.lastIndexOf("ts:",0)===0)continue;var v=null;try{v=localStorage.getItem(k);}catch(_){}if(v==null)continue;if(v.lastIndexOf(__TXREF,0)===0){o.ref[v.substring(__TXREF.length)]=1;continue;}o.e.push({k:s,n:k.length+v.length,t:1});}return o;}',
+      '    function __txReclaim(need,keep,maxT1){var got=0;try{var sc=__txNsScan();var m=__txLru();var c=[];for(var i=0;i<sc.e.length;i++){var e=sc.e[i];if(e.k===keep)continue;if(e.k.lastIndexOf("txc:",0)===0&&!sc.ref[e.k])e.t=0;if(e.t===1&&maxT1<=0)continue;c.push(e);}c.sort(function(a,b){return a.t-b.t||b.n-a.n;});var cut=0,t1=0,dirty=false;for(var j=0;j<c.length&&got<need;j++){var x=c[j];if(x.t===1&&t1>=maxT1)break;try{localStorage.removeItem(__TXPFX+x.k);}catch(_){continue;}try{localStorage.removeItem(__TXPFX+"ts:"+x.k);}catch(_){}if(m[x.k]!=null){delete m[x.k];dirty=true;}got+=x.n;cut++;if(x.t===1)t1++;}if(dirty)__txPersistLru(m);if(cut){try{var q=window.__shellTxReclaim||{n:0,b:0};q.n+=cut;q.b+=got;window.__shellTxReclaim=q;}catch(_){}}}catch(_){}return got;}',
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){if(__txBudgetOn()){var nd=body.length+k.length+8192;if(__txReclaim(nd,k,1)>=nd){try{localStorage.setItem(__TXPFX+k,body);var m3=__txLru();m3[k]=Date.now();__txPersistLru(m3);return;}catch(_){}}__qeB();return;}__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       // JELA-749: drop bare slots SHADOWED by a version-keyed sibling. The
       // JELA-183 primer's scrape path minted `<url>` keys for modules the
       // runtime only ever asks for as `<url>?v=<token>`; __txKey keeps a
@@ -6403,7 +6419,9 @@
       // keys evicted by the widget-side pruner. Both read 0 with the flags
       // dark, and together with ls/lk/qe they say whether a fielded store is
       // recycling its version-keyed slots or just accreting them.
-      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0;p.tx.gd=W.__shellTxGenDrop||0;p.tx.ps=W.__shellTxPruneStatic||0}catch(_){}" +
+      // JELA-844: rc/rb = keys dropped / units freed by the value-ranked
+      // reclaim. A fleet with rb>0 is a fleet whose stores have started to fill.
+      "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0;p.tx.gd=W.__shellTxGenDrop||0;p.tx.ps=W.__shellTxPruneStatic||0;var rq=W.__shellTxReclaim;if(rq){p.tx.rc=rq.n;p.tx.rb=rq.b}}catch(_){}" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
@@ -6913,6 +6931,157 @@
       return false;
     }
   }
+  // JELA-844: the tx namespace has no BUDGET — it only ever reacts to a
+  // QuotaExceededError, and it reacts badly. Two defects compound once a TV's
+  // localStorage fills. Measured on the JELA-843 rig a healthy installed TV
+  // sits at 3,654,913 units = 69.7% of the 5,242,880 UTF-16 code-unit quota
+  // with ~1,550,000 units of headroom, and that occupancy has moved
+  // 64.6% -> 69.6% -> 69.7% over three releases — a handful of content-growth
+  // cycles away, not hypothetical.
+  //
+  //   1. __txPrune / txPruneStatic evict a fixed TEN keys regardless of size.
+  //      Ten 500-unit module entries reclaim 5,000 units, so the retry of a
+  //      100,000-unit body throws again and the write is LOST — permanently,
+  //      since nothing re-attempts it. Reclaim has to be BYTE-TARGETED.
+  //   2. Eviction is ranked by recency, never by value, and a `txc:` body is
+  //      not tracked at all unless JELA-799 (b) is armed. Every URL-keyed entry
+  //      saves exactly one request when it hits; a `txc:` body that no version
+  //      slot points at saves only a Babel pass, because its source was already
+  //      downloaded before the key could be computed (see the `ck` hash in
+  //      transpileLegacyScripts — a class-0 `?_jsi=1` URL is refetched every
+  //      boot by design). So the store retains one 923,476-unit transpile-only
+  //      blob (17.6% of the WHOLE quota) while 113 individually request-saving
+  //      module entries are evicted around it.
+  //
+  // Measured consequence of a full store (JELA-843 ballast arm, boot 3+):
+  // 291 reqs / 2.69 MB against 196 / 1.80 MB healthy — +49% requests and +49%
+  // bytes on EVERY boot, forever, as JEL-619's 152-modules-to-3 win silently
+  // unwinds (`/JellyfinEnhanced/js` 3 -> 117). Nothing errors, 130 cards still
+  // render, so it is invisible without a byte census.
+  //
+  // Fix: rank eviction by REQUESTS SAVED PER UNIT STORED.
+  //   tier 0 = a `txc:` body with no live "@@shellref:" pointer — saves zero
+  //            requests, so it goes FIRST, largest first.
+  //   tier 1 = anything that saves a download — largest first, so the byte
+  //            target is met while destroying the FEWEST cached requests.
+  // Admission is the same trade read backwards: a transpile-only body may only
+  // displace other transpile-only bodies, and a request-saving body may
+  // displace at most ONE other — evicting ten to store one is net -9 requests,
+  // which is exactly what the fixed-ten prune did.
+  //
+  // Flag-dark: localStorage["jellyfin.shell.txBudget"]="1" enables it,
+  // "jellyfin.shell.txBudgetDisabled"="1" is the kill switch. With the flag off
+  // both pruners behave exactly as they do today. QA counter:
+  // window.__shellTxReclaim = {n: keys dropped, b: units freed}.
+  var TX_BUDGET_KEY = "jellyfin.shell.txBudget";
+  // Slack over the body size so the retry is not defeated by the LRU-map
+  // rewrite and the "ts:" sibling that follow it.
+  var TX_RECLAIM_SLACK = 8192;
+  function txBudgetOn() {
+    try {
+      return (
+        localStorage.getItem(TX_BUDGET_KEY) === "1" &&
+        localStorage.getItem(TX_BUDGET_KEY + "Disabled") !== "1"
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+  // One pass over the tx namespace: the size of every evictable entry plus the
+  // set of content-addressed bodies a version slot still dereferences. Index
+  // keys ("vqk:"/"gqk:"/"ts:") and "@@shellref:" pointers are never candidates
+  // — they are tens of units each, and dropping a pointer strands its body
+  // (JELA-799 (b)'s asymmetry: an evicted body with a live pointer self-heals
+  // into a miss, an evicted pointer with a live body is a leak).
+  function txNsScan() {
+    var out = { e: [], ref: {} };
+    var n = 0;
+    try {
+      n = localStorage.length;
+    } catch (_) {
+      return out;
+    }
+    for (var i = 0; i < n; i++) {
+      var k = null;
+      try {
+        k = localStorage.key(i);
+      } catch (_) {}
+      if (!k || k.lastIndexOf(TX_PFX, 0) !== 0) continue;
+      var sub = k.substring(TX_PFX.length);
+      if (
+        sub.lastIndexOf("vqk:", 0) === 0 ||
+        sub.lastIndexOf("gqk:", 0) === 0 ||
+        sub.lastIndexOf("ts:", 0) === 0
+      )
+        continue;
+      var v = null;
+      try {
+        v = localStorage.getItem(k);
+      } catch (_) {}
+      if (v == null) continue;
+      if (v.lastIndexOf(TX_REF_PFX, 0) === 0) {
+        out.ref[v.substring(TX_REF_PFX.length)] = 1;
+        continue;
+      }
+      out.e.push({ k: sub, n: k.length + v.length, t: 1 });
+    }
+    return out;
+  }
+  // Reclaim at least `need` UTF-16 units from the tx namespace, value-ranked.
+  // `keep` is the key the caller is about to write (never a candidate).
+  // `maxT1` bounds how many request-saving entries may be destroyed. Returns
+  // the units actually freed, so the caller only retries when there is really
+  // room — a retry after an under-target reclaim just throws again.
+  function txReclaim(need, keep, maxT1) {
+    var got = 0;
+    try {
+      var sc = txNsScan();
+      var m = txLruRead();
+      var cand = [];
+      for (var i = 0; i < sc.e.length; i++) {
+        var e = sc.e[i];
+        if (e.k === keep) continue;
+        if (e.k.lastIndexOf("txc:", 0) === 0 && !sc.ref[e.k]) e.t = 0;
+        if (e.t === 1 && maxT1 <= 0) continue;
+        cand.push(e);
+      }
+      cand.sort(function (a, b) {
+        return a.t - b.t || b.n - a.n;
+      });
+      var cut = 0,
+        t1 = 0,
+        dirty = false;
+      for (var j = 0; j < cand.length && got < need; j++) {
+        var c = cand[j];
+        if (c.t === 1 && t1 >= maxT1) break;
+        try {
+          localStorage.removeItem(TX_PFX + c.k);
+        } catch (_) {
+          continue;
+        }
+        try {
+          localStorage.removeItem(TX_PFX + "ts:" + c.k);
+        } catch (_) {}
+        if (m[c.k] != null) {
+          delete m[c.k];
+          dirty = true;
+        }
+        got += c.n;
+        cut++;
+        if (c.t === 1) t1++;
+      }
+      if (dirty) txLruWrite(m);
+      if (cut) {
+        try {
+          var q = window.__shellTxReclaim || { n: 0, b: 0 };
+          q.n += cut;
+          q.b += got;
+          window.__shellTxReclaim = q;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return got;
+  }
   var PLUGIN_FETCH_CACHE_DISABLED_KEY =
     "jellyfin.shell.pluginFetchCacheDisabled";
   function pluginFetchCacheDisabled() {
@@ -6955,6 +7124,15 @@
         vkeyed = true;
     }
     return pinned ? 2 : busted || vkeyed ? 1 : 0;
+  }
+  // JELA-844 admission value for a body about to be stored under `ck`: 1 when
+  // a version slot will dereference it (txRecordQuerySlot runs for class 1/2)
+  // or when there is no query at all and `ck` IS the URL slot; 0 when the body
+  // can only ever save a Babel pass. Class 0 (the JSI channel's ?_jsi=1) is the
+  // one that matters — it is refetched every boot by contract, so its 923 KB
+  // transpile buys CPU and zero requests.
+  function txStaticVal(u) {
+    return u.indexOf("?") < 0 || txQueryClass(u) > 0 ? 1 : 0;
   }
   // Record the version-keyed slot for a query-bearing URL after its body was
   // downloaded and stored under `ck` (the content-addressed txc: slot). Also
@@ -7067,7 +7245,12 @@
   // gated on txPruneStatic() actually having evicted something — with the
   // flag off (empty static LRU tracking) it returns false and this collapses
   // to the pre-799 "count the lost write and give up" path.
-  function txSetStatic(url, body) {
+  // JELA-844: `val` is what this body will be worth once stored — 1 if a
+  // version slot will point at it (or it IS a URL slot), so it saves a
+  // download; 0 if it is transpile-only. Absent = 1 (the conservative reading).
+  // It decides ADMISSION only; eviction ranking re-derives the tier from the
+  // pointers that actually exist, which is the truth a boot later.
+  function txSetStatic(url, body, val) {
     if (typeof body !== "string" || body.length > 2097152) return;
     var k = txKey(url);
     try {
@@ -7075,7 +7258,19 @@
       txLruTouch(k);
       return;
     } catch (_) {
-      /* quota — fall through to prune-and-retry */
+      /* quota — fall through to reclaim / prune-and-retry */
+    }
+    if (txBudgetOn()) {
+      var need = body.length + k.length + TX_RECLAIM_SLACK;
+      if (txReclaim(need, k, val === 0 ? 0 : 1) >= need) {
+        try {
+          localStorage.setItem(TX_PFX + k, body);
+          txLruTouch(k);
+          return;
+        } catch (_) {}
+      }
+      txWriteLost();
+      return;
     }
     if (txLruStaticOn() && txPruneStatic()) {
       try {
@@ -8105,7 +8300,7 @@
               s.setAttribute("data-shell-transpiled-from", url);
               s.setAttribute("data-shell-fast-path", "1");
               if (gatedRaw) s.setAttribute("data-shell-jquery-gated", "1");
-              txSetStatic(ck, bodyRaw);
+              txSetStatic(ck, bodyRaw, txStaticVal(url));
               if (isJsiChannelTag) jsiChannelCacheSet(bodyRaw);
               // JEL-619: version-keyed slot so an unchanged ?v= token skips
               // the download entirely next boot.
@@ -8131,7 +8326,10 @@
                 s.setAttribute("data-shell-transpiled-from", url);
                 s.setAttribute("data-shell-tx-drop", "1");
                 if (gatedD) s.setAttribute("data-shell-jquery-gated", "1");
-                txSetStatic(ck, bodyD);
+                // JELA-844: the drop path does NOT call txRecordQuerySlot, so
+                // nothing will ever dereference this body when the URL carries
+                // a query — it is transpile-only by construction.
+                txSetStatic(ck, bodyD, url.indexOf("?") < 0 ? 1 : 0);
                 // JEL-618 x JEL-621: the drop already carries the transpiled
                 // JSI-channel body, so seed the channel-body cache here too —
                 // otherwise a drop hit would bypass the next-boot fast splice.
@@ -8194,7 +8392,7 @@
                 s.textContent = body;
                 s.setAttribute("data-shell-transpiled-from", url);
                 if (gated) s.setAttribute("data-shell-jquery-gated", "1");
-                txSetStatic(ck, body);
+                txSetStatic(ck, body, txStaticVal(url));
                 // JEL-618: cache the transpiled JSI-channel body for the
                 // next-boot fast-path splice (mirrors the fast-path/drop paths).
                 if (isJsiChannelTag) jsiChannelCacheSet(body);

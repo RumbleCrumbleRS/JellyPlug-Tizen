@@ -129,6 +129,18 @@ function makeStore(opts) {
       if (mode === "dead") throw qerr("SecurityError");
       map.delete(k);
     },
+    // JELA-844: __txNsScan/txNsScan enumerate the namespace instead of trusting
+    // the LRU map (that is the whole point — an untracked key was unreachable),
+    // so the fake store has to model the index API too. Map preserves insertion
+    // order, which is what a real localStorage's key(i) enumeration gives.
+    get length() {
+      if (mode === "dead") throw qerr("SecurityError");
+      return map.size;
+    },
+    key(i) {
+      if (mode === "dead") throw qerr("SecurityError");
+      return [...map.keys()][i];
+    },
   };
   return {
     ls,
@@ -208,7 +220,14 @@ function loadShell(src, label, store) {
     constExpr(src, "WEB_CACHE_MAX", label) +
     // Transpile-cache prefixes (the real shell derives these from TX_VER at
     // parse time; the exact value is irrelevant to quota behaviour).
-    ', __TXPFX = "shell.txTEST:", __TXLRUKEY = "shell.txLruTEST";\n';
+    ', __TXPFX = "shell.txTEST:", __TXLRUKEY = "shell.txLruTEST"' +
+    // JELA-844: the reclaim reads the budget flag key and has to recognise a
+    // "@@shellref:" pointer to know which txc: bodies are still dereferenced.
+    ", __TXBK = " +
+    JSON.stringify(constStr(src, "__TXBK", label)) +
+    ", __TXREF = " +
+    JSON.stringify(constStr(src, "__TXREF", label)) +
+    ";\n";
 
   const realFns = [
     "writeBundlePatchState",
@@ -228,6 +247,11 @@ function loadShell(src, label, store) {
     "__txLru",
     "__txPersistLru",
     "__txPrune",
+    // JELA-844: the value-ranked reclaim is part of the seed's tx module now —
+    // lift it too or __txSet's quota path reference-errors.
+    "__txBudgetOn",
+    "__txNsScan",
+    "__txReclaim",
     "__txSet",
   ];
 
@@ -238,8 +262,8 @@ function loadShell(src, label, store) {
     "globalThis.__api = { writeBundlePatchState, readBundlePatchState, " +
     "writeWebIndexCache, readWebIndexCache, writeWebConfigCache, " +
     "readWebConfigCache, saveServerUrl, loadServerUrl, __txPrune, __txSet, " +
-    "__txLru, BUNDLE_CACHE_VER, MAIN_BUNDLE_BODY_MAX, TXPFX: __TXPFX, " +
-    "TXLRUKEY: __TXLRUKEY };";
+    "__txLru, __txReclaim, __txNsScan, BUNDLE_CACHE_VER, MAIN_BUNDLE_BODY_MAX, " +
+    "TXPFX: __TXPFX, TXLRUKEY: __TXLRUKEY, TXBK: __TXBK, TXREF: __TXREF };";
 
   const sandbox = {
     localStorage: store.ls,
@@ -536,9 +560,16 @@ for (const [label, src] of SRC_SHELLS) {
 for (const [label, src] of SRC_SHELLS) {
   const set = liftTxFn(src, "__txSet", label);
   const prune = liftTxFn(src, "__txPrune", label);
+  // JELA-844: the quota arm now forks — flag ON goes through the byte-targeted
+  // value-ranked reclaim, flag OFF is the untouched fixed-ten prune-and-retry.
+  // Assert BOTH, so neither path can be dropped while the other still passes.
   check(
     "__txSet catch -> __txPrune() then retry setItem in " + label,
-    /catch\([^)]*\)\s*\{\s*__txPrune\(\);[\s\S]*setItem\(/.test(set),
+    /catch\([^)]*\)\s*\{[\s\S]*__txPrune\(\);[\s\S]*setItem\(/.test(set),
+  );
+  check(
+    "__txSet catch -> __txReclaim(need) gated retry in " + label,
+    /__txBudgetOn\(\)/.test(set) && /__txReclaim\([^)]*\)\s*>=\s*nd/.test(set),
   );
   check(
     "__txPrune sorts by LRU timestamp and caps eviction at 10 in " + label,

@@ -242,8 +242,12 @@ const INTENTIONAL_DIVERGENCES = [
     // instead of fetching the bootstrap's relative URL. Identical block in
     // both seeds; the divergence reason (retail's __txResolve vs boot's
     // per-call-site __dp/pre gate) is unchanged.
-    retail: "f219f9bf9618f34a",
-    boot: "a5a896e33c4edba2",
+    // JELA-844: re-pinned — both seeds gained the byte-targeted, value-ranked
+    // tx reclaim (__TXBK/__txBudgetOn/__txNsScan/__txReclaim, plus __txSet's
+    // quota arm routing through it), byte-identical in the two shells; only
+    // the surrounding buildSeedScript stays divergent.
+    retail: "ee3538df800c609f",
+    boot: "9ea41d44648da548",
   },
   {
     name: "buildDiagSeedScript",
@@ -270,8 +274,11 @@ const INTENTIONAL_DIVERGENCES = [
     name: "transpileLegacyScriptsInner",
     class: "hsb-feature",
     why: "boot adds recordStylesheetBodies() capture + pluginBabelLazy counter for HSB stylesheet/lazy-babel caches",
-    retail: "a54675d8d5761528",
-    boot: "f61a753964cad2e7",
+    // JELA-844: re-pinned — the three txSetStatic call sites now pass the
+    // admission value (txStaticVal(url), or a literal 0 on the tx-drop path
+    // which never records a version slot). Identical change in both shells.
+    retail: "d94ade4b479d8638",
+    boot: "310f71181341a069",
   },
   {
     name: "patchPlaybackBundles",
