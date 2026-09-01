@@ -4256,6 +4256,11 @@
   // to settle or cap, never "partial"). Without MutationObserver the mutation
   // gate degrades open (cards + stylesheet stability still gate). The 90 s
   // absolute cap stays as the kill-switched backstop.
+  // JELA-851: the mutation gate SAMPLES rather than testing every batch — at
+  // most one visibility test per localStorage['instantHomeMutationSampleMs']
+  // (0..2000 ms, default 300; 0 restores the old every-batch behaviour). Each
+  // test forces a synchronous layout, so testing every batch cost 704–760 ms
+  // of main thread per boot for a signal read against a 1.5 s window.
   //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
   // #/home with >= 5 above-fold cards stable across two consecutive ticks,
@@ -4307,6 +4312,9 @@
       'function flgO(k){try{return localStorage.getItem(k)!=="0"}catch(_){return!1}}' +
       'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=23000)return v}catch(_){}return 23000}' +
+      // JELA-851: minimum gap between two VISIBILITY SAMPLES in the settle
+      // observer below. 0 restores the pre-JELA-851 every-batch behaviour.
+      'function muGap(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeMutationSampleMs"),10);if(v>=0&&v<=2000)return v}catch(_){}return 300}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
       // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
@@ -4428,7 +4436,27 @@
       // the initial paint so our own overlay append never resets the clock;
       // watch-tick repaints only happen mid document.write churn.
       "var mo=null,muT=t0,ssN=-1,ssT=t0;" +
-      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){mo=new MO(function(ms){try{var vh2=W.innerHeight||1080;for(var mi=0;mi<ms.length;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=+new Date();break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=+new Date();break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
+      // JELA-851: the callback is a SAMPLER, not a log. getBoundingClientRect
+      // inside a MutationObserver microtask forces a synchronous layout, and
+      // the DOM is dirty on entry every time, so the FIRST rect read in a batch
+      // costs a full reflow and the rest are near-free. Measured on the census
+      // boot: 330 invocations / 1,838 records / 759.6 ms = 2.30 ms per
+      // INVOCATION but only 0.41 ms per record — the cost tracks how OFTEN the
+      // callback runs, not how much it looks at. So gate on elapsed time
+      // (muGap(), default 300 ms) and let skipped batches cost nothing.
+      //
+      // muT can now lag reality by at most muGap(); the only consumer compares
+      // it against a 1500 ms quiet window sampled by a 700 ms interval, so the
+      // sampling error stays well inside the quantisation that was already
+      // there. mn caps the per-batch scan so one 388-record burst cannot walk
+      // the whole list. A throwing check still counts as a mutation, so the
+      // gate keeps failing CLOSED (overlay holds) exactly as before.
+      //
+      // muL is 0 until the first sample is taken, so the gap test is guarded on
+      // muL rather than on the clock being large: a virtual or reset clock near
+      // 0 must never swallow the first batch. muL=nt||1 keeps "never sampled"
+      // distinguishable from "sampled at t=0".
+      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){var muG=muGap(),muL=0;mo=new MO(function(ms){try{var nt=+new Date();if(muL&&nt-muL<muG){G.muSkip=(G.muSkip||0)+1;return}muL=nt||1;G.muRun=(G.muRun||0)+1;var vh2=W.innerHeight||1080,mn=ms.length;if(mn>48)mn=48;for(var mi=0;mi<mn;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=nt;break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=nt;break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
       "if(G.gen!==gen||G.dismissed){try{mo&&mo.disconnect()}catch(_){}clearInterval(wIv);return}" +
