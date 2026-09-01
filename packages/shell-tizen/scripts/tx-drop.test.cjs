@@ -158,10 +158,15 @@ for (const [name, src] of ARTIFACTS) {
     src.includes("__ensureBabelDyn") && src.includes("/shell/babel.min.js"),
   );
 }
+// JELA-861: the gate is unchanged in MEANING — try the drop first, only for a
+// body that needs transpiling — but the needsTx() verdict is now computed once
+// into __n and reused, because needsTx() is a full `new Function(code)` parse
+// and this site used to run it three times per body. Pin both halves so the
+// shape cannot silently regress back to a re-parse.
 check(
   "boot-shell.src.js: seed __dp/pre pattern wired at both call sites",
-  (bootSrc.match(/__dp=needsTx\(code\)\?__txDropGet\(code\)/g) || []).length ===
-    2,
+  (bootSrc.match(/__dp=__n\?__txDropGet\(code\)/g) || []).length === 2 &&
+    (bootSrc.match(/var __n=needsTx\(code\);/g) || []).length === 2,
 );
 // JSI channel (JELA-183): the JEL-621 drop-state skip is GONE — it kept
 // Babel cold on boots whose dynamically-injected modules (not enumerated by

@@ -246,8 +246,16 @@ const INTENTIONAL_DIVERGENCES = [
     // tx reclaim (__TXBK/__txBudgetOn/__txNsScan/__txReclaim, plus __txSet's
     // quota arm routing through it), byte-identical in the two shells; only
     // the surrounding buildSeedScript stays divergent.
-    retail: "ee3538df800c609f",
-    boot: "9ea41d44648da548",
+    // JELA-861: re-pinned — maybeTranspile now takes the caller's already-
+    // computed needsTx() verdict (`need`) instead of re-deriving it, and every
+    // seed call site in BOTH shells hoists that verdict into __n and reuses it
+    // across the drop attempt, the Babel prime and maybeTranspile. needsTx is a
+    // full `new Function(code)` parse, so this removes a whole redundant parse
+    // per body: 65 of 304 distinct bodies / 1.09 MB of 6.69 MB on the JELA-112
+    // M63 rig. Landed in both shells; only the surrounding buildSeedScript
+    // (retail __txResolve vs boot per-call-site gate) stays divergent.
+    retail: "311baccd51d3c9be",
+    boot: "a3ac40c8646a3f0d",
   },
   {
     name: "buildDiagSeedScript",
