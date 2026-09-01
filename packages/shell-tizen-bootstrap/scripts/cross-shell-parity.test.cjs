@@ -232,8 +232,12 @@ const INTENTIONAL_DIVERGENCES = [
     // ?v=/?version= key with a non-empty but unrecognised value (JE's
     // `?v=unknown`) classifies 1 instead of 0. Identical block in both seeds
     // and in lockstep with the widget-side txQueryClass; reasons unchanged.
-    retail: "a40d9f8ee86eef70",
-    boot: "becebe76b57c8431",
+    // JELA-847 (2/2): re-pinned again — __txFam now also strips a `v=`/
+    // `version=` key with a non-empty unrecognised value, so a failed version
+    // pin gets a "gqk:" family index and ceInvalidate can drop it on a plugin
+    // bump. Identical block in both seeds; reasons unchanged.
+    retail: "84255763a7c3654e",
+    boot: "e526637cbbd77f4b",
   },
   {
     name: "buildDiagSeedScript",

@@ -1728,8 +1728,13 @@
       '    var __TXGENK="jellyfin.shell.txGenSweep";',
       '    function __txGenOn(){try{return localStorage.getItem(__TXGENK)==="1"&&localStorage.getItem(__TXGENK+"Disabled")!=="1";}catch(_){return false;}}',
       // Version-ish token test — lockstep with __txQC's `pin` arm.
+      // JELA-847: __txFam ALSO strips a `v=`/`version=` key with a non-empty
+      // value that is not a recognised version (JE's `?v=unknown`). Without
+      // that the family equals the key, __txGenRec returns early, no "gqk:"
+      // index is written — and ceInvalidate, which reaches seed-written slots
+      // ONLY through that index, cannot drop the slot on a plugin bump.
       "    function __txVerTok(v){return /^[0-9]{15,}$/.test(v)||/^\\d+(\\.\\d+){2,}/.test(v)||(/^[0-9a-fA-F]{12,}$/.test(v)&&/[a-fA-F]/.test(v));}",
-      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val)||eq>0&&val&&/^(v|version)$/i.test(p.substring(0,eq)))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       '    function __txGenRec(k){if(!__txGenOn())return;try{var f=__txFam(k);if(f===k)return;var fk=__TXPFX+"gqk:"+f;var prev=null;try{prev=localStorage.getItem(fk);}catch(_){}if(prev===k)return;if(prev){try{localStorage.removeItem(__TXPFX+prev);}catch(_){}try{localStorage.removeItem(__TXPFX+"ts:"+prev);}catch(_){}try{var m=__txLru();if(m[prev]!=null){delete m[prev];__txPersistLru(m);}}catch(_){}try{window.__shellTxGenDrop=(window.__shellTxGenDrop||0)+1;}catch(_){}}localStorage.setItem(fk,k);}catch(_){__qeB();}}',
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
