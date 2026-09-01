@@ -272,6 +272,36 @@
       return !1;
     }
   }
+  // JELA-853: learned per-device seed for the head-IIFE prefetch skip.
+  // JELA-226 built `jellyfin.shell.webPrefetchSkip` to stop the bootstrap
+  // issuing the /web/index.html + /web/config.json pair on boots where the
+  // shell adopts its LS body cache AND the JELA-59 epoch gate suppresses the
+  // revalidation drain — on those boots the pair is fetched and NEVER read.
+  // It shipped opt-in and so has never armed, and it cannot be flipped to
+  // opt-out the JELA-839 way because the READ SITE is primeWebBoot in the
+  // WGT bootstrap index.html, which installed widgets cannot update. The only
+  // lever on an installed TV is the flag VALUE, so this seeds it — arming one
+  // boot late, exactly as JELA-821/827/831 recorded for seeded shell flags.
+  // Seeded from what THIS boot observed, so it is self-correcting: a boot
+  // that consumed the prefetch writes '0' and the next boot prefetches again.
+  // Never removeItem (JELA-832). Kill: `jellyfin.shell.wpsAuto='0'`.
+  // SHIPS DARK behind `jellyfin.shell.wpsSeed='1'`: arming webPrefetchSkip
+  // runs a primeWebBoot branch that has never executed on a real panel, and
+  // that branch lives in the un-updatable WGT bootstrap — a defect there would
+  // need a reinstall on every TV, so it must not ride a publish silently.
+  var WPS_KEY = "jellyfin.shell.webPrefetchSkip";
+  var WPS_AUTO_KEY = "jellyfin.shell.wpsAuto";
+  var WPS_SEED_GATE_KEY = "jellyfin.shell.wpsSeed";
+  function seedWebPrefetchSkip(dead) {
+    try {
+      if (localStorage.getItem(WPS_SEED_GATE_KEY) !== "1") return;
+      if (localStorage.getItem(WPS_AUTO_KEY) === "0") return;
+      var v = dead ? "1" : "0";
+      window.__shellWpsSeed = v;
+      if (localStorage.getItem(WPS_KEY) === v) return;
+      localStorage.setItem(WPS_KEY, v);
+    } catch (_) {}
+  }
   function readWebIndexCache(serverOrigin) {
     try {
       var raw = localStorage.getItem(WEB_INDEX_CACHE_KEY);
@@ -3552,6 +3582,9 @@
       'function flgO(k){try{return localStorage.getItem(k)!=="0"}catch(_){return!1}}' +
       'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=23000)return v}catch(_){}return 23000}' +
+      // JELA-851: minimum gap between two VISIBILITY SAMPLES in the settle
+      // observer below. 0 restores the pre-JELA-851 every-batch behaviour.
+      'function muGap(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeMutationSampleMs"),10);if(v>=0&&v<=2000)return v}catch(_){}return 300}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
       // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
@@ -3673,7 +3706,27 @@
       // the initial paint so our own overlay append never resets the clock;
       // watch-tick repaints only happen mid document.write churn.
       "var mo=null,muT=t0,ssN=-1,ssT=t0;" +
-      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){mo=new MO(function(ms){try{var vh2=W.innerHeight||1080;for(var mi=0;mi<ms.length;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=+new Date();break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=+new Date();break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
+      // JELA-851: the callback is a SAMPLER, not a log. getBoundingClientRect
+      // inside a MutationObserver microtask forces a synchronous layout, and
+      // the DOM is dirty on entry every time, so the FIRST rect read in a batch
+      // costs a full reflow and the rest are near-free. Measured on the census
+      // boot: 330 invocations / 1,838 records / 759.6 ms = 2.30 ms per
+      // INVOCATION but only 0.41 ms per record — the cost tracks how OFTEN the
+      // callback runs, not how much it looks at. So gate on elapsed time
+      // (muGap(), default 300 ms) and let skipped batches cost nothing.
+      //
+      // muT can now lag reality by at most muGap(); the only consumer compares
+      // it against a 1500 ms quiet window sampled by a 700 ms interval, so the
+      // sampling error stays well inside the quantisation that was already
+      // there. mn caps the per-batch scan so one 388-record burst cannot walk
+      // the whole list. A throwing check still counts as a mutation, so the
+      // gate keeps failing CLOSED (overlay holds) exactly as before.
+      //
+      // muL is 0 until the first sample is taken, so the gap test is guarded on
+      // muL rather than on the clock being large: a virtual or reset clock near
+      // 0 must never swallow the first batch. muL=nt||1 keeps "never sampled"
+      // distinguishable from "sampled at t=0".
+      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){var muG=muGap(),muL=0;mo=new MO(function(ms){try{var nt=+new Date();if(muL&&nt-muL<muG){G.muSkip=(G.muSkip||0)+1;return}muL=nt||1;G.muRun=(G.muRun||0)+1;var vh2=W.innerHeight||1080,mn=ms.length;if(mn>48)mn=48;for(var mi=0;mi<mn;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=nt;break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=nt;break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
       "if(G.gen!==gen||G.dismissed){try{mo&&mo.disconnect()}catch(_){}clearInterval(wIv);return}" +
@@ -8027,6 +8080,9 @@
       cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null,
       cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null,
       indexCacheHit = !!(cachedIndex && cachedConfig);
+    // JELA-853: on a cache MISS the primary path below consumes the prefetch
+    // (mkIdxF/mkCfgF adopt it), so it earned its place — keep prefetching.
+    if (!indexCacheHit) seedWebPrefetchSkip(false);
     if (indexCacheHit) {
       (window.__shellIndexCacheHits++,
         (window.__shellWebIndexCacheAdopted = 1));
@@ -8054,8 +8110,13 @@
         .then(function () {
           if (window.__shellCfgEM === 1) {
             ceSup("idx");
+            // JELA-853: the boot shape where the head-IIFE pair is pure
+            // waste — the cache resolved both promises and the drain that
+            // would have consumed the in-flight fetches just bailed.
+            seedWebPrefetchSkip(true);
             return;
           }
+          seedWebPrefetchSkip(false);
           var iOk = drain(mkIdxF, cachedIndex, writeWebIndexCache).then(
             function (ok) {
               if (revalStart) {

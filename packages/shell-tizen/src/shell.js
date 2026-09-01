@@ -440,6 +440,55 @@
     }
   }
 
+  // ---- Head-IIFE prefetch skip, learned per device (JELA-853) ------------
+  //
+  // JELA-226 built `jellyfin.shell.webPrefetchSkip` to stop the head IIFE
+  // issuing the /web/index.html + /web/config.json pair on boots where the
+  // shell adopts its LS body cache AND the JELA-59 epoch gate suppresses the
+  // revalidation drain — on those boots the pair is fetched and NEVER read.
+  // The flag shipped opt-in (default off) and so has never armed.
+  //
+  // It cannot be flipped to opt-out the way JELA-839 flipped queryAuth: the
+  // READ SITE is `primeWebBoot` in the WGT bootstrap index.html, which is
+  // baked into installed widgets and cannot be updated without a reinstall.
+  // The only lever the shell has on installed TVs is the flag VALUE, so this
+  // seeds it — and therefore arms one boot late, exactly as JELA-821/827/831
+  // recorded for every channel-seeded shell flag.
+  //
+  // Seeded from what THIS boot observed rather than set once, so it is
+  // self-correcting: a boot that consumed the prefetch writes '0' and the
+  // next boot prefetches again. Worst case is always today's behaviour.
+  //   drain suppressed + cache hit -> pair was dead   -> '1'
+  //   anything else                -> pair was used   -> '0'
+  // Never removeItem: an absent key is the bootstrap's "prefetch" arm, so a
+  // remove would silently mean '0' anyway and lose the distinction (JELA-832).
+  // Operator kill: `jellyfin.shell.wpsAuto='0'` stops the seeder writing at
+  // all, leaving whatever value is already there.
+  //
+  // SHIPS DARK — `jellyfin.shell.wpsSeed` must be '1' for the seeder to write.
+  // Not the usual dark-merge caution: arming webPrefetchSkip runs a branch of
+  // `primeWebBoot` that has NEVER executed on a real panel, and that branch
+  // lives in the WGT bootstrap, which installed TVs cannot update. A defect
+  // there could not be fixed by shipping a new shell — it would need a
+  // reinstall on every TV. So this must not ride a publish silently: it needs
+  // an explicit flip AND on-device (Q60R) validation of a skipped boot first.
+  // Arms TWO boots late once flipped: boot N seeds nothing (gate off), boot
+  // N+1 seeds webPrefetchSkip, boot N+2 is the first that skips.
+  var WPS_KEY = "jellyfin.shell.webPrefetchSkip";
+  var WPS_AUTO_KEY = "jellyfin.shell.wpsAuto";
+  var WPS_SEED_GATE_KEY = "jellyfin.shell.wpsSeed";
+
+  function seedWebPrefetchSkip(dead) {
+    try {
+      if (localStorage.getItem(WPS_SEED_GATE_KEY) !== "1") return;
+      if (localStorage.getItem(WPS_AUTO_KEY) === "0") return;
+      var v = dead ? "1" : "0";
+      window.__shellWpsSeed = v;
+      if (localStorage.getItem(WPS_KEY) === v) return;
+      localStorage.setItem(WPS_KEY, v);
+    } catch (_) {}
+  }
+
   function readWebIndexCache(serverOrigin) {
     try {
       var raw = localStorage.getItem(WEB_INDEX_CACHE_KEY);
@@ -4273,6 +4322,11 @@
   // to settle or cap, never "partial"). Without MutationObserver the mutation
   // gate degrades open (cards + stylesheet stability still gate). The 90 s
   // absolute cap stays as the kill-switched backstop.
+  // JELA-851: the mutation gate SAMPLES rather than testing every batch — at
+  // most one visibility test per localStorage['instantHomeMutationSampleMs']
+  // (0..2000 ms, default 300; 0 restores the old every-batch behaviour). Each
+  // test forces a synchronous layout, so testing every batch cost 704–760 ms
+  // of main thread per boot for a signal read against a 1.5 s window.
   //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
   // #/home with >= 5 above-fold cards stable across two consecutive ticks,
@@ -4324,6 +4378,9 @@
       'function flgO(k){try{return localStorage.getItem(k)!=="0"}catch(_){return!1}}' +
       'var SH=!flg("jellyfin.shell.instantHomeInputShieldDisabled"),SD=!flg("jellyfin.shell.instantHomeSettleDismissDisabled"),HC=!flg("jellyfin.shell.instantHomeHoldCoverDisabled");' +
       'function capLim(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeSettleCapMs"),10);if(v>=1000&&v<=23000)return v}catch(_){}return 23000}' +
+      // JELA-851: minimum gap between two VISIBILITY SAMPLES in the settle
+      // observer below. 0 restores the pre-JELA-851 every-batch behaviour.
+      'function muGap(){try{var v=parseInt(localStorage.getItem("jellyfin.shell.instantHomeMutationSampleMs"),10);if(v>=0&&v<=2000)return v}catch(_){}return 300}' +
       "function eatK(ev){try{ev.preventDefault&&ev.preventDefault()}catch(_){}try{ev.stopPropagation&&ev.stopPropagation()}catch(_){}try{ev.stopImmediatePropagation&&ev.stopImmediatePropagation()}catch(_){}}" +
       'function rk(e){try{if(!e||!e.getBoundingClientRect)return"";var r=e.getBoundingClientRect();return Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width)+"_"+Math.round(r.height)}catch(_){return""}}' +
       // JELA-32 (WS-B): bounded snapshot max-age. Default 48 h so a stale
@@ -4445,7 +4502,27 @@
       // the initial paint so our own overlay append never resets the clock;
       // watch-tick repaints only happen mid document.write churn.
       "var mo=null,muT=t0,ssN=-1,ssT=t0;" +
-      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){mo=new MO(function(ms){try{var vh2=W.innerHeight||1080;for(var mi=0;mi<ms.length;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=+new Date();break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=+new Date();break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
+      // JELA-851: the callback is a SAMPLER, not a log. getBoundingClientRect
+      // inside a MutationObserver microtask forces a synchronous layout, and
+      // the DOM is dirty on entry every time, so the FIRST rect read in a batch
+      // costs a full reflow and the rest are near-free. Measured on the census
+      // boot: 330 invocations / 1,838 records / 759.6 ms = 2.30 ms per
+      // INVOCATION but only 0.41 ms per record — the cost tracks how OFTEN the
+      // callback runs, not how much it looks at. So gate on elapsed time
+      // (muGap(), default 300 ms) and let skipped batches cost nothing.
+      //
+      // muT can now lag reality by at most muGap(); the only consumer compares
+      // it against a 1500 ms quiet window sampled by a 700 ms interval, so the
+      // sampling error stays well inside the quantisation that was already
+      // there. mn caps the per-batch scan so one 388-record burst cannot walk
+      // the whole list. A throwing check still counts as a mutation, so the
+      // gate keeps failing CLOSED (overlay holds) exactly as before.
+      //
+      // muL is 0 until the first sample is taken, so the gap test is guarded on
+      // muL rather than on the clock being large: a virtual or reset clock near
+      // 0 must never swallow the first batch. muL=nt||1 keeps "never sampled"
+      // distinguishable from "sampled at t=0".
+      'if(SD){try{var MO=W.MutationObserver||W.WebKitMutationObserver;if(MO){var muG=muGap(),muL=0;mo=new MO(function(ms){try{var nt=+new Date();if(muL&&nt-muL<muG){G.muSkip=(G.muSkip||0)+1;return}muL=nt||1;G.muRun=(G.muRun||0)+1;var vh2=W.innerHeight||1080,mn=ms.length;if(mn>48)mn=48;for(var mi=0;mi<mn;mi++){var mt=ms[mi].target;if(mt&&mt.nodeType===3)mt=mt.parentNode;if(!mt||!mt.getBoundingClientRect){muT=nt;break}var mr=mt.getBoundingClientRect();if(mr.top<vh2&&mr.bottom>0){muT=nt;break}}}catch(_){muT=+new Date()}});mo.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["class","style","src"]})}}catch(_){G.err++}}' +
       "var fc=0;" +
       "var wIv=setInterval(function(){try{" +
       "if(G.gen!==gen||G.dismissed){try{mo&&mo.disconnect()}catch(_){}clearInterval(wIv);return}" +
@@ -10127,6 +10204,11 @@
     var cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null;
     var cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null;
     var indexCacheHit = !!(cachedIndex && cachedConfig);
+    // JELA-853: on a cache MISS the primary path below consumes the prefetch
+    // (mkIdxF/mkCfgF adopt it), so it earned its place — keep prefetching.
+    // Seeded synchronously here because the cache-miss path never reaches the
+    // epoch callback that carries the other verdict.
+    if (!indexCacheHit) seedWebPrefetchSkip(false);
     if (indexCacheHit) {
       window.__shellIndexCacheHits++;
       window.__shellWebIndexCacheAdopted = 1;
@@ -10158,8 +10240,14 @@
         .then(function () {
           if (window.__shellCfgEM === 1) {
             ceSup("idx");
+            // JELA-853: this is the boot shape where the head-IIFE pair is
+            // pure waste — the cache resolved both promises and the drain
+            // that would have consumed the in-flight fetches just bailed.
+            // Tell the next boot's bootstrap not to issue them.
+            seedWebPrefetchSkip(true);
             return;
           }
+          seedWebPrefetchSkip(false);
           var iOk = drain(mkIdxF, cachedIndex, writeWebIndexCache).then(
             function (ok) {
               if (revalStart) {

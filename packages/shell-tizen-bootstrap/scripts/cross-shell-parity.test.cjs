@@ -105,6 +105,7 @@ const EXPECTED_MIRRORED = [
   "readBundlePatchState",
   "writeBundlePatchState",
   "webCacheEnabled",
+  "seedWebPrefetchSkip",
   "readWebIndexCache",
   "readWebConfigCache",
   "writeWebConfigCache",
@@ -311,8 +312,11 @@ const INTENTIONAL_DIVERGENCES = [
     // helper) after the JELA-710 font rewrite.
     // JELA-716: re-pinned — both load paths now also route the html through
     // stripDeadMediaBarJs (shared, auto-guarded) after the JE-defer strip.
-    retail: "4e85661be234164c",
-    boot: "ca0eed4d39976fb6",
+    // JELA-853: re-pinned — both load paths now seed
+    // `jellyfin.shell.webPrefetchSkip` from what the boot observed, so the
+    // next boot's head IIFE stops issuing a /web/ pair nothing will read.
+    retail: "db9f0c1875856c37",
+    boot: "0a1959c4eb6ed17f",
   },
   {
     name: "bootstrap",
