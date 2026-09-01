@@ -101,6 +101,17 @@
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
             var BOOT_BUDGET_MS = 4000;
+            // JELA-857: how long the deferred babel prime waits for the shell to
+            // install window.__shellPaintGate before priming anyway, and the
+            // absolute deadline after which it primes regardless of paint. Both
+            // are backstops only — the on-demand __ensureBabel() path is
+            // untouched, so a transpile that lands first still loads babel
+            // itself. 8 s sits after the measured 2.0-2.8 s paint and after the
+            // 5.2-6.3 s first-transform onset, so on a healthy boot neither
+            // timer is what actually kicks.
+            var BABEL_PRIME_POLL_MS = 100;
+            var BABEL_PRIME_BACKSTOP_MS = 8000;
+            var HSB_T0 = Date.now();
 
             // --- AC3 diagnostic overlay -------------------------------------
             var hsbState = { version: HSB_VERSION, codename: HSB_CODENAME,
@@ -406,14 +417,81 @@
                     // extended to the unlearned case this ticket is about.
                     if (verdict !== '1' && verdict !== null) return;
                     if (verdict === '1' && streak >= 2) return;
-                    // Defer one tick: on the stored-URL path this runs while the
-                    // bootloader <script> is still parsing, before the IIFE below
-                    // has defined window.__ensureBabel.
-                    setTimeout(function(){
+                    // JELA-857: ARM THE PRIME ON FIRST PAINT, NOT setTimeout(…,0).
+                    // JEL-125 fired on the next tick to overlap the 2.4 MB babel
+                    // fetch+parse with the manifest-probe chain. The JELA-855
+                    // census (#19, 4 CPU-profiled cold boots) says there is
+                    // nothing to overlap with: babel blocks the main thread for
+                    // 252-373 ms inside the first ~400 ms of a fresh boot (9.3%
+                    // of a pre-paint window that is only 18% idle), while the
+                    // transpiler is not CALLED until 3.2-3.5 s AFTER first paint.
+                    // The only pre-paint babel frames are the module factory —
+                    // loading the bundle, never using it. Removing the prime
+                    // outright moved first card -263 ms (-13.0%, 3v3).
+                    //
+                    // Paint, not idle: the JELA-681 gate is the one signal that
+                    // means "the pre-paint critical path is over", and it still
+                    // lands babel ~2.5-4 s ahead of first demand so the transform
+                    // window pays nothing either. (M63 has no requestIdleCallback,
+                    // and a bare timer either fires inside the window we are
+                    // clearing or after demand.)
+                    //
+                    // Safe against the JELA-841 hang class BECAUSE BABEL_SRC is
+                    // snapshotted absolute at parse time (below): the URL no
+                    // longer depends on WHEN the tag is built, so a post-
+                    // document.write prime still resolves to the WGT sibling —
+                    // measured 0 network bytes, window.Babel object, total boot
+                    // bytes in the eager arm's band. Contrast the shipped
+                    // babelPrime='0' opt-out on WGT 2.0.25, whose RELATIVE
+                    // BABEL_SRC 404s post-write and falls back to the JELA-848
+                    // server drop at +486 KB per boot.
+                    //
+                    // Nothing here is load-bearing: __ensureBabel stays
+                    // call-on-demand, so a transpile arriving before the gate
+                    // loads babel itself (JELA-183 __ensureBabelDyn calls this
+                    // very hook first). The timers below only stop a boot that
+                    // never paints from never priming at all. Kill switch:
+                    // babelPrimeEager='1' restores JEL-125's next-tick prime
+                    // without a WGT rebuild.
+                    var eager = false;
+                    try { eager = localStorage.getItem('jellyfin.shell.legacy.babelPrimeEager') === '1'; } catch(_){}
+                    // Function EXPRESSIONS, not declarations: these live inside a
+                    // try block and the whole bootloader is ES5-only by contract.
+                    var primeKicked = 0;
+                    var kickBabelPrime = function (why) {
+                        if (primeKicked) return;
+                        primeKicked = 1;
+                        try { window.__shellBabelPrimeAt = [why, Date.now() - HSB_T0]; } catch(_){}
                         try {
                             if (typeof window.__ensureBabel === 'function') window.__ensureBabel();
                         } catch(_){}
-                    }, 0);
+                    };
+                    if (eager) {
+                        // Defer one tick: on the stored-URL path this runs while
+                        // the bootloader <script> is still parsing, before the
+                        // IIFE below has defined window.__ensureBabel.
+                        setTimeout(function(){ kickBabelPrime('eager'); }, 0);
+                        return;
+                    }
+                    // The paint gate is installed by the shell seed, i.e. only
+                    // after document.write — poll for it rather than assume it.
+                    var primeWaited = 0;
+                    var watchPaintGate = function () {
+                        if (primeKicked) return;
+                        var pg = null;
+                        try { pg = window.__shellPaintGate; } catch(_){}
+                        if (pg && typeof pg.onPaint === 'function') {
+                            pg.onPaint(function(){ kickBabelPrime('paint'); });
+                            return;
+                        }
+                        primeWaited += BABEL_PRIME_POLL_MS;
+                        if (primeWaited >= BABEL_PRIME_BACKSTOP_MS) { kickBabelPrime('no-gate'); return; }
+                        setTimeout(watchPaintGate, BABEL_PRIME_POLL_MS);
+                    };
+                    setTimeout(watchPaintGate, 0);
+                    // Absolute deadline: covers the gate being installed but
+                    // never firing (its own giveup is 120 s).
+                    setTimeout(function(){ kickBabelPrime('backstop'); }, BABEL_PRIME_BACKSTOP_MS);
                 } catch(_){}
             }
 

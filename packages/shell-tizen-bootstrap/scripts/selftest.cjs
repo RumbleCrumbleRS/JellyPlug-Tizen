@@ -20,7 +20,7 @@ const SOURCE = match[1];
 
 function fail(msg) { console.error('FAIL:', msg); process.exit(1); }
 
-function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, scriptDelayedOk, scriptSilent, navigatorUA, ensureBabelSpy, extraStore, fetchBodies, fetchRejects, storeRetryMs }) {
+function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, scriptOk, scriptDelayedOk, scriptSilent, navigatorUA, ensureBabelSpy, extraStore, fetchBodies, fetchRejects, storeRetryMs, paintGate }) {
     const log = { appended: [], formAttached: false, errorShown: null };
     const sandboxRef = {}; // filled at the bottom so inline exec sees the live sandbox
     const head = { tagName: 'HEAD', appendChild(node) {
@@ -128,6 +128,18 @@ function makeEnv({ serverUrl, manifestResponse, manifestStatus, scriptErrors, sc
         log.babelKicks = 0;
         win.__ensureBabel = function(){ log.babelKicks++; return Promise.resolve(); };
     }
+    // JELA-857: the babel prime now waits on the shell's JELA-681 paint gate,
+    // which is installed by the seed INSIDE the rewritten document — i.e. it
+    // does not exist when primeWebBoot runs. `paintGate: true` models the gate
+    // arriving; scenarios that omit it model a boot that never installs one.
+    if (paintGate) {
+        win.__shellPaintGate = {
+            fired: 0, cbs: [],
+            onPaint: function(cb){ if (this.fired) { cb(); } else { this.cbs.push(cb); } },
+            fire: function(){ this.fired = 1; const c = this.cbs.slice(); this.cbs.length = 0;
+                              c.forEach(function(f){ f(); }); },
+        };
+    }
 
     function FakeXHR(){
         this.open = function(method, url){ this.url = url; };
@@ -186,7 +198,18 @@ function shellBodyRec(sha, url, body) {
 async function runScenario(opts) {
     const env = makeEnv(opts);
     vm.createContext(env.sandbox);
-    vm.runInContext(SOURCE, env.sandbox);
+    // JELA-857: `sourceRewrite` shortens a real production constant (the 8 s
+    // babel-prime backstop) so a scenario can observe the deadline fire inside
+    // a unit test. It rewrites the value, never the branch — the code under
+    // test is still the shipped code path.
+    let source = SOURCE;
+    if (opts.sourceRewrite) {
+        for (const [from, to] of opts.sourceRewrite) {
+            if (!source.includes(from)) throw new Error('sourceRewrite miss: ' + from);
+            source = source.replace(from, to);
+        }
+    }
+    vm.runInContext(source, env.sandbox);
     await new Promise(function(resolve){ setTimeout(resolve, opts.settleMs || 50); });
     return env;
 }
@@ -315,13 +338,16 @@ async function runScenario(opts) {
         console.log('OK 8: stored-URL boot primes __shellPrefetch (index + config)');
     }
 
-    // Scenario 9: first-connect submit on a legacy UA → prefetch primed from the
-    // normalized URL + eager babel kick.
+    // Scenario 9 (JELA-857): first-connect submit on a legacy UA → prefetch
+    // primed from the normalized URL, and the babel prime DEFERRED until the
+    // paint gate fires. The pre-paint window is 82% busy main thread and babel
+    // is not called for another ~3.3 s after paint, so a kick before paint is
+    // pure tax (measured -263 ms on first card when it is removed).
     {
         const r = await runScenario({
             serverUrl: null, manifestResponse: 'error',
             navigatorUA: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/537.36 Chrome/63.0.3239.84 TV Safari/537.36',
-            ensureBabelSpy: true,
+            ensureBabelSpy: true, paintGate: true,
         });
         r.sandbox.document.getElementById('server-input').value = 'srv.example:8096/';
         r.sandbox.document.getElementById('server-form').submit();
@@ -329,9 +355,83 @@ async function runScenario(opts) {
         const pf = r.sandbox.window.__shellPrefetch;
         if (!pf || pf.baseUrl !== 'http://srv.example:8096/web/')
             fail('scenario 9: expected prefetch baseUrl http://srv.example:8096/web/, got ' + (pf && pf.baseUrl));
+        if (r.log.babelKicks !== 0)
+            fail('scenario 9: babel must NOT be primed before paint, got ' + r.log.babelKicks + ' kicks');
+        r.sandbox.window.__shellPaintGate.fire();
         if (r.log.babelKicks !== 1)
-            fail('scenario 9: expected 1 eager babel kick on legacy UA fresh connect, got ' + r.log.babelKicks);
-        console.log('OK 9: first-connect submit primes prefetch + eager babel on legacy UA');
+            fail('scenario 9: expected 1 babel kick once the paint gate fires, got ' + r.log.babelKicks);
+        const at = r.sandbox.window.__shellBabelPrimeAt;
+        if (!at || at[0] !== 'paint')
+            fail('scenario 9: expected __shellBabelPrimeAt why="paint", got ' + JSON.stringify(at));
+        // Idempotent: a second fire (or the backstop landing later) must not
+        // re-enter __ensureBabel.
+        r.sandbox.window.__shellPaintGate.fire();
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9: babel kick must be once-only, got ' + r.log.babelKicks);
+        console.log('OK 9: first-connect primes prefetch; babel prime waits for the paint gate');
+    }
+
+    // Scenario 9b (JELA-857): babelPrimeEager='1' kill switch restores JEL-125's
+    // next-tick prime without a WGT rebuild.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true, paintGate: true,
+            extraStore: { 'jellyfin.shell.legacy.babelPrimeEager': '1' },
+        });
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9b: babelPrimeEager=1 must kick on the next tick, got ' + r.log.babelKicks);
+        if (r.sandbox.window.__shellPaintGate.fired)
+            fail('scenario 9b: eager kick must not depend on paint');
+        const at = r.sandbox.window.__shellBabelPrimeAt;
+        if (!at || at[0] !== 'eager')
+            fail('scenario 9b: expected __shellBabelPrimeAt why="eager", got ' + JSON.stringify(at));
+        console.log('OK 9b: babelPrimeEager=1 restores the pre-paint prime');
+    }
+
+    // Scenario 9c (JELA-857): a boot that never installs a paint gate still
+    // primes — the deferral must not be able to strand babel forever.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true, // no paintGate
+            sourceRewrite: [['var BABEL_PRIME_BACKSTOP_MS = 8000;', 'var BABEL_PRIME_BACKSTOP_MS = 300;']],
+            settleMs: 120,
+        });
+        if (r.log.babelKicks !== 0)
+            fail('scenario 9c: must not prime while still polling for the gate, got ' + r.log.babelKicks);
+        await new Promise(function(resolve){ setTimeout(resolve, 400); });
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9c: expected exactly 1 backstop kick, got ' + r.log.babelKicks);
+        const at = r.sandbox.window.__shellBabelPrimeAt;
+        if (!at || at[0] !== 'no-gate')
+            fail('scenario 9c: expected __shellBabelPrimeAt why="no-gate", got ' + JSON.stringify(at));
+        console.log('OK 9c: no paint gate → babel primed by the backstop, once');
+    }
+
+    // Scenario 9d (JELA-857): the gate IS installed but never fires (its own
+    // give-up is 120 s). The absolute deadline must still prime.
+    {
+        const r = await runScenario({
+            serverUrl: 'https://srv.example', manifestResponse: 'error',
+            navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
+            ensureBabelSpy: true, paintGate: true,
+            sourceRewrite: [['var BABEL_PRIME_BACKSTOP_MS = 8000;', 'var BABEL_PRIME_BACKSTOP_MS = 300;']],
+            settleMs: 120,
+        });
+        if (r.log.babelKicks !== 0) fail('scenario 9d: must not prime before the deadline');
+        await new Promise(function(resolve){ setTimeout(resolve, 400); });
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9d: expected exactly 1 backstop kick on a never-firing gate, got ' + r.log.babelKicks);
+        const at = r.sandbox.window.__shellBabelPrimeAt;
+        if (!at || at[0] !== 'backstop')
+            fail('scenario 9d: expected __shellBabelPrimeAt why="backstop", got ' + JSON.stringify(at));
+        r.sandbox.window.__shellPaintGate.fire(); // late paint must not double-kick
+        if (r.log.babelKicks !== 1)
+            fail('scenario 9d: late paint must not re-prime, got ' + r.log.babelKicks);
+        console.log('OK 9d: gate installed but never fires → deadline primes exactly once');
     }
 
     // Scenario 10: modern UA → prefetch primed, NO babel kick.
@@ -354,6 +454,10 @@ async function runScenario(opts) {
             serverUrl: 'https://srv.example', manifestResponse: 'error',
             navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
             ensureBabelSpy: true,
+            // JELA-857: shorten the backstop so "blocked" means blocked FOREVER,
+            // not merely blocked until the 8 s deadline the deferral added.
+            sourceRewrite: [['var BABEL_PRIME_BACKSTOP_MS = 8000;', 'var BABEL_PRIME_BACKSTOP_MS = 200;']],
+            settleMs: 400,
             extraStore: { 'jellyfin.shell.legacy.babelPrime': '0' },
         });
         if (r.log.babelKicks !== 0)
@@ -362,18 +466,28 @@ async function runScenario(opts) {
             serverUrl: 'https://srv.example', manifestResponse: 'error',
             navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
             ensureBabelSpy: true,
+            sourceRewrite: [['var BABEL_PRIME_BACKSTOP_MS = 8000;', 'var BABEL_PRIME_BACKSTOP_MS = 200;']],
+            settleMs: 400,
             extraStore: { 'jellyfin.shell.legacy.babelNeeded': '1', 'jellyfin.shell.legacy.babelUnusedStreak': '2' },
         });
         if (r2.log.babelKicks !== 0)
             fail('scenario 11: babelUnusedStreak>=2 must block the kick, got ' + r2.log.babelKicks);
+        // JELA-857: the learned-needed verdict still reaches the prime — it is
+        // only DEFERRED to the paint gate now, so the kick is asserted after
+        // the gate fires rather than on the next tick.
         const r3 = await runScenario({
             serverUrl: 'https://srv.example', manifestResponse: 'error',
             navigatorUA: 'Mozilla/5.0 Chrome/63.0.3239.84 Safari/537.36',
-            ensureBabelSpy: true,
+            ensureBabelSpy: true, paintGate: true,
             extraStore: { 'jellyfin.shell.legacy.babelNeeded': '1' },
         });
+        if (r3.log.babelKicks !== 0)
+            fail('scenario 11: learned-needed must not kick before paint, got ' + r3.log.babelKicks);
+        r3.sandbox.window.__shellPaintGate.fire();
         if (r3.log.babelKicks !== 1)
             fail('scenario 11: learned-needed verdict with live streak must kick, got ' + r3.log.babelKicks);
+        if (r.sandbox.window.__shellBabelPrimeAt || r2.sandbox.window.__shellBabelPrimeAt)
+            fail('scenario 11: a blocked arm must not record a prime marker');
         console.log('OK 11: babel kick gating — kill switch, unused streak, learned-needed');
     }
 
