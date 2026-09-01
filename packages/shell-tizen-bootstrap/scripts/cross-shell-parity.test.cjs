@@ -231,8 +231,13 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-834: re-pinned — the bitrateCache gate flipped from opt-in to
     // opt-OUT in both seeds. Identical change in both shells; reasons
     // unchanged. (Same class of fix as the JELA-827 re-pins above.)
-    retail: "22ffe711d66a82b6",
-    boot: "5b9421f786d6e7bf",
+    // JELA-847: re-pinned — __txQC gained the failed-version-pin arm, so a
+    // ?v=/?version= key with a non-empty but unrecognised value (JE's
+    // `?v=unknown`) classifies 1 instead of 0, and __txFam strips that key so
+    // the slot gets a "gqk:" family index ceInvalidate can reach on a plugin
+    // bump. Identical blocks in both seeds; reasons unchanged.
+    retail: "250a61173d8b238a",
+    boot: "d842011140023fc7",
   },
   {
     name: "buildDiagSeedScript",
