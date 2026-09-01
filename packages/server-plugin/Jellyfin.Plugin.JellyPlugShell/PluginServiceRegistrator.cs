@@ -14,6 +14,11 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<DiagIngestService>();
         serviceCollection.AddSingleton<ConfigFingerprintService>();
 
+        // JELA-865: holds the patched main-bundle body in memory. Singleton so
+        // one loopback fetch serves every TV for the life of the process; the
+        // tx-drop rebuild task warms it on the startup trigger.
+        serviceCollection.AddSingleton<PatchedBundleService>();
+
         // JELA-727: gzip for controller output — Jellyfin's own compression only
         // wraps the static-file branch. MUST stay the first-registered filter:
         // first-registered is OUTERMOST, and the JELA-732 section cache below

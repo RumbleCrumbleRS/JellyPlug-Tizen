@@ -393,6 +393,12 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-1776 warm-boot cache counters. CacheHit = URL match (any
 *JEL-554 v29): the `item or serverId cannot be null` throw is
 *JEL-436 Chromium <70 (see root-cause analysis above). On modern
+*JEL-436 the parser as an EXTERNAL script for the first time since ,
+*JEL-1977 built (or this document came from the index cache), and
+*JEL-554 the watchdog's script[defer][src] sweep should see this tag
+*JEL-436 started inlining. The served URL also keeps the .bundle.js
+*JEL-1776 JEL-1980 * bundlePatchState — the / verdict+body cache. Its
+*JEL-1289 * bundleUrl — the last-seen bundle URL the index.html head
 *JEL-1289 v55): speculative bundle prefetch. The main.*.bundle.js
 *JEL-1776 read once outside the loop; verdict is per-URL but the
 *JEL-555 the `item or serverId cannot be null` throw lives in

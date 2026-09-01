@@ -19,6 +19,7 @@ public class TxDropRebuildTask : IScheduledTask
     private readonly TxDropBuilder _builder;
     private readonly IServerApplicationHost _appHost;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly PatchedBundleService _patched;
     private readonly ILogger<TxDropRebuildTask> _logger;
 
     public TxDropRebuildTask(
@@ -26,12 +27,14 @@ public class TxDropRebuildTask : IScheduledTask
         TxDropBuilder builder,
         IServerApplicationHost appHost,
         IHttpClientFactory httpClientFactory,
+        PatchedBundleService patched,
         ILogger<TxDropRebuildTask> logger)
     {
         _drop = drop;
         _builder = builder;
         _appHost = appHost;
         _httpClientFactory = httpClientFactory;
+        _patched = patched;
         _logger = logger;
     }
 
@@ -57,6 +60,26 @@ public class TxDropRebuildTask : IScheduledTask
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+
+        // JELA-865: warm the patched main-bundle drop on the SAME triggers
+        // (startup + every 6 h). Lazy-building it on first request would put a
+        // ~500 KB loopback fetch on some unlucky TV's pre-paint critical path,
+        // and the 6 h re-force is what re-publishes after a jellyfin-web
+        // upgrade. Independent of DisableTxRebuild — different subsystem, and a
+        // server with the tx rebuild turned off still wants its bundle patched.
+        try
+        {
+            await _patched.EnsureAsync(force: true, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "patched-bundle warm failed; TVs keep their own inline patch path");
+        }
+
         if (config.DisableTxRebuild)
         {
             _logger.LogInformation("tx rebuild disabled in plugin configuration; skipping");

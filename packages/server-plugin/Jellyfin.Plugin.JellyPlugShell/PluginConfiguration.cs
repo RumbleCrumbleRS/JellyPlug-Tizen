@@ -28,6 +28,18 @@ public class PluginConfiguration : BasePluginConfiguration
     public int TransformTimeoutSeconds { get; set; } = 600;
 
     /// <summary>
+    /// JELA-865 server-side kill switch for the patched main-bundle drop. With
+    /// this set the plugin stops publishing /shell/patched/ and stops
+    /// advertising `patchedBundle` in the manifest, which is all a TV needs to
+    /// fall straight back to its own fetch+scan+inline path — no shell flag
+    /// flip and no TV restart required. Default off: the drop is inert until a
+    /// TV opts in with localStorage['jellyfin.shell.patchedDrop']='1', so
+    /// shipping it armed costs nothing and saves a second deploy when the
+    /// client-side flag flips.
+    /// </summary>
+    public bool DisablePatchedBundle { get; set; }
+
+    /// <summary>
     /// JELA-186: disable the dynamic-module discovery pass of the tx-drop
     /// rebuild (static sources still rebuild). With the scan off, dynamic
     /// modules drop-MISS and fresh boots lazy-load Babel on the TV instead.

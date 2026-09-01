@@ -100,6 +100,9 @@ const CONFIG_XML = path.join(__dirname, "..", "src", "config.xml");
 // against a one-sided rename/delete dropping the name out of the shared set).
 const EXPECTED_MIRRORED = [
   "save",
+  // JELA-865: converged when the divergent body moved to
+  // patchPlaybackBundlesInner — this is now the shared wrapper.
+  "patchPlaybackBundles",
   "withBootTimeout",
   "txFnv1a",
   "readBundlePatchState",
@@ -290,11 +293,11 @@ const INTENTIONAL_DIVERGENCES = [
     boot: "310f71181341a069",
   },
   {
-    name: "patchPlaybackBundles",
+    name: "patchPlaybackBundlesInner",
     class: "hsb-feature",
-    why: "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache",
-    retail: "62a5ed8218434b0f",
-    boot: "fda5e5504252e1c3",
+    why: "boot integrates its vendors-bundle localStorage cache into bundle patching; retail has no vendors cache. JELA-865 split the old patchPlaybackBundles: the divergent fetch+scan+inline body moved here, and the wrapper (counters, legacy gate, the patched-drop branch) converged and is now in EXPECTED_MIRRORED.",
+    retail: "07a3d70aa0490fc3",
+    boot: "7cccb75b1901f2c5",
   },
   {
     name: "maybeStringFastPath",

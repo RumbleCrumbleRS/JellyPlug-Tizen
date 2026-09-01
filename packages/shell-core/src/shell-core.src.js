@@ -425,3 +425,125 @@
     } catch (_) {}
   }
 //@@END:installLsWriteBehind@@
+
+//@@BEGIN:patchedBundleDropOn@@
+  function patchedBundleDropOn() {
+    // JELA-865 dark gate for the patched-bundle drop. Opt-IN ("1"), not the
+    // usual opt-out polarity: this path hands the main jellyfin-web bundle to
+    // the parser as an EXTERNAL script for the first time since JEL-436, and
+    // the kill switch has to be "do nothing" rather than "do the new thing".
+    // Clearing the key (or any value but "1") falls straight back to the
+    // fetch + scan + inline path with no other state to unwind.
+    try {
+      return localStorage.getItem("jellyfin.shell.patchedDrop") === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+//@@END:patchedBundleDropOn@@
+
+//@@BEGIN:patchedBundleDropApply@@
+  function patchedBundleDropApply(doc, baseUrl) {
+    // JELA-865. Repoints the main jellyfin-web bundle's <script defer src> at
+    // the server's pre-patched body instead of inlining the patched source.
+    // Returns 1 when the tag was repointed, 0 when the caller must fall back
+    // to the unchanged fetch + scan + inline path.
+    //
+    // Why a URL and not the body: Blink refuses to stream a script it did not
+    // load itself over http(s) — blob:/data: are rejected outright — so an
+    // inlined body is compiled on the main thread by definition. JELA-863's
+    // trace census priced that on the M63 rig: the same ~500 KB that the
+    // parser-loaded arm spent 162-174 ms parsing on the ScriptStreamerThread
+    // became ~194 ms of V8.CompileCode nested under a re-entrant ParseHTML,
+    // pre-paint, in the shell arm. Same bytes, same engine; the compile just
+    // moved onto the critical path.
+    //
+    // The address is the server's /shell/manifest.json `patchedBundle` field,
+    // which the JELA-59 epoch gate already fetches at the top of
+    // loadRemoteWebClient. Reading a LIVE manifest (rather than a persisted
+    // record) is deliberate: the field's presence IS the capability
+    // handshake, so a server whose plugin cannot serve /shell/patched/ simply
+    // never offers one and no boot can 404 on a written <script src>
+    // (JELA-841).
+    var d = { on: 1, armed: 0, why: "" };
+    window.__shellPatchedDrop = d;
+    var g = window.__shellConfigEpoch;
+    var mf = g && g.mf;
+    var pb = mf && mf.patchedBundle;
+    if (!pb || typeof pb.url !== "string" || !pb.url || !pb.v || !pb.src) {
+      d.why = "nocap";
+      return 0;
+    }
+    var tags = Array.prototype.slice.call(doc.querySelectorAll("script[src]"));
+    for (var i = 0; i < tags.length; i++) {
+      var s = tags[i];
+      var src = s.getAttribute("src");
+      if (!src) continue;
+      var parts = String(src).split("?");
+      var bare = parts[0];
+      if (/serviceworker/i.test(bare)) continue;
+      if (!/(^|\/)main\.[^/]*\.bundle\.js$/i.test(bare)) continue;
+      var name = bare.split("/").pop();
+      // The published entry is pinned to ONE jellyfin-web build — the hash
+      // webpack stamps as the query on every index.html script src. A
+      // mismatch means the server's web client moved since the drop was
+      // built (or this document came from the JEL-1977 index cache), and
+      // running a main bundle from a different build than its sibling
+      // chunks is worse than paying for the inline path.
+      if (name !== pb.src || (parts[1] || "") !== pb.v) {
+        d.why = name !== pb.src ? "name" : "ver";
+        return 0;
+      }
+      var u;
+      try {
+        u = new URL(pb.url, baseUrl).href;
+      } catch (_) {
+        d.why = "url";
+        return 0;
+      }
+      // `defer` STAYS: the parser owning the load is the entire point, and
+      // the JEL-554 watchdog's script[defer][src] sweep should see this tag
+      // exactly as it sees every other bundle — which is what it saw before
+      // JEL-436 started inlining. The served URL also keeps the .bundle.js
+      // suffix so isJellyfinWebBundle still recognises it and
+      // transpileLegacyScripts still skips it, even though it no longer
+      // lives under /web/.
+      s.setAttribute("src", u);
+      s.setAttribute("data-shell-bundle-patched", u);
+      s.setAttribute("data-shell-bundle-drop", "1");
+      var n = typeof pb.n === "number" && pb.n > 0 ? pb.n : 0;
+      s.setAttribute("data-shell-bundle-patches", String(n));
+      window.__shellBundlePatches += n;
+      window.__shellBundlesPatchedFiles.push(name + ":drop" + n);
+      d.armed = 1;
+      d.url = u;
+      d.n = n;
+      return 1;
+    }
+    d.why = "notag";
+    return 0;
+  }
+//@@END:patchedBundleDropApply@@
+
+//@@BEGIN:patchedBundleDropCommit@@
+  function patchedBundleDropCommit() {
+    // JELA-865, run only once the drop actually armed. Two stale records are
+    // now pure cost and both are dropped:
+    //   * bundlePatchState — the JEL-1776/JEL-1980 verdict+body cache. Its
+    //     body was 497,795 characters on production (JELA-863), the second
+    //     largest key in the store and ~9.5% of the M63 quota (JELA-797)
+    //     against a store already 69.7% full (JELA-843). The drop path never
+    //     fetches the bundle, so there is nothing to cache.
+    //   * bundleUrl — the JEL-1289 last-seen bundle URL the index.html head
+    //     IIFE turns into a <link rel=preload as=script>. With the tag
+    //     repointed at /shell/patched/ that preload warms a body this boot
+    //     never asks for. Clearing the key is the only lever we have on it:
+    //     the IIFE ships inside the fielded WGT and cannot be updated.
+    try {
+      localStorage.removeItem("jellyfin.shell.bundlePatchState");
+    } catch (_) {}
+    try {
+      localStorage.removeItem("jellyfin.shell.bundleUrl");
+    } catch (_) {}
+  }
+//@@END:patchedBundleDropCommit@@

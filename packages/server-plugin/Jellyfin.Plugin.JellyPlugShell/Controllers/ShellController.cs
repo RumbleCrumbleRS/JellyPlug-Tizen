@@ -42,12 +42,18 @@ public class ShellController : ControllerBase
     private readonly ShellDropService _drop;
     private readonly DiagIngestService _diag;
     private readonly ConfigFingerprintService _fingerprint;
+    private readonly PatchedBundleService _patched;
 
-    public ShellController(ShellDropService drop, DiagIngestService diag, ConfigFingerprintService fingerprint)
+    public ShellController(
+        ShellDropService drop,
+        DiagIngestService diag,
+        ConfigFingerprintService fingerprint,
+        PatchedBundleService patched)
     {
         _drop = drop;
         _diag = diag;
         _fingerprint = fingerprint;
+        _patched = patched;
     }
 
     /// <summary>
@@ -72,7 +78,73 @@ public class ShellController : ControllerBase
         }
 
         var flagDefaults = ShellDropService.LiteFlagDefaults(config);
-        return File(_drop.BuildManifestJson(fingerprint, flagDefaults), "application/json");
+
+        // JELA-865: the `patchedBundle` advertisement. Emitted from LIVE
+        // in-memory state, never from a file, so it is the handshake as well as
+        // the address: a plugin that cannot serve /shell/patched/ (older build,
+        // kill switch on, nothing published yet) simply omits the field and the
+        // TV keeps its own fetch+scan+inline path. That makes a plugin
+        // DOWNGRADE safe, which a field baked into the tx-manifest on disk
+        // would not have been — a stale file would have pointed fielded TVs at
+        // a route the running controller no longer answers, and a 404 on a
+        // <script defer src> in the written markup is a dead boot (JELA-841).
+        var patchedBundle = config.DisablePatchedBundle ? null : _patched.Current;
+        return File(_drop.BuildManifestJson(fingerprint, flagDefaults, patchedBundle), "application/json");
+    }
+
+    /// <summary>
+    /// JELA-865: the CM/PM-patched main jellyfin-web bundle, at a URL, so the
+    /// TV's HTML parser owns the load and V8 streams the ~500 KB off the main
+    /// thread. See <see cref="PatchedBundleService"/> for why that matters.
+    ///
+    /// <paramref name="v"/> is the webpack build stamp the shell copied off its
+    /// own index.html script tag. A match is content-addressed and gets the
+    /// immutable policy; a MISMATCH still serves the current body rather than
+    /// 404ing, because the shell only ever asks for this after the manifest
+    /// advertised it and a 404 here would kill the boot. Serving current is also
+    /// the consistent answer: every sibling bundle is served by filename, so a
+    /// TV mid-upgrade already gets current bytes for all of them.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("patched/{v}/{name}")]
+    public IActionResult GetPatchedBundle([FromRoute] string v, [FromRoute] string name)
+    {
+        if (!PatchedBundleService.IsSafeSegment(v) || !PatchedBundleService.IsSafeSegment(name))
+        {
+            return NotFound(); // also forecloses path traversal
+        }
+
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        if (config.DisablePatchedBundle)
+        {
+            return NotFound();
+        }
+
+        var body = _patched.Current;
+        if (body == null || !string.Equals(body.Name, name, StringComparison.Ordinal))
+        {
+            return NotFound();
+        }
+
+        var addressed = string.Equals(body.BuildHash, v, StringComparison.Ordinal);
+        Response.Headers.CacheControl = addressed
+            ? "public, max-age=31536000, immutable"
+            : "no-store";
+        // Mandatory alongside immutable — see ContentAddressed on the M63
+        // cache-mode collision (JELA-688). This body is loaded by a <script>
+        // tag (no Origin) but may also be fetch()ed by a QA scan (Origin), so
+        // the two modes must not share a cache slot.
+        Response.Headers.Vary = HeaderNames.AcceptEncoding + ", " + HeaderNames.Origin;
+        Response.Headers["X-JellyPlug-Patched-Build"] = body.BuildHash;
+        Response.Headers["X-JellyPlug-Patches"] = body.Patches.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        if (body.Gzip != null && AcceptsGzip(Request.Headers.AcceptEncoding))
+        {
+            Response.Headers.ContentEncoding = "gzip";
+            return Tagged(body.Gzip, body.Sha256 + "-gzip");
+        }
+
+        return Tagged(body.Bytes, body.Sha256);
     }
 
     [AllowAnonymous]

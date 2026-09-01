@@ -130,9 +130,12 @@ public class ShellDropService
     /// legacy schema changes shape or value, and with neither extra present
     /// the exact legacy bytes are returned.
     /// </summary>
-    public byte[] BuildManifestJson(ConfigFingerprint? fingerprint, Dictionary<string, string>? flagDefaults = null)
+    public byte[] BuildManifestJson(
+        ConfigFingerprint? fingerprint,
+        Dictionary<string, string>? flagDefaults = null,
+        PatchedBundle? patchedBundle = null)
     {
-        if (fingerprint == null && flagDefaults == null)
+        if (fingerprint == null && flagDefaults == null && patchedBundle == null)
         {
             return ManifestJson;
         }
@@ -147,6 +150,24 @@ public class ShellDropService
         if (flagDefaults != null)
         {
             manifest["flagDefaults"] = flagDefaults;
+        }
+
+        if (patchedBundle != null)
+        {
+            // JELA-865. Additive, like configEpoch/flagDefaults: the field's
+            // ABSENCE is what a shell reads as "this server cannot serve a
+            // patched drop", so it must never be emitted with a placeholder.
+            // `v` is the jellyfin-web build stamp the shell re-checks against
+            // its own index.html script query before repointing the tag —
+            // pinning the entry to one web build is what keeps the shell from
+            // running bytes its sibling bundles do not match.
+            manifest["patchedBundle"] = new Dictionary<string, object?>
+            {
+                ["v"] = patchedBundle.BuildHash,
+                ["src"] = patchedBundle.Name,
+                ["url"] = patchedBundle.Url,
+                ["n"] = patchedBundle.Patches,
+            };
         }
 
         return JsonSerializer.SerializeToUtf8Bytes(manifest);

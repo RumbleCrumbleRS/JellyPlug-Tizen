@@ -165,9 +165,29 @@ assert.ok(
   /fingerprint == null && flagDefaults == null[\s\S]{0,80}return ManifestJson;/.test(drop),
   "legacy ManifestJson short-circuit missing from BuildManifestJson",
 );
+// The window is generous because JELA-865 added the patchedBundle lookup (and
+// its rationale comment) between the two calls; what matters is that the SAME
+// GetManifest body computes the fingerprint and then hands it to
+// BuildManifestJson, with nothing returning in between.
+const getManifest = ctrl.slice(
+  ctrl.indexOf("public IActionResult GetManifest()"),
+  ctrl.indexOf("[HttpGet(\"shell.min.js\")]"),
+);
 assert.ok(
-  /TryGetFingerprint[\s\S]{0,300}BuildManifestJson/.test(ctrl),
+  getManifest.indexOf("TryGetFingerprint") >= 0
+    && getManifest.indexOf("TryGetFingerprint") < getManifest.indexOf("BuildManifestJson"),
   "dynamic path must build from the computed fingerprint",
+);
+// JELA-865: the patched-bundle advertisement is read from LIVE service state
+// and suppressed by the kill switch — never from a file, so a plugin that
+// cannot serve /shell/patched/ simply omits the field.
+assert.ok(
+  /config\.DisablePatchedBundle \? null : _patched\.Current/.test(ctrl),
+  "patchedBundle must come from live state and honour DisablePatchedBundle",
+);
+assert.ok(
+  cfg.includes("public bool DisablePatchedBundle"),
+  "DisablePatchedBundle kill switch missing",
 );
 
 // JELA-141: flagDefaults is additive like configEpoch/components, sourced

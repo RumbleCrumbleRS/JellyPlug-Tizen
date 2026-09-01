@@ -87,6 +87,13 @@ const SANCTIONED = new Set([
   IMMUTABLE, // tx/{hash}.js
   '"no-cache"', // both manifests
   '"no-store"', // diag + the operator-only routes
+  // JELA-865 patched/{v}/{name}. It cannot go through ContentAddressed: it
+  // addresses on the jellyfin-web BUILD stamp carried in the path, not on a
+  // ?v= sha, and its miss branch has to be no-store rather than the helper's
+  // 60 s TTL — a mismatched build stamp means the TV is asking for a body
+  // from a jellyfin-web version this server no longer has, and caching the
+  // substitute under ANY ttl would outlive the upgrade that caused it.
+  `addressed ? ${IMMUTABLE} : "no-store"`,
 ]);
 for (const value of assigned) {
   assert.ok(
@@ -96,8 +103,8 @@ for (const value of assigned) {
 }
 assert.strictEqual(
   assigned.filter((v) => v.includes("max-age")).length,
-  2,
-  "only two max-age sites expected: the ContentAddressed helper + tx/{hash}.js",
+  3,
+  "only three max-age sites expected: the ContentAddressed helper, tx/{hash}.js, and the JELA-865 patched drop",
 );
 
 // ---- 2. the helper's two branches -------------------------------------------
