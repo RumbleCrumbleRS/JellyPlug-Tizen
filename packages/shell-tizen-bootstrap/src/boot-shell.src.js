@@ -1736,14 +1736,19 @@
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
       // cache until the token changes; class 1 = only a per-load epoch-ms
       // buster (stripped by __txKey) -> cache with a 24 h TTL ("ts:" sibling
-      // key); class 0 = static marker query (?_jsi=1) -> never cached, fetch
-      // stays busted every boot. Epoch test lockstep with __txKey/txKey.
+      // key); class 0 = static marker query (?_jsi=1, NO version key at all)
+      // -> never cached, fetch stays busted every boot. JELA-847: a ?v=/
+      // ?version= key with a non-empty but unrecognised value (JE's
+      // `?v=unknown` race loser) is class 1, NOT class 0 — it is a failed
+      // version pin, not a config-mutable marker, so the 24 h TTL + the
+      // config-epoch gate are the right envelope for it. Epoch test lockstep
+      // with __txKey/txKey.
       // "@@shellref:" values are pointers the STATIC layer writes into the
       // shared keyspace (body lives once under its txc: slot) — deref on
       // read, treat a pruned target as a miss. Kill-switch (shared with the
       // widget side): jellyfin.shell.pluginFetchCacheDisabled='1'.
       '    var __TXREF="@@shellref:";',
-      '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;}return pin?2:bust?1:0;}',
+      '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false,vk=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;else if(eq>0&&val&&/^(v|version)$/i.test(p.substring(0,eq)))vk=true;}return pin?2:bust||vk?1:0;}',
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
       '    function __txGet(src){try{var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return null;if(qc===1){var ts=parseInt(localStorage.getItem(__TXPFX+"ts:"+k),10)||0;if(Date.now()-ts>864e5&&window.__shellCfgEM!==1)return null;}}var v=localStorage.getItem(__TXPFX+k);if(v!=null&&v.lastIndexOf(__TXREF,0)===0)v=localStorage.getItem(__TXPFX+v.substring(__TXREF.length));if(v!=null){window.__shellTxCacheHits=(window.__shellTxCacheHits||0)+1;if(s.indexOf("?")>=0)window.__shellQvHits=(window.__shellQvHits||0)+1;var m=__txLru();m[k]=Date.now();__txPersistLru(m);}else{window.__shellTxCacheMisses=(window.__shellTxCacheMisses||0)+1;try{var __miss=window.__shellTxCacheMissUrls;if(!__miss){__miss=[];window.__shellTxCacheMissUrls=__miss;}if(__miss.length<10)__miss.push(src);}catch(_){}}return v;}catch(_){return null;}}',
       "    function __txPrune(){try{var m=__txLru();var keys=Object.keys(m);if(!keys.length)return;keys.sort(function(a,b){return m[a]-m[b];});var n=Math.min(keys.length,10);for(var i=0;i<n;i++){try{localStorage.removeItem(__TXPFX+keys[i]);}catch(_){}delete m[keys[i]];}__txPersistLru(m);}catch(_){}}",
@@ -5337,7 +5342,8 @@
     var pairs = u.substring(i + 1).split("&"),
       now = Date.now(),
       pinned = false,
-      busted = false;
+      busted = false,
+      vkeyed = false;
     for (var pi = 0; pi < pairs.length; pi++) {
       var p = pairs[pi];
       if (!p) continue;
@@ -5356,8 +5362,10 @@
         (/^[0-9a-fA-F]{12,}$/.test(val) && /[a-fA-F]/.test(val))
       )
         pinned = true;
+      else if (eq > 0 && val && /^(v|version)$/i.test(p.substring(0, eq)))
+        vkeyed = true;
     }
-    return pinned ? 2 : busted ? 1 : 0;
+    return pinned ? 2 : busted || vkeyed ? 1 : 0;
   }
   function txRecordQuerySlot(url, ck) {
     try {

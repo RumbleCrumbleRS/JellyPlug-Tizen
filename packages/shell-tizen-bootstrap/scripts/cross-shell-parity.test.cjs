@@ -228,8 +228,12 @@ const INTENTIONAL_DIVERGENCES = [
     // d.bulkReady and now calls the shared d.want() coalescer on
     // window.__shellTxDrop. Identical block in both seeds (both go through
     // the same batcher installed by txBundleAttach); reasons unchanged.
-    retail: "ecb2af648d7e2bd9",
-    boot: "353482310345646b",
+    // JELA-847: re-pinned — __txQC gained the failed-version-pin arm, so a
+    // ?v=/?version= key with a non-empty but unrecognised value (JE's
+    // `?v=unknown`) classifies 1 instead of 0. Identical block in both seeds
+    // and in lockstep with the widget-side txQueryClass; reasons unchanged.
+    retail: "a40d9f8ee86eef70",
+    boot: "becebe76b57c8431",
   },
   {
     name: "buildDiagSeedScript",
