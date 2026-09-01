@@ -5067,17 +5067,28 @@
       // because one plugin's endpoints can legitimately share state.
       //
       // The S: half (JELA-842) is deliberately BLUNTER than any of that: ANY
-      // write retires EVERY S: slot. The classed flush above earns its
-      // complexity over a ~30 s drill dwell where a third-party POST lands in
-      // every window; the S: slots only have to survive a ~6 s pre-paint
-      // fan-out, so retention is worth nothing and a missed invalidation would
-      // hand the SPA a stale config. It also cannot use the exemption list
-      // below — a POST /DisplayPreferences IS the write that must retire
-      // S:/DisplayPreferences/usersettings — so it runs before it.
+      // write retires EVERY S: slot, with one narrow exemption. The classed
+      // flush above earns its complexity over a ~30 s drill dwell where a
+      // third-party POST lands in every window; the S: slots only have to
+      // survive a ~6 s pre-paint fan-out, so retention is worth little and a
+      // missed invalidation would hand the SPA a stale config.
+      //
+      // It cannot reuse the exemption list below, because that list exempts
+      // /DisplayPreferences — which is exactly the write that MUST retire
+      // S:/DisplayPreferences/usersettings. So the S: flush runs first, with
+      // its own list.
+      //
+      // That list is not speculative: the first JELA-842 A/B ring measured
+      // POST /Sessions/Capabilities/Full landing between the two
+      // /DisplayPreferences reads on 4 of 4 armed boots, which retired the slot
+      // and left that endpoint the ONLY one in the set still fetched twice.
+      // Session state and our own /shell/ beacons cannot change any of the nine
+      // config bodies, so they are exempt; everything else, known or not, still
+      // flushes.
       'var cFl=function(u){try{if(!cIC&&!cCO)return;var p=String(u||"");' +
       'for(var fi=0;fi<cBL.length;fi++){if(p.indexOf(cBL[fi]+"/")===0){p=p.slice(cBL[fi].length);break}}' +
       'var fq=p.indexOf("?");if(fq>=0)p=p.slice(0,fq);' +
-      "if(cCO){var sn3=0,sk,sq2=[],so2;" +
+      "if(cCO&&!/^\\/(Sessions\\/|QuickConnect|shell\\/)/.test(p)){var sn3=0,sk,sq2=[],so2;" +
       "for(sk in cSto){if(!Object.prototype.hasOwnProperty.call(cSto,sk))continue;" +
       'if(sk.charAt(0)==="S"){delete cSto[sk];sn3++}}' +
       "if(sn3){co.fl+=sn3;for(so2=0;so2<cOrd.length;so2++)if(cSto[cOrd[so2]])sq2.push(cOrd[so2]);cOrd=sq2}}" +

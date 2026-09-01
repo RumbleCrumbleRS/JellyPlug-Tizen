@@ -56,6 +56,8 @@
  *     /PluginPages/User all reach the network untouched
  *   - invalidation: ANY write retires EVERY S: slot, including the
  *     /DisplayPreferences write the JELA-760 flush exempts; both transports
+ *   - and the one exemption the first A/B ring forced: a /Sessions,
+ *     /QuickConnect or /shell/ write retires nothing (I6b)
  *   - the 120 s S: TTL, a token change, and a failed leader replaying
  *   - flag independence BOTH ways: cfgOnce must not arm the JELA-742 alias
  *     pair and aliasCoalesce must not arm the config shapes (I8)
@@ -1271,6 +1273,42 @@ async function I() {
     assert(e.window.__shellACo.fl > 0, "I6/" + mode + ": flush accounted");
   }
   console.log("OK: I6: any write retires every S: slot, over fetch and XHR");
+
+  // I6b — the ONE exemption, and it is not speculative: the first JELA-842 A/B
+  // ring measured POST /Sessions/Capabilities/Full landing between the two
+  // /DisplayPreferences reads on 4 of 4 armed boots, which retired the slot and
+  // left that endpoint the only one in the set still fetched twice. Session
+  // state and our own /shell/ beacons cannot change a config body.
+  for (const w of [
+    "/Sessions/Capabilities/Full",
+    "/Sessions/Playing/Progress",
+    "/QuickConnect/Authorize",
+    "/shell/diag",
+  ]) {
+    e = cfgEnv();
+    e.run();
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    e.netCalls[0].resolve(200, CFG);
+    await bodyOf(p);
+    await e.drainMicro();
+    e.window.fetch(SRV + w, { method: "POST" });
+    e.netCalls[e.netCalls.length - 1].resolve(204, "");
+    await e.drainMicro();
+    const n2 = e.netCalls.length;
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    assert.strictEqual(
+      e.netCalls.length,
+      n2,
+      "I6b: " + w + " must NOT retire the config slots",
+    );
+    assert.strictEqual(
+      await bodyOf(p),
+      CFG,
+      "I6b: " + w + " body still served",
+    );
+    assert.strictEqual(e.window.__shellACo.fl, 0, "I6b: no flush accounted");
+  }
+  console.log("OK: I6b: session-state and /shell/ writes retire nothing");
 
   // I7 — the TTL is real. The S: slots exist to span a ~6 s pre-paint fan-out,
   // not a session; at 120 s the slot is gone.
