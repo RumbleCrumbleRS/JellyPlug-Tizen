@@ -228,16 +228,16 @@ const INTENTIONAL_DIVERGENCES = [
     // d.bulkReady and now calls the shared d.want() coalescer on
     // window.__shellTxDrop. Identical block in both seeds (both go through
     // the same batcher installed by txBundleAttach); reasons unchanged.
+    // JELA-834: re-pinned — the bitrateCache gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons
+    // unchanged. (Same class of fix as the JELA-827 re-pins above.)
     // JELA-847: re-pinned — __txQC gained the failed-version-pin arm, so a
     // ?v=/?version= key with a non-empty but unrecognised value (JE's
-    // `?v=unknown`) classifies 1 instead of 0. Identical block in both seeds
-    // and in lockstep with the widget-side txQueryClass; reasons unchanged.
-    // JELA-847 (2/2): re-pinned again — __txFam now also strips a `v=`/
-    // `version=` key with a non-empty unrecognised value, so a failed version
-    // pin gets a "gqk:" family index and ceInvalidate can drop it on a plugin
-    // bump. Identical block in both seeds; reasons unchanged.
-    retail: "84255763a7c3654e",
-    boot: "e526637cbbd77f4b",
+    // `?v=unknown`) classifies 1 instead of 0, and __txFam strips that key so
+    // the slot gets a "gqk:" family index ceInvalidate can reach on a plugin
+    // bump. Identical blocks in both seeds; reasons unchanged.
+    retail: "250a61173d8b238a",
+    boot: "d842011140023fc7",
   },
   {
     name: "buildDiagSeedScript",

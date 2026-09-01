@@ -1163,10 +1163,20 @@
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.bitrateCache"]="1".
+      // JELA-834: fleet-ON (opt-OUT). JELA-817 seeded "1" fleet-wide but left
+      // this gate opt-in, so it was never armed on a first boot — the JSI
+      // channel that writes the key runs only after the lite→SPA handoff
+      // (JELA-802), so on any cold boot with no prior "1" in LS (fresh
+      // install, wipe, eviction) the key is absent when this line executes and
+      // the whole block returns. That boot then SPENDS the full 5.77 MB probe
+      // and, worse, can never seed the cache it exists to write, so boots 2..N
+      // inherit nothing. Read for the kill switch instead so a key-absent boot
+      // caches. Kill switch: set "jellyfin.shell.bitrateCache" to "0" (the
+      // channel seeder guards !== "0", so a per-TV "0" is durable).
+      // Rollback is setItem(key,"0"), NEVER removeItem — key-absent is now ON.
       // Diag: window.__shellBitrate = {on,armed,hits,miss,saves,bps,age}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")==="0")return;',
       '    var K="jellyfin.shell.bitrate";',
       "    var G=window.__shellBitrate={on:1,armed:0,hits:0,miss:0,saves:0,bps:0,age:-1};",
       '    function ttl(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.bitrateTtlMs")||"",10);}catch(_){}return v>0?v:864e5;}',
@@ -4897,14 +4907,44 @@
       // 62-253 ms, detailUp 512 ms — a null, as in JELA-750). The lever is
       // request COUNT and wasted bytes; cf. [[boot-concurrency-queueing]].
       //
-      // Counters: window.__shellACo {on,ic,rec,hit,miss,ev,err,mh,fl,sv}.
+      // JELA-842 adds a THIRD flag over the same store,
+      // localStorage['jellyfin.shell.cfgOnce']='1' (kill-switch
+      // 'jellyfin.shell.cfgOnceDisabled', read FIRST), for the SINGLETON CONFIG
+      // reads the boot itself duplicates.
+      //
+      // The defect (JELA-840 census, 3 of 3 cold boots, tight variance): eight
+      // small read-only config endpoints — all of them already named in the
+      // shell's own apiWarm AWL list, i.e. shapes the shell has always known are
+      // singletons — are fetched 2-4x per boot, and most of the repeats land
+      // BEFORE firstCard. /CustomTabs/Config is the worst: 4 GETs for a
+      // 152-byte body inside an 82 ms window (t+4107..t+4189 ms), each with its
+      // own CORS preflight on a header-auth boot. Cost is request COUNT in the
+      // pre-paint window, not bytes ([[boot-concurrency-queueing]]).
+      //
+      // Why the existing coalescers miss them. JELA-742/760 above only derive a
+      // key for item/views/plugin-namespace shapes; a config path returns ""
+      // and goes straight to the network. JELA-833's tx-bundle is a different
+      // transport entirely. And the repeats are CONCURRENT (four inside 82 ms)
+      // rather than seconds apart, so what collapses them is the in-flight
+      // PARK that cGet/cDone already implement — not a longer TTL.
+      //
+      // So this ticket is a key-space widening, not a new mechanism: S: slots
+      // ride the same cSto ring, the same fetch/XHR serve paths, the same token
+      // check, and the same one-write-retires-it discipline (blunter — see cFl).
+      //
+      // Counters: window.__shellACo {on,ic,co,rec,hit,miss,ev,err,mh,fl,sv}.
       'var cAL=flg("jellyfin.shell.aliasCoalesce")&&!flg("jellyfin.shell.aliasCoalesceDisabled");' +
       'var cIC=flg("jellyfin.shell.itemCache")&&!flg("jellyfin.shell.itemCacheDisabled");' +
-      "if((cAL||cIC)&&!W.__shellACo){try{" +
+      // JELA-842 cfgOnce: collapse the singleton CONFIG reads the boot issues
+      // 2-4x each. The kill switch is read FIRST so a fleet that has never
+      // seen the enable key can still be stopped from boot 1
+      // ([[jela838-channel-flag-boot1-optout]]).
+      'var cCO=!flg("jellyfin.shell.cfgOnceDisabled")&&flg("jellyfin.shell.cfgOnce");' +
+      "if((cAL||cIC||cCO)&&!W.__shellACo){try{" +
       'var cC=null;try{var cc0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),cs0=cc0&&cc0.Servers&&cc0.Servers[0];if(cs0&&cs0.AccessToken&&cs0.UserId)cC={t:cs0.AccessToken,u:String(cs0.UserId).toLowerCase(),a:String(cs0.ManualAddress||cs0.LocalAddress||"")}}catch(_){}' +
       'var cB="";try{cB=String(srv()||(cC&&cC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
       "if(cC&&/^https?:\\/\\//.test(cB)){" +
-      "var co=W.__shellACo={on:1,ic:cIC?1:0,rec:0,hit:0,miss:0,ev:0,err:0,mh:0,fl:0,sv:0};" +
+      "var co=W.__shellACo={on:1,ic:cIC?1:0,co:cCO?1:0,rec:0,hit:0,miss:0,ev:0,err:0,mh:0,fl:0,sv:0};" +
       'var cTTL=10000;try{var ct0=parseInt(localStorage.getItem("jellyfin.shell.aliasCoalesceTtlMs")||"",10);if(ct0>=1000&&ct0<=60000)cTTL=ct0}catch(_){}' +
       // JELA-760 TTLs. 30 s spans the drill's own re-reads (its longest step
       // is 9.3 s and the whole six-step walk is ~30 s of wall clock) without
@@ -4912,11 +4952,26 @@
       // per route change and only its own namespace can write it.
       'var cITTL=30000;try{var ci0=parseInt(localStorage.getItem("jellyfin.shell.itemCacheTtlMs")||"",10);if(ci0>=1000&&ci0<=300000)cITTL=ci0}catch(_){}' +
       'var cCTTL=60000;try{var cg0=parseInt(localStorage.getItem("jellyfin.shell.itemCacheCfgTtlMs")||"",10);if(cg0>=1000&&cg0<=600000)cCTTL=cg0}catch(_){}' +
+      // JELA-842. The S: slots exist to collapse a BOOT fan-out, not to
+      // survive a dwell: JELA-840 measured every repeat inside 82 ms - 4.1 s of
+      // its sibling, and the whole pre-paint window is ~6-7 s. 120 s spans the
+      // capture window with room for the late JellyfinEnhanced pair (~10 s)
+      // without holding a config body across a session.
+      'var cSTTL=120000;try{var cs1=parseInt(localStorage.getItem("jellyfin.shell.cfgOnceTtlMs")||"",10);if(cs1>=1000&&cs1<=600000)cSTTL=cs1}catch(_){}' +
+      // The JELA-842 shape set. Every one is a SINGLETON read-only config
+      // endpoint the shell already names in its own apiWarm AWL list, and each
+      // was measured 2-4x per cold boot on 3 of 3 JELA-840 boots. Exact-path
+      // match only; anything not listed returns "" from cKey and goes to the
+      // network untouched. /Plugins and /System/Configuration are deliberately
+      // NOT here - both are admin-mutable from another client.
+      'var COS={"/CustomTabs/Config":1,"/System/Info":1,"/System/Info/Public":1,"/DisplayPreferences/usersettings":1,"/Branding/Configuration":1,"/JellyfinEnhanced/public-config":1,"/JellyfinEnhanced/private-config":1,"/JellyfinEnhanced/version":1};' +
       // A drill touches a series, up to 4 seasons and their episodes plus the
       // pollers, so the 8-slot alias ring would thrash; 32 covers the walk and
       // is still bounded by the same 256 KiB body cap (largest observed body
       // is the 53.7 KB episode list).
-      "var cSto={},cOrd=[],cMAX=cIC?32:8,cCAP=262144;" +
+      // JELA-842 adds up to 9 S: slots, so an 8-slot ring would evict them
+      // against each other before the fan-out that reads them lands.
+      "var cSto={},cOrd=[],cMAX=cIC?32:cCO?24:8,cCAP=262144;" +
       'var cBL=[cB];try{var cb2=String(cC.a||"").replace(/\\/+$/,"");if(cb2&&cb2!==cB)cBL.push(cb2)}catch(_){}' +
       // cKey: URL -> alias key, or "" for "do not touch". Server-relative,
       // user-checked, residual query sorted into the key.
@@ -4929,13 +4984,19 @@
       'if(nm.toLowerCase()==="userid"){try{uid=decodeURIComponent(ps[pi].slice(ps[pi].indexOf("=")+1)||"").toLowerCase()}catch(_){uid="?"}continue}' +
       "res.push(ps[pi])}" +
       'res.sort();var rq=res.join("&");' +
-      "var m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
+      // The I: shapes are shared by JELA-742 and JELA-760, so they used to need
+      // no guard of their own — the block only ran when one of those two flags
+      // was set. JELA-842 can arm the block by itself, so they need one now:
+      // cfgOnce must widen the key space by exactly the S: shapes and nothing
+      // else (pinned by alias-coalesce.test.cjs section I8).
+      "var m;if(cAL||cIC){" +
+      "m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
       'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"I:"+m[2].toLowerCase()+"?"+rq}' +
       "m=/^\\/Items\\/([0-9a-fA-F]{32})$/.exec(pp);" +
       'if(m){if(uid&&uid!==cC.u)return"";return"I:"+m[1].toLowerCase()+"?"+rq}' +
       "if(cAL){m=/^\\/Users\\/([0-9a-fA-F]{32})\\/Views$/.exec(pp);" +
       'if(m){if(m[1].toLowerCase()!==cC.u||(uid&&uid!==cC.u))return"";return"V:?"+rq}' +
-      'if(pp==="/UserViews")return uid===cC.u?"V:?"+rq:""}' +
+      'if(pp==="/UserViews")return uid===cC.u?"V:?"+rq:""}}' +
       // JELA-760 drill shapes, armed only under itemCache so a JELA-742 fleet
       // flip cannot pick them up. Same discipline as the alias keys above: the
       // residual query (userId and the `_` buster removed, the rest sorted) is
@@ -4957,6 +5018,27 @@
       'if(m)return m[1].toLowerCase()===cC.u?"C:JellyfinEnhanced/us/"+m[2]+"?"+rq:"";' +
       'if(pp==="/JellyfinEnhanced/jellyseerr/user-status")return"C:JellyfinEnhanced/jsr?"+rq;' +
       'if(pp==="/NotifySync/Data")return"C:NotifySync/data?"+rq}' +
+      // JELA-842 singleton-config shapes (S:), armed only under cfgOnce so an
+      // aliasCoalesce/itemCache fleet flip cannot pick them up.
+      //
+      // These callers are split across auth styles: JELA-839 armed queryAuth
+      // on the first boot, so the SAME endpoint is asked for once as
+      // `?api_key=<token>` and once with the X-Emby-Token header (measured on
+      // /JellyfinEnhanced/version and /System/Info/Public). Keeping api_key in
+      // the key would leave that pair uncollapsed, so it is dropped from the
+      // key — but ONLY after checking it against the stored credential, so a
+      // request carrying anybody else's key returns "" and never reads this
+      // store. Everything else in the residual query stays in the key exactly
+      // as the item shapes above do.
+      "if(cCO){" +
+      'var sq=[],sj,sa=null;for(sj=0;sj<res.length;sj++){var sn2=res[sj].split("=")[0];' +
+      'if(sn2.toLowerCase()==="api_key"){try{sa=decodeURIComponent(res[sj].slice(res[sj].indexOf("=")+1)||"")}catch(_){sa="?"}continue}' +
+      "sq.push(res[sj])}" +
+      'if(sa!==null&&sa!==cC.t)return"";' +
+      'if(uid&&uid!==cC.u)return"";' +
+      'var srq=sq.join("&");' +
+      'if(Object.prototype.hasOwnProperty.call(COS,pp))return"S:"+pp+"?"+srq;' +
+      'if(/^\\/JellyfinEnhanced\\/locales\\/[A-Za-z0-9_-]{1,32}\\.json$/.test(pp))return"S:"+pp+"?"+srq}' +
       'return""}catch(_){co.err++;return""}};' +
       'var cTok=function(){try{var c2=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),s2=c2&&c2.Servers&&c2.Servers[0];return!!(s2&&s2.AccessToken===cC.t)}catch(_){return!1}};' +
       // cGet consumes a ONE-SHOT slot: it is deleted, and the caller keeps the
@@ -4974,8 +5056,8 @@
       // Which shapes are multi-read, and for how long. The alias/views pair
       // keeps JELA-742's one-shot 10 s exactly as measured; everything JELA-760
       // adds is multi-read.
-      'var cMul=function(k){if(!cIC)return 0;var p=k.charAt(0);return p==="I"||p==="E"||p==="N"||p==="T"||p==="C"?1:0};' +
-      'var cDur=function(k){if(!cIC)return cTTL;var p=k.charAt(0);if(p==="C")return cCTTL;return p==="V"?cTTL:cITTL};' +
+      'var cMul=function(k){var p=k.charAt(0);if(p==="S")return 1;if(!cIC)return 0;return p==="I"||p==="E"||p==="N"||p==="T"||p==="C"?1:0};' +
+      'var cDur=function(k){var p=k.charAt(0);if(p==="S")return cSTTL;if(!cIC)return cTTL;if(p==="C")return cCTTL;return p==="V"?cTTL:cITTL};' +
       "var cNew=function(k){if(!k||cSto[k])return null;" +
       'var d=cDur(k),e={st:0,s:0,t:"",cb:[],m:cMul(k),d:d,x:+new Date()+d};cSto[k]=e;cOrd.push(k);co.miss++;' +
       "while(cOrd.length>cMAX){var k0=cOrd.shift();if(cSto[k0]){delete cSto[k0];co.ev++}}return e};" +
@@ -5003,9 +5085,34 @@
       // cross-plugin coupling. It stays conservative WITHIN a plugin: a
       // JellyfinEnhanced write still retires every JellyfinEnhanced slot,
       // because one plugin's endpoints can legitimately share state.
-      'var cFl=function(u){try{if(!cIC)return;var p=String(u||"");' +
+      //
+      // The S: half (JELA-842) is deliberately BLUNTER than any of that: ANY
+      // write retires EVERY S: slot, with one narrow exemption. The classed
+      // flush above earns its complexity over a ~30 s drill dwell where a
+      // third-party POST lands in every window; the S: slots only have to
+      // survive a ~6 s pre-paint fan-out, so retention is worth little and a
+      // missed invalidation would hand the SPA a stale config.
+      //
+      // It cannot reuse the exemption list below, because that list exempts
+      // /DisplayPreferences — which is exactly the write that MUST retire
+      // S:/DisplayPreferences/usersettings. So the S: flush runs first, with
+      // its own list.
+      //
+      // That list is not speculative: the first JELA-842 A/B ring measured
+      // POST /Sessions/Capabilities/Full landing between the two
+      // /DisplayPreferences reads on 4 of 4 armed boots, which retired the slot
+      // and left that endpoint the ONLY one in the set still fetched twice.
+      // Session state and our own /shell/ beacons cannot change any of the nine
+      // config bodies, so they are exempt; everything else, known or not, still
+      // flushes.
+      'var cFl=function(u){try{if(!cIC&&!cCO)return;var p=String(u||"");' +
       'for(var fi=0;fi<cBL.length;fi++){if(p.indexOf(cBL[fi]+"/")===0){p=p.slice(cBL[fi].length);break}}' +
       'var fq=p.indexOf("?");if(fq>=0)p=p.slice(0,fq);' +
+      "if(cCO&&!/^\\/(Sessions\\/|QuickConnect|shell\\/)/.test(p)){var sn3=0,sk,sq2=[],so2;" +
+      "for(sk in cSto){if(!Object.prototype.hasOwnProperty.call(cSto,sk))continue;" +
+      'if(sk.charAt(0)==="S"){delete cSto[sk];sn3++}}' +
+      "if(sn3){co.fl+=sn3;for(so2=0;so2<cOrd.length;so2++)if(cSto[cOrd[so2]])sq2.push(cOrd[so2]);cOrd=sq2}}" +
+      "if(!cIC)return;" +
       "if(/^\\/(DisplayPreferences|QuickConnect|Sessions\\/Capabilities|Sessions\\/Viewing)/.test(p))return;" +
       "var fm=/^\\/(JellyfinEnhanced|NotifySync|CustomTabs|MediaBar)\\//.exec(p);" +
       'var fc=!!fm,fp=fm?"C:"+fm[1]+"/":"",n=0,k,no=[],oi;' +
