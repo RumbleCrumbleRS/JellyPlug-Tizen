@@ -1986,6 +1986,22 @@
       // script tag). A failed attempt resets the cached promise
       // so a later script retries; callers see maybeTranspile's null
       // contract unchanged.
+      // JELA-848: single implementation of "load babel from the ABSOLUTE
+      // server drop". Two callers need it — the JELA-183 dynamic fallback
+      // below and the JELA-848 script-tag repoint — and both must stay a
+      // fetch + indirect eval rather than a rewritten <script src>: the tag
+      // would re-enter this interceptor, and the WGT-sibling file:// URL that
+      // a bare 'babel.min.js' resolves to on a race-winning boot cannot be
+      // fetched from script on Chromium at all (blocked, not 404). `tag`
+      // names the caller so the console line stays diagnostic.
+      "    function __babelFromDrop(tag){",
+      '      return window.fetch(S+"/shell/babel.min.js",{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(t){',
+      "        try{(0,eval)(t);}catch(_){}",
+      '        var ok=typeof window.Babel!=="undefined";',
+      '        try{console.warn(ok?"shell: babel loaded from server drop ("+tag+")":"shell: server-drop babel failed to init ("+tag+")");}catch(_){}',
+      "        return ok;",
+      '      }).catch(function(){try{console.warn("shell: server-drop babel fetch failed ("+tag+")");}catch(_){}return false;});',
+      "    }",
       "    var __ebDyn=null;",
       "    function __ensureBabelDyn(){",
       '      if(typeof window.Babel!=="undefined")return Promise.resolve(true);',
@@ -1994,15 +2010,60 @@
       '      if(!w||typeof w.then!=="function")w=Promise.resolve(null);',
       "      __ebDyn=w.then(function(){",
       '        if(typeof window.Babel!=="undefined")return true;',
-      '        return window.fetch(S+"/shell/babel.min.js",{credentials:"omit"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();}).then(function(t){',
-      "          try{(0,eval)(t);}catch(_){}",
-      '          var ok=typeof window.Babel!=="undefined";',
-      "          if(!ok)__ebDyn=null;",
-      '          try{console.warn(ok?"shell: babel loaded from server drop (dynamic)":"shell: server-drop babel failed to init");}catch(_){}',
-      "          return ok;",
-      '        }).catch(function(){__ebDyn=null;try{console.warn("shell: server-drop babel fetch failed");}catch(_){}return false;});',
+      '        return __babelFromDrop("dynamic").then(function(ok){if(!ok)__ebDyn=null;return ok;});',
       "      });",
       "      return __ebDyn;",
+      "    }",
+      // JELA-848: REPOINT the bootstrap's own babel <script src> at the server
+      // drop. This is the only JELA-841 fix that reaches an already-installed
+      // TV: AC1 (parse-time absolute BABEL_SRC) rides the WGT and needs a
+      // REINSTALL, and AC3 (the absolute fallback in ensureBabelReady) was
+      // measured never to execute on the boot that hangs — both its call sites
+      // sit behind a tx-drop cache MISS on the per-script slow path, and the
+      // hanging boot dies before the static walk starts (fault injection: 2/2
+      // hangs, zero fetches to /shell/babel.min.js, no "(static)" line).
+      //
+      // The shipped 2.0.25 bootstrap assigns a bare 'babel.min.js' to s.src
+      // BEFORE appendChild, so the patched HTMLScriptElement src setter hijacks
+      // it and srcPipeline does the fetch itself — that is the verbatim
+      // "shell: setter fetch/transpile failed babel.min.js HTTP 404". Once the
+      // shell is served from localStorage it reaches <base href="${S}/web/">
+      // in ~200 ms and wins that race, so the relative URL resolves to
+      // ${S}/web/babel.min.js -> 404 -> window.Babel undefined -> no legacy
+      // plugin transpiles -> ApiClient is never constructed and the app never
+      // loads. Since the shell is ALREADY holding the tag at that point, it can
+      // simply satisfy it from the copy it knows is absolute.
+      //
+      // Two things this deliberately does NOT do, both learned on the rig:
+      //   * it does not repoint at the file:// WGT sibling. That rewrite fires
+      //     — /web/babel.min.js disappears — and the boot still hangs on
+      //     "Failed to fetch", because Chromium blocks a file:// fetch issued
+      //     from script.
+      //   * it does not let the body reach the JEL-557 tx cache. srcPipeline
+      //     ends in __txSet(src,body); the drop is ~486 KB and localStorage on
+      //     a fielded TV already sits at 69.7% of the M63 quota (JELA-843/844),
+      //     so caching it every boot could push the store over — which costs
+      //     +49% requests and +49% bytes on EVERY later boot. Returning early
+      //     skips __txGet/__txSet and __recDyn entirely.
+      //
+      // Inert on WGT 2.0.26: that bootstrap marks the tag
+      // data-shell-polyfill="1", so shouldIntercept/isShellInternal skip it and
+      // the URL is already absolute. The two fixes compose rather than collide.
+      // Inert on a race-winning boot too: the eager prime runs before
+      // document.write, so the seed's interceptors do not exist yet and no
+      // repoint is counted (__shellBabelRepoint stays 0).
+      '    function __isBabelSrc(s){var u=String(s||"");if(!u)return false;var q=u.indexOf("?");if(q>=0)u=u.substring(0,q);var h=u.indexOf("#");if(h>=0)u=u.substring(0,h);var i=u.lastIndexOf("/");if(i>=0)u=u.substring(i+1);return u==="babel.min.js";}',
+      "    var __ebRep=null;",
+      // Satisfy an intercepted babel tag from the drop and settle the node's
+      // load/error listeners either way — the bootstrap's settle() funnel is
+      // what unblocks every awaiting transpile, so it must never be left
+      // hanging. Matching a src that ALREADY points at the drop is fine and
+      // intentional: __babelFromDrop fetches exactly that URL, and routing it
+      // here is what keeps the body out of the tx cache.
+      "    function __babelRepoint(node,src){",
+      "      try{window.__shellBabelRepoint=(window.__shellBabelRepoint||0)+1;}catch(_){}",
+      '      var p=typeof window.Babel!=="undefined"?Promise.resolve(true):(__ebRep||(__ebRep=__babelFromDrop("repoint").then(function(ok){if(!ok)__ebRep=null;return ok;})));',
+      '      p.then(function(ok){dispatchEvt(node,ok?"load":"error");});',
       "    }",
       // Async drop-in for the synchronous maybeTranspile at both dynamic
       // call sites (rewrite + srcPipeline): resolves to the same
@@ -2185,6 +2246,18 @@
       '    function dispatchEvt(node,type){try{var ev=document.createEvent("Event");ev.initEvent(type,false,false);node.dispatchEvent(ev);}catch(_){}try{var fn=node["on"+type];if(typeof fn==="function")fn.call(node,{type:type,target:node});}catch(_){}}',
       "    function rewrite(parent,node,ref,origMethod){",
       '      var src=node.getAttribute("src");',
+      // JELA-848: same repoint on the appendChild path. The shipped 2.0.25
+      // bootstrap sets s.src before appending, so the setter path below is the
+      // one that actually fires today — but a src-then-append variant would
+      // otherwise fetch the same 404 and __txSet 486 KB into the store. Strip
+      // the src before inserting so the browser never issues that request.
+      "      if(__isBabelSrc(src)){",
+      '        node.setAttribute("data-shell-rewriting","1");',
+      '        try{node.removeAttribute("src");}catch(_){}',
+      "        var rr;try{if(ref)rr=origMethod.call(parent,node,ref);else rr=origMethod.call(parent,node);}catch(_){rr=node;}",
+      "        __babelRepoint(node,src);",
+      "        return rr;",
+      "      }",
       "      __recDyn(src);",
       '      node.setAttribute("data-shell-rewriting","1");',
       '      var stub=document.createComment("shell-pending:"+src);',
@@ -2276,6 +2349,10 @@
       "    function srcPipeline(node,src){",
       "      if(node.__shellPiped)return;",
       "      node.__shellPiped=true;",
+      // JELA-848: the fleet fix. See __babelRepoint. Returns BEFORE __recDyn
+      // and before __txGet/__txSet, so the 486 KB drop is never primed and
+      // never cached.
+      "      if(__isBabelSrc(src)){__babelRepoint(node,src);return;}",
       "      __recDyn(src);",
       // JEL-557: cache short-circuit before network fetch.
       "      var __cb=__txGet(src);",
