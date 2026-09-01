@@ -360,6 +360,47 @@ for (const [label, file] of SHELLS) {
     );
   }
 
+  // ---- (a2) JELA-847: a FAILED version pin must still be swept ------------
+  // `?v=unknown` is class 1 now, so the seed pipeline stores a body under it.
+  // ceInvalidate reaches SEED-written slots only through the "gqk:" family
+  // index, so if __txFam left `v=unknown` in place the family would equal the
+  // key, __txGenRec would return early, no index would be written, and a JE
+  // plugin bump could NOT drop the slot. Measured on the rig before the fix:
+  // a scripts-epoch flip refetched all 149 pinned modules and none of the
+  // three ?v=unknown ones. THIS is the assertion that would have caught it —
+  // the config-epoch test alone could not, because it hand-seeds the widget
+  // path's "vqk:" entry rather than exercising the seed path that writes gqk:.
+  {
+    const { ls, win } = env(0);
+    const tx = make(ls, win);
+    ls.setItem("jellyfin.shell.txGenSweep", "1");
+    tx.__txSet(P + "?v=unknown", BIG);
+    check(
+      label + " a2: ?v=unknown writes a gqk: index (ceInvalidate can reach it)",
+      ls.getItem(PFX + "gqk:" + P) === P + "?v=unknown",
+      JSON.stringify(
+        Array.from(ls._m.keys()).filter((k) => k.indexOf(PFX + "gqk:") === 0),
+      ),
+    );
+    check(
+      label + " a2: __txFam strips a failed version pin down to the path",
+      tx.__txFam(P + "?v=unknown") === P &&
+        tx.__txFam(P + "?version=unknown") === P,
+    );
+    check(
+      label + " a2: an EMPTY ?v= is not a version key — family unchanged",
+      tx.__txFam(P + "?v=") === P + "?v=",
+    );
+    // Same family as the real pin, so if JE ever wins its version race the
+    // stale unknown-generation body is freed instead of leaking.
+    tx.__txSet(P + "?v=12.5.0.0", BIG);
+    check(
+      label + " a2: winning the version race frees the ?v=unknown generation",
+      ls.getItem(PFX + P + "?v=unknown") === null &&
+        ls.getItem(PFX + "gqk:" + P) === P + "?v=12.5.0.0",
+    );
+  }
+
   // ---- (b) the CONTROL arm: a txc: body is unreachable by the pruner -----
   {
     const { ls, win } = env(0);

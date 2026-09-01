@@ -279,6 +279,18 @@ async function driveShell(label, code) {
     "@@shellref:txc:abc",
   );
   e.store.set("shell.txTEST:ts:/JavaScriptInjector/public.js?x=1", "123");
+  // JELA-847 AC3: a `?v=unknown` slot is class 1 now, so a JE plugin bump —
+  // which moves the "scripts" epoch component — must drop it and force a
+  // refetch. Without this the failed version pin would cache for its full
+  // 24 h TTL across a real plugin update. Proven by an epoch flip, not by
+  // waiting the TTL out.
+  const VU = "/JellyfinEnhanced/js/others/splashscreen.js?v=unknown";
+  e.store.set(
+    "shell.txTEST:vqk:/JellyfinEnhanced/js/others/splashscreen.js",
+    JSON.stringify({ k: VU, c: "txc:vunk" }),
+  );
+  e.store.set("shell.txTEST:" + VU, "@@shellref:txc:vunk");
+  e.store.set("shell.txTEST:ts:" + VU, "123");
   e.setManifest({
     configEpoch: "E2",
     components: { web: "w1", shell: "s1", scripts: "j2", branding: "b1" },
@@ -294,6 +306,15 @@ async function driveShell(label, code) {
       !e.store.has("shell.txTEST:/JavaScriptInjector/public.js?x=1") &&
       !e.store.has("shell.txTEST:ts:/JavaScriptInjector/public.js?x=1") &&
       e.store.get("jellyfin.shell.webIndexHtml") === "IDX",
+  );
+  check(
+    label +
+      ": JELA-847 — scripts bump drops the ?v=unknown slot too (refetch next boot)",
+    !e.store.has(
+      "shell.txTEST:vqk:/JellyfinEnhanced/js/others/splashscreen.js",
+    ) &&
+      !e.store.has("shell.txTEST:" + VU) &&
+      !e.store.has("shell.txTEST:ts:" + VU),
   );
   check(
     label + ": mismatch keeps OLD record until adopt (write-after-adopt)",

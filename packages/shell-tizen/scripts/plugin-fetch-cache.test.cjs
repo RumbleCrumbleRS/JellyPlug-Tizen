@@ -11,11 +11,15 @@
 // The contract pinned here (both shells, widget-side AND seed-side):
 //   class 2 (version-pinned: >=15-digit ticks / dotted a.b.c / long hex) —
 //     cached until the token changes; a token change is a miss.
-//   class 1 (per-load epoch buster only) — cached under the stripped key
-//     with a 24 h TTL; an expired entry is a miss.
-//   class 0 (kept query with NO version signal, e.g. the JSI channel's
+//   class 1 (per-load epoch buster only, OR — JELA-847 — a ?v=/?version=
+//     key whose value is non-empty but unrecognised as a version, e.g. JE's
+//     `?v=unknown`) — cached under the key with a 24 h TTL; an expired entry
+//     is a miss, and ceInvalidate's "scripts" component drops the slot.
+//   class 0 (kept query with NO version key AT ALL, e.g. the JSI channel's
 //     static ?_jsi=1 marker) — NEVER served from cache; the body is
 //     config-mutable with no tracked version. THIS IS THE JEL-178 GUARD.
+//     JELA-847 pins the boundary in BOTH directions so a future edit can
+//     neither re-widen class 0 over failed pins nor leak class 0 away.
 //   Version slots hold "@@shellref:" pointers to the single txc: body; a
 //     pruned target reads as a miss (self-healing). The per-path "vqk:"
 //     index frees the previous generation's body on a token change.
@@ -174,6 +178,20 @@ const EPOCH = "https://srv/Enh/translations.js?v=" + NOW; // class 1
 const EPOCH_B = "https://srv/Enh/translations.js?v=" + (NOW + 9000);
 const MARKER = "https://srv/Chan/agg.js?_jsi=1"; // class 0
 const BARE = "https://srv/Simple/plain.js"; // no query
+// JELA-847: JellyfinEnhanced loses a race with its own /JellyfinEnhanced/version
+// fetch on three early modules (loadSplashScreenEarly, loadTranslationsModule,
+// and the public-config .then that appends login-image.js) and ships the
+// literal `?v=unknown`. That is a FAILED VERSION PIN, not an unpinned marker:
+// it must be class 1 (24 h TTL + the config-epoch "scripts" gate), never
+// class 0 — as class 0 they were the only requests in the whole boot that no
+// cache layer could ever serve, refetched every boot for the life of the
+// install. These three URLs are the real ones from the JELA-846 census.
+const VUNK = "https://srv/JellyfinEnhanced/js/others/splashscreen.js?v=unknown";
+const VUNK_B =
+  "https://srv/JellyfinEnhanced/js/enhanced/translations.js?v=unknown";
+const VUNK_C = "https://srv/JellyfinEnhanced/js/extras/login-image.js?v=unknown";
+const VERWORD = "https://srv/Enh/y.js?version=unknown"; // ?version= keys too
+const VEMPTY = "https://srv/Enh/x.js?v="; // EMPTY value = no signal -> class 0
 
 // --- widget-side behaviour (both shells) -------------------------------------
 
@@ -192,6 +210,28 @@ for (const [label, src] of [
   check(
     label + ": epoch buster + ticks is class 2 (token pins it)",
     w.txQueryClass("https://srv/x.js?v=" + NOW + "&t=639171366085089023") === 2,
+  );
+
+  // JELA-847 AC1 — a failed version pin is class 1, and the class-0 policy
+  // stays scoped to a query with NO version key at all.
+  for (const u of [VUNK, VUNK_B, VUNK_C, VERWORD])
+    check(
+      label + ": JELA-847 failed version pin is class 1 — " + u,
+      w.txQueryClass(u) === 1,
+      "got " + w.txQueryClass(u),
+    );
+  check(
+    label + ": EMPTY ?v= carries no signal at all -> still class 0",
+    w.txQueryClass(VEMPTY) === 0,
+  );
+  check(
+    label + ": JELA-847 widening did NOT reach the ?_jsi=1 marker (class 0)",
+    w.txQueryClass(MARKER) === 0,
+  );
+  check(
+    label + ": a real dotted version is still class 2, not downgraded to 1",
+    w.txQueryClass("https://srv/JellyfinEnhanced/js/core/nav.js?v=12.5.0.0") ===
+      2,
   );
 
   // Version-pinned round trip: boot 1 stores, boot 2 serves with no fetch.
@@ -226,6 +266,25 @@ for (const [label, src] of [
   check(
     label + ": epoch-busted entry EXPIRES after the 24 h TTL",
     w.txGetStatic(EPOCH_B) === null,
+  );
+
+  // JELA-847 round trip: `?v=unknown` now stores a pointer and serves on the
+  // next boot (3 requests -> 0), still bounded by the same 24 h TTL.
+  w.txSetStatic("txc:vvv", "BODY_V");
+  w.txRecordQuerySlot(VUNK, "txc:vvv");
+  check(
+    label + ": ?v=unknown wrote a @@shellref: pointer under its version key",
+    ls.getItem("tx:" + w.txKey(VUNK)) === "@@shellref:txc:vvv",
+    String(ls.getItem("tx:" + w.txKey(VUNK))),
+  );
+  check(
+    label + ": ?v=unknown served from cache next boot (was: never cacheable)",
+    w.txGetStatic(VUNK) === "BODY_V",
+  );
+  ls.setItem("tx:ts:" + w.txKey(VUNK), String(NOW - 2 * 864e5));
+  check(
+    label + ": ?v=unknown entry EXPIRES after the 24 h TTL like any class 1",
+    w.txGetStatic(VUNK) === null,
   );
 
   // One generation per path: a token change frees the old body.
@@ -287,6 +346,20 @@ for (const [label, src] of [
   check(label + ": epoch URL is class 1", s.__txQC(EPOCH) === 1);
   check(label + ": marker URL is class 0", s.__txQC(MARKER) === 0);
 
+  // JELA-847 AC1, seed side (the dynamic createElement+src pipeline JE uses).
+  for (const u of [VUNK, VUNK_B, VUNK_C, VERWORD])
+    check(
+      label + ": JELA-847 failed version pin is class 1 — " + u,
+      s.__txQC(u) === 1,
+      "got " + s.__txQC(u),
+    );
+  check(label + ": EMPTY ?v= still class 0", s.__txQC(VEMPTY) === 0);
+  s.__txSet(VUNK, "DYN_V");
+  check(
+    label + ": ?v=unknown dynamic script served on the next boot",
+    s.__txGet(VUNK) === "DYN_V",
+  );
+
   // Version-pinned dynamic script round trip (was: never cached at all).
   s.__txSet(TICKS, "DYN_A");
   check(
@@ -344,6 +417,11 @@ for (const [label, src] of [
     BARE,
     "https://srv/x.js?a=1&v=" + NOW + "&c=2",
     "https://srv/Enh/script?v=11.12.0.0-639167216800000000",
+    VUNK,
+    VUNK_B,
+    VUNK_C,
+    VERWORD,
+    VEMPTY,
   ];
   const impls = [
     ["shell.js widget", compileWidget(tvSrc, "tv")(makeLS(), {}).txQueryClass],
