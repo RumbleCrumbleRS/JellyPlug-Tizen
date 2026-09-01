@@ -219,6 +219,12 @@ function makeEnv(opts) {
       jellyfin_credentials: opts.creds !== undefined ? opts.creds : CREDS,
       "jellyfin.shell.serverUrl":
         opts.srv !== undefined ? opts.srv : "http://srv",
+      // JELA-839 made queryAuth opt-OUT, so an empty store now arms the
+      // JELA-740 shim and every pinned URL below would also gain
+      // &api_key=<token>. This suite pins the PageHash rewrite, so it stands
+      // that layer down; the hssPin x queryAuth composition is owned by
+      // query-auth.test.cjs ("composition with JELA-703 hssPin").
+      "jellyfin.shell.queryAuth": "0",
     },
     opts.pinOff ? {} : { "jellyfin.shell.hssPin": "1" },
     opts.warm ? { "jellyfin.shell.apiWarm": "1" } : {},

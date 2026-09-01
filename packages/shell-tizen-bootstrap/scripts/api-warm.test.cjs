@@ -236,6 +236,13 @@ function makeEnv(opts) {
       jellyfin_credentials: opts.creds !== undefined ? opts.creds : CREDS,
       "jellyfin.shell.serverUrl":
         opts.srv !== undefined ? opts.srv : "http://srv",
+      // JELA-839 made queryAuth opt-OUT, so an empty store now arms the
+      // JELA-740 shim, which rewrites every prefetch URL to carry api_key
+      // and swallows X-Emby-Token. This suite pins apiWarm's own ordering,
+      // bounding and auth contract, so it stands that layer down by default
+      // (same isolation move as fetchCoalesceDisabled in query-auth.test).
+      // Section 11 below covers the composition with queryAuth ARMED.
+      "jellyfin.shell.queryAuth": "0",
     },
     opts.flagOff ? {} : { "jellyfin.shell.apiWarm": "1" },
     opts.store || {},
@@ -678,7 +685,10 @@ function makeEnv(opts) {
       !env.xcalls.some((x) => x.url.indexOf("/HomeScreen/Section/") !== -1),
       "10: sections-only never chains the fan-out",
     );
-    assert(env.xcalls.length === 1, "10: still exactly one request after chain");
+    assert(
+      env.xcalls.length === 1,
+      "10: still exactly one request after chain",
+    );
   }
   {
     // The SPA's matching GET is still served from the store (the head start is
@@ -710,6 +720,62 @@ function makeEnv(opts) {
       "10: kill-switch beats sections-only too",
     );
     assert(env.xcalls.length === 0, "10: kill-switch -> zero requests");
+  }
+
+  // ---- 11. JELA-839 composition: the warm prefetches on a COLD boot ----------
+  // Every case above stands queryAuth down to isolate apiWarm. This one is the
+  // real first-install store — no queryAuth key, so the JELA-740 shim arms and
+  // the warm's own prefetches become CORS-simple GETs. That is the point of
+  // the flip: apiWarm issues the earliest cross-origin GETs of the boot, and
+  // before JELA-839 each of them paid an OPTIONS round trip ahead of itself.
+  {
+    const env = makeEnv({});
+    // The default env seeds "0"; drop the key entirely to model a first
+    // install, where the JELA-788 JSI seeder has not run yet.
+    delete env.store["jellyfin.shell.queryAuth"];
+    assert(
+      env.store["jellyfin.shell.queryAuth"] === undefined,
+      "11: precondition — no queryAuth key in the cold-boot store",
+    );
+    env.run();
+    const aw = env.window.__shellAW;
+    assert(aw && aw.on === 1 && aw.started === 1, "11: warm still starts");
+    assert(env.window.__shellQA, "11: queryAuth armed from the absent key");
+    assert(
+      env.xcalls.length === 8,
+      "11: still bounded 8-wide, got " + env.xcalls.length,
+    );
+    // Order is unchanged — the shim rewrites URLs, it does not reorder.
+    assert(
+      env.xcalls[0].url.indexOf(
+        "http://srv/JellyfinEnhanced/tag-cache/" + UID,
+      ) === 0,
+      "11: tag-cache is still FIRST, got " + env.xcalls[0].url,
+    );
+    assert(
+      env.xcalls[1].url.indexOf(
+        "http://srv/HomeScreen/Sections?UserId=" + UID,
+      ) === 0,
+      "11: Sections is still SECOND, got " + env.xcalls[1].url,
+    );
+    assert(
+      env.xcalls.every((x) => x.url.indexOf("api_key=tok") !== -1),
+      "11: every prefetch carries api_key",
+    );
+    assert(
+      env.xcalls.every(
+        (x) =>
+          x.headers["X-Emby-Token"] === undefined &&
+          x.method === "GET" &&
+          x.timeout === 30000,
+      ),
+      "11: the non-safelisted auth header is gone; still a bounded GET",
+    );
+    assert.strictEqual(
+      env.window.__shellQA.xr,
+      8,
+      "11: all 8 prefetches counted as XHR rewrites",
+    );
   }
 
   console.log("api-warm.test.cjs: all assertions passed");

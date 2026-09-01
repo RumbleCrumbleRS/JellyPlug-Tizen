@@ -4508,12 +4508,11 @@
       "}catch(_){G.err++}},500)" +
       "}" +
       "}catch(_){G.err++}}" +
-      // JELA-740 (accepted CEO confirmation 45f50c90): opt-in query-param
-      // auth for API GETs, default OFF via
-      // localStorage['jellyfin.shell.queryAuth']='1'.
-      // 'jellyfin.shell.queryAuthDisabled' is honored NOW as the
-      // kill-switch reserved for a future default-ON flip (apiWarm house
-      // rule). Every jellyfin-web API call is cross-origin and carries
+      // JELA-740 (accepted CEO confirmation 45f50c90): query-param auth for
+      // API GETs. Shipped opt-in under JELA-740, seeded fleet-wide by the
+      // JSI channel under JELA-788, and FLEET-ON / opt-OUT since JELA-839
+      // (see the flip note at the bottom of this block).
+      // Every jellyfin-web API call is cross-origin and carries
       // `Authorization` (measured: NOT X-Emby-Authorization), which is not
       // CORS-safelisted, so every GET costs preflight + request = two
       // serialized round trips (~94 OPTIONS per cold boot, 38-39 of them
@@ -4542,7 +4541,31 @@
       // is (re)inserted per DOCUMENT under the same flag. Counters:
       // window.__shellQA {on,fr,xr,sw,sk,err} = fetch rewrites, xhr
       // rewrites, swallowed headers, skips, errors.
-      'if(flg("jellyfin.shell.queryAuth")&&!flg("jellyfin.shell.queryAuthDisabled")){try{' +
+      //
+      // JELA-839: FLEET-ON, opt-OUT — an ABSENT key now means ON. This could
+      // not stay opt-in. The read site is here in instantHomeBody(), which
+      // runs at shell boot, while the jp788seed entry that writes the "1"
+      // lands only AFTER the lite->SPA handoff (JELA-802), so a seeded flag
+      // arms ONE BOOT LATE (JELA-821/827/831). JELA-788's own rollout
+      // recorded it and shipped anyway: boot 1 = 70 OPTIONS with __shellQA
+      // absent, boot 2 = 3. Re-measured on the JELA-838 acceptance ring
+      // (5 fresh-profile cold boots, live channel, live shell): 65-78
+      // OPTIONS and ZERO api_key GETs on boot 1, against 10-13 OPTIONS on
+      // the same profile's later boots — ~53 wasted round trips, ~16% of a
+      // 411-request cold boot and 948 ms of aggregate server handling time,
+      // every one of them on the critical path of a first install, a
+      // re-install or a storage eviction. The preflight cache (JELA-709
+      // Access-Control-Max-Age) is what makes boot 2 cheap, but a cache
+      // cannot be warm on the boot that fills it, and its key is the full
+      // URL including query — so a cold boot is exactly where this lever's
+      // prize lives, and opt-in shipped the lever with its effect removed.
+      // Both per-TV kills survive the flip and are independent:
+      // localStorage['jellyfin.shell.queryAuth'] = '0' (a SET, never a
+      // removeItem — an absent key is now an ON arm) and
+      // ['jellyfin.shell.queryAuthDisabled'] = '1'. flgO fails CLOSED on a
+      // throwing localStorage, so a device that cannot read its own kill
+      // switch does not arm.
+      'if(flgO("jellyfin.shell.queryAuth")&&!flg("jellyfin.shell.queryAuthDisabled")){try{' +
       'try{if(document.head&&!document.getElementById("__shellQAMeta")){var qMt=document.createElement("meta");qMt.id="__shellQAMeta";qMt.name="referrer";qMt.content="no-referrer";document.head.insertBefore(qMt,document.head.firstChild)}}catch(_){}' +
       "if(!W.__shellQA){" +
       "var qa=W.__shellQA={on:1,fr:0,xr:0,sw:0,sk:0,err:0};" +
