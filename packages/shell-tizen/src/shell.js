@@ -2145,22 +2145,36 @@
       // Version-ish token test — lockstep with __txQC's `pin` arm below and
       // with the widget-side txQueryClass: >=15-digit ticks, a dotted a.b.c
       // version, or a long hex hash.
+      // JELA-847: __txFam ALSO strips a `v=`/`version=` key with a non-empty
+      // value that is not a recognised version (JE's `?v=unknown`). Without
+      // that the family equals the key, __txGenRec returns early, no "gqk:"
+      // index is written — and ceInvalidate, which reaches seed-written slots
+      // ONLY through that index, cannot drop the slot on a plugin bump.
+      // Measured on the rig: a scripts-epoch flip refetched all 149 pinned
+      // modules and none of the three ?v=unknown ones. Sharing the family
+      // with the pinned URL also frees the stale generation if JE ever wins
+      // its version race.
       "    function __txVerTok(v){return /^[0-9]{15,}$/.test(v)||/^\\d+(\\.\\d+){2,}/.test(v)||(/^[0-9a-fA-F]{12,}$/.test(v)&&/[a-fA-F]/.test(v));}",
-      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
+      '    function __txFam(k){var i=k.indexOf("?");if(i<0)return k;var path=k.substring(0,i);var pairs=k.substring(i+1).split("&");var keep=[];for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(__txVerTok(val)||eq>0&&val&&/^(v|version)$/i.test(p.substring(0,eq)))continue;keep.push(p);}return keep.length?path+"?"+keep.join("&"):path;}',
       '    function __txGenRec(k){if(!__txGenOn())return;try{var f=__txFam(k);if(f===k)return;var fk=__TXPFX+"gqk:"+f;var prev=null;try{prev=localStorage.getItem(fk);}catch(_){}if(prev===k)return;if(prev){try{localStorage.removeItem(__TXPFX+prev);}catch(_){}try{localStorage.removeItem(__TXPFX+"ts:"+prev);}catch(_){}try{var m=__txLru();if(m[prev]!=null){delete m[prev];__txPersistLru(m);}}catch(_){}try{window.__shellTxGenDrop=(window.__shellTxGenDrop||0)+1;}catch(_){}}localStorage.setItem(fk,k);}catch(_){__qeB();}}',
       // JEL-619: version-keyed plugin fetch caching in the DYNAMIC pipeline
       // (JE-style createElement+src submodules). Class 2 = a kept query token
       // carries version info (>=15-digit ticks / dotted a.b.c / long hex) ->
       // cache until the token changes; class 1 = only a per-load epoch-ms
       // buster (stripped by __txKey) -> cache with a 24 h TTL ("ts:" sibling
-      // key); class 0 = static marker query (?_jsi=1) -> never cached, fetch
-      // stays busted every boot. Epoch test lockstep with __txKey/txKey.
+      // key); class 0 = static marker query (?_jsi=1, NO version key at all)
+      // -> never cached, fetch stays busted every boot. JELA-847: a ?v=/
+      // ?version= key with a non-empty but unrecognised value (JE's
+      // `?v=unknown` race loser) is class 1, NOT class 0 — it is a failed
+      // version pin, not a config-mutable marker, so the 24 h TTL + the
+      // config-epoch gate are the right envelope for it. Epoch test lockstep
+      // with __txKey/txKey.
       // "@@shellref:" values are pointers the STATIC layer writes into the
       // shared keyspace (body lives once under its txc: slot) — deref on
       // read, treat a pruned target as a miss. Kill-switch (shared with the
       // widget side): jellyfin.shell.pluginFetchCacheDisabled='1'.
       '    var __TXREF="@@shellref:";',
-      '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;}return pin?2:bust?1:0;}',
+      '    function __txQC(u){var i=u.indexOf("?");if(i<0)return 0;var pairs=u.substring(i+1).split("&");var now=Date.now();var pin=false,bust=false,vk=false;for(var pi=0;pi<pairs.length;pi++){var p=pairs[pi];if(!p)continue;var eq=p.indexOf("=");var val=eq<0?p:p.substring(eq+1);if(/^[0-9]{12,14}$/.test(val)){var n=parseInt(val,10);if(n>0&&Math.abs(n-now)<6048e5){bust=true;continue;}}if(/^[0-9]{15,}$/.test(val)||/^\\d+(\\.\\d+){2,}/.test(val)||(/^[0-9a-fA-F]{12,}$/.test(val)&&/[a-fA-F]/.test(val)))pin=true;else if(eq>0&&val&&/^(v|version)$/i.test(p.substring(0,eq)))vk=true;}return pin?2:bust||vk?1:0;}',
       '    function __txQGate(s){if(localStorage.getItem("jellyfin.shell.pluginFetchCacheDisabled")==="1")return 0;return __txQC(s);}',
       // JEL-554 (v34): record the first 10 missed src URLs alongside the
       // miss counter so QA can compare them against the cached key set in
@@ -6762,14 +6776,24 @@
   //       (config ticks, >=15 digits; a dotted a.b.c version; a long hex
   //       hash). Served until the token changes — exactly the freshness a
   //       browser's HTTP cache gets from honouring ?v=.
-  //   1 = epoch-busted: txKey() strips a per-load Date.now() buster and no
-  //       version-ish token remains (JellyfinEnhanced submodules). The bare
-  //       path is the identity, so nothing tracks a plugin UPDATE — bound
-  //       staleness with a 24 h TTL (sibling "ts:" key).
-  //   0 = unpinned marker: a kept query with NO version signal (the JSI
-  //       channel's static ?_jsi=1). The body is config-mutable and nothing
-  //       tracks the config, so it is NEVER served from this cache — every
-  //       boot stays a fresh busted read (pre-JEL-619 behaviour).
+  //   1 = weakly keyed. Either txKey() strips a per-load Date.now() buster
+  //       and no version-ish token remains (JellyfinEnhanced submodules), or
+  //       (JELA-847) the URL carries a ?v=/?version= key whose value is
+  //       non-empty but unrecognised as a real version. Either way SOMETHING
+  //       intends to key this by version but nothing here can track a plugin
+  //       UPDATE through it — so bound staleness with a 24 h TTL (sibling
+  //       "ts:" key) and let the config-epoch gate (ceInvalidate's "scripts"
+  //       component, which drops every vqk:/gqk: slot) clear it on a real
+  //       plugin change.
+  //   0 = unpinned marker: a kept query with NO version signal AT ALL (the
+  //       JSI channel's static ?_jsi=1). The body is config-mutable and
+  //       nothing tracks the config, so it is NEVER served from this cache —
+  //       every boot stays a fresh busted read (pre-JEL-619 behaviour).
+  //       JELA-847: a FAILED version pin (?v=unknown — JellyfinEnhanced
+  //       loses a race with its own /JellyfinEnhanced/version fetch on three
+  //       early modules) is deliberately NOT this case. It used to inherit
+  //       this never-cache policy, which made those three the only requests
+  //       in the boot no cache layer could ever serve.
   // Storage: the body lives ONCE under the content-addressed `txc:` slot;
   // the version-keyed slot holds a tiny "@@shellref:txc:<hash>" pointer
   // (txRecordQuerySlot) so a large aggregate body is not duplicated. A
@@ -6908,6 +6932,7 @@
     var now = Date.now();
     var pinned = false;
     var busted = false;
+    var vkeyed = false;
     for (var pi = 0; pi < pairs.length; pi++) {
       var p = pairs[pi];
       if (!p) continue;
@@ -6926,8 +6951,10 @@
         (/^[0-9a-fA-F]{12,}$/.test(val) && /[a-fA-F]/.test(val))
       )
         pinned = true;
+      else if (eq > 0 && val && /^(v|version)$/i.test(p.substring(0, eq)))
+        vkeyed = true;
     }
-    return pinned ? 2 : busted ? 1 : 0;
+    return pinned ? 2 : busted || vkeyed ? 1 : 0;
   }
   // Record the version-keyed slot for a query-bearing URL after its body was
   // downloaded and stored under `ck` (the content-addressed txc: slot). Also

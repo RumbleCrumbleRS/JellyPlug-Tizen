@@ -231,14 +231,19 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-834: re-pinned — the bitrateCache gate flipped from opt-in to
     // opt-OUT in both seeds. Identical change in both shells; reasons
     // unchanged. (Same class of fix as the JELA-827 re-pins above.)
+    // JELA-847: re-pinned — __txQC gained the failed-version-pin arm, so a
+    // ?v=/?version= key with a non-empty but unrecognised value (JE's
+    // `?v=unknown`) classifies 1 instead of 0, and __txFam strips that key so
+    // the slot gets a "gqk:" family index ceInvalidate can reach on a plugin
+    // bump. Identical blocks in both seeds; reasons unchanged.
     // JELA-848: re-pinned — the drop fetch+eval moved into a shared
     // __babelFromDrop(tag) helper, and both interception paths (rewrite +
     // srcPipeline) now short-circuit a babel.min.js src into __babelRepoint
     // instead of fetching the bootstrap's relative URL. Identical block in
     // both seeds; the divergence reason (retail's __txResolve vs boot's
     // per-call-site __dp/pre gate) is unchanged.
-    retail: "4dddbdd0d3a2e8d8",
-    boot: "e3bc36e134434c2f",
+    retail: "f219f9bf9618f34a",
+    boot: "a5a896e33c4edba2",
   },
   {
     name: "buildDiagSeedScript",
