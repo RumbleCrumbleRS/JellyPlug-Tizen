@@ -41,6 +41,26 @@
  *     slots; a play-state write and any unrecognised write do retire them; a
  *     write that cannot touch an item body retires nothing; both transports
  *   - with the drill flag off, JELA-742's behaviour is unchanged
+ *
+ * JELA-842 widens the same store once more, behind
+ * localStorage['jellyfin.shell.cfgOnce']='1' (kill-switch
+ * 'jellyfin.shell.cfgOnceDisabled', read FIRST), for the eight singleton CONFIG
+ * endpoints JELA-840 measured 2-4x per cold boot. Section I pins:
+ *   - gating, and that cfgOnce arms the shim with neither sibling flag set
+ *   - AC1: /CustomTabs/Config x5 = ONE request — four of them CONCURRENT, so
+ *     only the in-flight park can collapse them — and all eight shapes over
+ *     mixed fetch/XHR
+ *   - the JELA-839 auth-style split: ?api_key=<token> and header-auth readers
+ *     share one request, but a FOREIGN api_key never reads the store
+ *   - safety: another user's preferences, /Plugins, /System/Configuration and
+ *     /PluginPages/User all reach the network untouched
+ *   - invalidation: ANY write retires EVERY S: slot, including the
+ *     /DisplayPreferences write the JELA-760 flush exempts; both transports
+ *   - and the one exemption the first A/B ring forced: a /Sessions,
+ *     /QuickConnect or /shell/ write retires nothing (I6b)
+ *   - the 120 s S: TTL, a token change, and a failed leader replaying
+ *   - flag independence BOTH ways: cfgOnce must not arm the JELA-742 alias
+ *     pair and aliasCoalesce must not arm the config shapes (I8)
  */
 "use strict";
 const fs = require("fs");
@@ -80,6 +100,12 @@ assert(
   "reserved kill-switch honored",
 );
 assert(body.indexOf("__shellACo") !== -1, "counter surface present");
+assert(body.indexOf("jellyfin.shell.cfgOnce") !== -1, "JELA-842 flag present");
+assert(
+  body.indexOf("jellyfin.shell.cfgOnceDisabled") <
+    body.indexOf('flg("jellyfin.shell.cfgOnce")'),
+  "JELA-842 kill-switch is read BEFORE the enable key",
+);
 assert(body.indexOf("</script") === -1, "no </script literal");
 assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
 assert(body.indexOf("`") === -1, "body must be ES5 (no template literals)");
@@ -1028,6 +1054,355 @@ async function H() {
   console.log("OK: H6: the drill flag off leaves JELA-742 untouched");
 }
 
+// ---- I. JELA-842 cfgOnce: the singleton config shapes ----------------------
+const CFG = JSON.stringify({ Tabs: [{ Id: 1 }] });
+const CFG2 = JSON.stringify({ Tabs: [{ Id: 2 }] });
+
+// cfgOnce ALONE — aliasCoalesce off, itemCache off — so every count below is
+// attributable to this flag and nothing else.
+function cfgEnv(extra) {
+  return makeEnv({
+    flagOff: true,
+    store: Object.assign({ "jellyfin.shell.cfgOnce": "1" }, extra || {}),
+  });
+}
+
+async function I() {
+  // I1 — gating. The kill switch is read FIRST, so it wins on a boot that has
+  // never seen the enable key ([[jela838-channel-flag-boot1-optout]]).
+  let e = makeEnv({ flagOff: true });
+  e.run();
+  assert(!e.window.__shellACo, "I1: no flag -> inert");
+  let p = get(e, "/CustomTabs/Config");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/CustomTabs/Config");
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "I1: OFF -> the repeat hits the net",
+  );
+  e.netCalls[1].resolve(200, CFG);
+  await bodyOf(p);
+
+  e = cfgEnv({ "jellyfin.shell.cfgOnceDisabled": "1" });
+  e.run();
+  assert(!e.window.__shellACo, "I1: cfgOnceDisabled=1 beats cfgOnce=1");
+
+  e = cfgEnv();
+  e.run();
+  assert(
+    e.window.__shellACo && e.window.__shellACo.co === 1,
+    "I1: cfgOnce arms the shim on its own",
+  );
+  console.log("OK: I1: default OFF, kill-switch first, arms without siblings");
+
+  // I2 — AC1, the JELA-840 headline: /CustomTabs/Config asked 4x inside 82 ms.
+  // All four are CONCURRENT, so only the in-flight park can collapse them.
+  e = cfgEnv();
+  e.run();
+  const four = [
+    get(e, "/CustomTabs/Config"),
+    get(e, "/CustomTabs/Config"),
+    get(e, "/CustomTabs/Config"),
+    get(e, "/CustomTabs/Config"),
+  ];
+  assert.strictEqual(
+    e.net("/CustomTabs/Config").length,
+    1,
+    "I2/AC1: 4 concurrent readers issue ONE request",
+  );
+  e.netCalls[0].resolve(200, CFG);
+  for (const q of four)
+    assert.strictEqual(await bodyOf(q), CFG, "I2: every reader gets the body");
+  // and a fifth, arriving after the body landed, is served from the slot.
+  await e.drainMicro();
+  const fifth = get(e, "/CustomTabs/Config");
+  assert.strictEqual(
+    e.net("/CustomTabs/Config").length,
+    1,
+    "I2: a later reader is served from the completed slot (multi-read)",
+  );
+  assert.strictEqual(await bodyOf(fifth), CFG, "I2: fifth body verbatim");
+  console.log("OK: I2/AC1: /CustomTabs/Config x5 = 1 request");
+
+  // I3 — the whole measured cluster, one request each, mixed transports.
+  // JELA-840 saw these split across fetch and XHR, which is exactly why the
+  // fetch-level coalescers never caught them.
+  e = cfgEnv();
+  e.run();
+  const SHAPES = [
+    "/System/Info",
+    "/System/Info/Public",
+    "/DisplayPreferences/usersettings?userId=" + UID + "&client=emby",
+    "/Branding/Configuration",
+    "/JellyfinEnhanced/public-config",
+    "/JellyfinEnhanced/private-config",
+    "/JellyfinEnhanced/version",
+    "/JellyfinEnhanced/locales/en-US.json",
+  ];
+  for (const u of SHAPES) {
+    const first = get(e, u);
+    assert.strictEqual(e.net(u).length, 1, "I3: " + u + " first call is real");
+    e.net(u)[0].resolve(200, CFG);
+    assert.strictEqual(await bodyOf(first), CFG, "I3: " + u + " body");
+    await e.drainMicro();
+    // repeat over XHR — the transport a fetch-level join cannot reach
+    const x = new e.window.XMLHttpRequest();
+    x.open("GET", SRV + u, true);
+    let got = null;
+    x.onload = function () {
+      got = x.responseText;
+    };
+    const before = e.xcalls.length;
+    x.send();
+    assert.strictEqual(
+      e.xcalls.length,
+      before,
+      "I3: " + u + " repeat issues no XHR",
+    );
+    e.runTimers();
+    assert.strictEqual(got, CFG, "I3: " + u + " served over XHR");
+    assert.strictEqual(e.net(u).length, 1, "I3: " + u + " stayed at 1 request");
+  }
+  console.log("OK: I3/AC1: all 8 shapes collapse to one request, fetch<->XHR");
+
+  // I4 — the auth-style split. JELA-839 armed queryAuth on the first boot, so
+  // the same endpoint is asked once as ?api_key=<token> and once with the
+  // header. Those must collapse — but only when the key IS ours.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/JellyfinEnhanced/version?api_key=tok");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/JellyfinEnhanced/version");
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/version").length,
+    1,
+    "I4: query-auth and header-auth readers share one request",
+  );
+  assert.strictEqual(
+    await bodyOf(p),
+    CFG,
+    "I4: body served across auth styles",
+  );
+
+  const foreign = get(e, "/JellyfinEnhanced/version?api_key=someoneelse");
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/version").length,
+    2,
+    "I4: a foreign api_key never reads this store",
+  );
+  e.netCalls[e.netCalls.length - 1].resolve(200, CFG2);
+  assert.strictEqual(await bodyOf(foreign), CFG2, "I4: it gets its own answer");
+  console.log(
+    "OK: I4: api_key is dropped from the key only after a token check",
+  );
+
+  // I5 — safety: a foreign userId, an unlisted path, and a non-GET are all
+  // untouched. /Plugins and /System/Configuration are admin-mutable from
+  // another client and are deliberately NOT in the set.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/DisplayPreferences/usersettings?userId=" + OTHER);
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/DisplayPreferences/usersettings?userId=" + OTHER);
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "I5: another user's preferences never coalesce",
+  );
+  e.netCalls[1].resolve(200, CFG);
+  await bodyOf(p);
+  for (const u of ["/Plugins", "/System/Configuration", "/PluginPages/User"]) {
+    const n0 = e.netCalls.length;
+    const q1 = get(e, u);
+    e.netCalls[n0].resolve(200, CFG);
+    await bodyOf(q1);
+    await e.drainMicro();
+    const q2 = get(e, u);
+    assert.strictEqual(
+      e.netCalls.length,
+      n0 + 2,
+      "I5: " + u + " is not in the set",
+    );
+    e.netCalls[n0 + 1].resolve(200, CFG);
+    await bodyOf(q2);
+  }
+  console.log("OK: I5: foreign user / unlisted paths reach the network");
+
+  // I6 — invalidation. A write must retire the config it can have changed, and
+  // for S: slots that includes /DisplayPreferences — the path the JELA-760
+  // flush exempts. Both transports.
+  for (const mode of ["fetch", "xhr"]) {
+    e = cfgEnv();
+    e.run();
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    e.netCalls[0].resolve(200, CFG);
+    await bodyOf(p);
+    await e.drainMicro();
+    if (mode === "fetch") {
+      e.window.fetch(SRV + "/DisplayPreferences/usersettings?userId=" + UID, {
+        method: "POST",
+      });
+      e.netCalls[e.netCalls.length - 1].resolve(204, "");
+    } else {
+      const w = new e.window.XMLHttpRequest();
+      w.open(
+        "POST",
+        SRV + "/DisplayPreferences/usersettings?userId=" + UID,
+        true,
+      );
+      w.send();
+      w.__respond(204, "");
+    }
+    await e.drainMicro();
+    const n1 = e.netCalls.length;
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    assert.strictEqual(
+      e.netCalls.length,
+      n1 + 1,
+      "I6/" + mode + ": the write retired the slot",
+    );
+    e.netCalls[n1].resolve(200, CFG2);
+    assert.strictEqual(await bodyOf(p), CFG2, "I6/" + mode + ": fresh body");
+    assert(e.window.__shellACo.fl > 0, "I6/" + mode + ": flush accounted");
+  }
+  console.log("OK: I6: any write retires every S: slot, over fetch and XHR");
+
+  // I6b — the ONE exemption, and it is not speculative: the first JELA-842 A/B
+  // ring measured POST /Sessions/Capabilities/Full landing between the two
+  // /DisplayPreferences reads on 4 of 4 armed boots, which retired the slot and
+  // left that endpoint the only one in the set still fetched twice. Session
+  // state and our own /shell/ beacons cannot change a config body.
+  for (const w of [
+    "/Sessions/Capabilities/Full",
+    "/Sessions/Playing/Progress",
+    "/QuickConnect/Authorize",
+    "/shell/diag",
+  ]) {
+    e = cfgEnv();
+    e.run();
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    e.netCalls[0].resolve(200, CFG);
+    await bodyOf(p);
+    await e.drainMicro();
+    e.window.fetch(SRV + w, { method: "POST" });
+    e.netCalls[e.netCalls.length - 1].resolve(204, "");
+    await e.drainMicro();
+    const n2 = e.netCalls.length;
+    p = get(e, "/DisplayPreferences/usersettings?userId=" + UID);
+    assert.strictEqual(
+      e.netCalls.length,
+      n2,
+      "I6b: " + w + " must NOT retire the config slots",
+    );
+    assert.strictEqual(
+      await bodyOf(p),
+      CFG,
+      "I6b: " + w + " body still served",
+    );
+    assert.strictEqual(e.window.__shellACo.fl, 0, "I6b: no flush accounted");
+  }
+  console.log("OK: I6b: session-state and /shell/ writes retire nothing");
+
+  // I7 — the TTL is real. The S: slots exist to span a ~6 s pre-paint fan-out,
+  // not a session; at 120 s the slot is gone.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/CustomTabs/Config");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  e.tick(119000);
+  p = get(e, "/CustomTabs/Config");
+  assert.strictEqual(e.netCalls.length, 1, "I7: served inside the TTL");
+  await bodyOf(p);
+  e.tick(2000);
+  p = get(e, "/CustomTabs/Config");
+  assert.strictEqual(e.netCalls.length, 2, "I7: not served past 120 s");
+  e.netCalls[1].resolve(200, CFG2);
+  assert.strictEqual(await bodyOf(p), CFG2, "I7: refetched body");
+  console.log("OK: I7: the 120 s S: TTL holds and then releases");
+
+  // I8 — flag independence in both directions. cfgOnce must not arm the
+  // JELA-742 alias pair, and aliasCoalesce must not arm the config shapes.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/Items/" + ID1);
+  e.netCalls[0].resolve(200, ITEM1);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/Users/" + UID + "/Items/" + ID1);
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "I8: cfgOnce does not arm the alias pair",
+  );
+  e.netCalls[1].resolve(200, ITEM1);
+  await bodyOf(p);
+
+  e = makeEnv();
+  e.run();
+  p = get(e, "/CustomTabs/Config");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/CustomTabs/Config");
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "I8: aliasCoalesce does not arm the config shapes",
+  );
+  e.netCalls[1].resolve(200, CFG);
+  await bodyOf(p);
+  console.log(
+    "OK: I8: cfgOnce and aliasCoalesce arm strictly their own shapes",
+  );
+
+  // I9 — a token change flushes: stale-user config is never served.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/System/Info");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  e.store.jellyfin_credentials = JSON.stringify({
+    Servers: [{ Id: "s1", AccessToken: "tok2", UserId: UID }],
+  });
+  p = get(e, "/System/Info");
+  assert.strictEqual(e.netCalls.length, 2, "I9: a token change flushes");
+  e.netCalls[1].resolve(200, CFG2);
+  assert.strictEqual(await bodyOf(p), CFG2, "I9: the new token's body");
+  console.log("OK: I9: a token change flushes the config slots");
+
+  // I10 — a failed leader is not cached and its parked waiters replay.
+  e = cfgEnv();
+  e.run();
+  const a1 = get(e, "/JellyfinEnhanced/public-config");
+  const a2 = get(e, "/JellyfinEnhanced/public-config");
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/public-config").length,
+    1,
+    "I10: the second reader parked",
+  );
+  e.netCalls[0].resolve(500, "boom");
+  await bodyOf(a1);
+  await e.drainMicro();
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/public-config").length,
+    2,
+    "I10: the parked reader replays on the network",
+  );
+  e.netCalls[1].resolve(200, CFG);
+  assert.strictEqual(await bodyOf(a2), CFG, "I10: replayed body");
+  console.log("OK: I10: a failed leader is never cached; waiters replay");
+}
+
 A()
   .then(B)
   .then(C)
@@ -1036,6 +1411,7 @@ A()
   .then(F)
   .then(G)
   .then(H)
+  .then(I)
   .then(() => console.log("\nAll alias-coalesce + item-cache checks passed."))
   .catch((e) => {
     console.error(e);
