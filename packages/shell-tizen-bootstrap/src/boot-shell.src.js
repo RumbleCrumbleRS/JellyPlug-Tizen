@@ -1679,7 +1679,19 @@
       // babelTranspile (no regex fallback — probe-less devices keep the
       // pre-JELA-11 accept-anything-Babel-returned behavior).
       '    function transpile(code){if(typeof window.Babel==="undefined")return null;var out;try{out=window.Babel.transform(code,{presets:[["env",{targets:{chrome:"56"},modules:false,loose:true}]],assumptions:{iterableIsArray:true,arrayLikeIsIterable:true},sourceType:"script",compact:true,comments:false}).code;}catch(_){return null;}if(typeof out==="string"&&__ppOn()&&!__ppParses(out))return null;return out;}',
-      "    function maybeTranspile(code){if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
+      // JELA-861: `need` is the caller's ALREADY-COMPUTED needsTx() verdict.
+      // needsTx() is a full `new Function(code)` parse of the body on this
+      // engine (~1 ms per 10 KB on the M63), and every caller here had already
+      // run it to decide whether to try the drop / prime Babel at all — then
+      // threw the answer away and made maybeTranspile parse the same body a
+      // second time. Measured on the JELA-112 rig against the served shell:
+      // 65 of 304 distinct bodies were parsed exactly twice, 1.09 MB of 6.69 MB
+      // total parse input. Passing the verdict through is a pure de-duplication:
+      // needsTx is deterministic in `code`, so the transpile decision — and
+      // therefore __shellTxDoCount / __shellTxSkipCount — is bit-identical.
+      // `need` omitted keeps the original self-deciding behaviour for any
+      // caller that genuinely has no verdict yet.
+      "    function maybeTranspile(code,need){if(need===undefined)need=needsTx(code);if(!need){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return code;}try{window.__shellTxDoCount=(window.__shellTxDoCount||0)+1;}catch(_){}return transpile(code);}",
       // JEL-621: pre-lowered drop consumption in the dynamic pipelines. The
       // widget-side loadTxDropManifest parks {ok,base,entries,counters} on
       // window.__shellTxDrop (window survives the document.write handoff);
@@ -1918,11 +1930,14 @@
       "        .then(function(code){",
       // JEL-621: server pre-lowered drop attempt first — on a hit neither
       // __ensureBabel nor maybeTranspile runs for this script.
-      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      // JELA-861: one needsTx() parse per body, carried through the drop
+      // attempt, the Babel prime and maybeTranspile (was three).
+      "          var __n=needsTx(code);",
+      "          var __dp=__n?__txDropGet(code):Promise.resolve(null);",
       "          return __dp.then(function(pre){",
-      "          var __p=pre==null&&needsTx(code)?__ensureBabelDyn():Promise.resolve(true);",
+      "          var __p=pre==null&&__n?__ensureBabelDyn():Promise.resolve(true);",
       "          return __p.then(function(){",
-      "            var out=pre!=null?pre:maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code,__n);",
       "            if(out==null){",
       "              try{parent.removeChild(stub);}catch(_){}",
       '              try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -1994,11 +2009,14 @@
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       "        .then(function(code){",
       // JEL-621: server pre-lowered drop attempt first (see rewrite above).
-      "          var __dp=needsTx(code)?__txDropGet(code):Promise.resolve(null);",
+      // JELA-861: one needsTx() parse per body, carried through the drop
+      // attempt, the Babel prime and maybeTranspile (was three).
+      "          var __n=needsTx(code);",
+      "          var __dp=__n?__txDropGet(code):Promise.resolve(null);",
       "          return __dp.then(function(pre){",
-      "          var __p=pre==null&&needsTx(code)?__ensureBabelDyn():Promise.resolve(true);",
+      "          var __p=pre==null&&__n?__ensureBabelDyn():Promise.resolve(true);",
       "          return __p.then(function(){",
-      "            var out=pre!=null?pre:maybeTranspile(code);",
+      "            var out=pre!=null?pre:maybeTranspile(code,__n);",
       '            if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '            var ns=document.createElement("script");',
       "            var gated=needsJq(out);",
@@ -2179,12 +2197,17 @@
       "          if(authed()){stopAuth();busy=false;return;}",
       // JEL-621: try the pre-lowered drop before priming Babel — on a drop
       // hit the primer caches the server-lowered body and Babel stays cold.
-      "          var __dp=needsTx(it.c)?__txDropGet(it.c):Promise.resolve(null);",
+      // JELA-861: compute the needsTx() parse verdict ONCE per body and carry
+      // it through the drop attempt, the Babel prime and maybeTranspile. This
+      // site used to parse the same body up to three times (here, again after
+      // a drop miss, and a third time inside maybeTranspile).
+      "          var __n=needsTx(it.c);",
+      "          var __dp=__n?__txDropGet(it.c):Promise.resolve(null);",
       "          __dp.then(function(pre){",
-      "            var __p=pre==null&&needsTx(it.c)?__ensureBabelDyn():Promise.resolve(true);",
+      "            var __p=pre==null&&__n?__ensureBabelDyn():Promise.resolve(true);",
       "            __p.then(function(){",
       "              try{",
-      "                var out=pre!=null?pre:maybeTranspile(it.c);",
+      "                var out=pre!=null?pre:maybeTranspile(it.c,__n);",
       "                if(out!=null){__txSet(it.u,needsJq(out)?wrapJq(out):out);P.t++;}else P.e++;",
       "              }catch(_){P.e++;}",
       "              busy=false;",

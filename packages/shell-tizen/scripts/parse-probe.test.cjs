@@ -246,6 +246,46 @@ function widgetKit(src, opts) {
   return { sandbox, win };
 }
 
+// ============================================================================
+// PART A2 — JELA-861: ONE PARSE PER BODY PER CALL SITE
+// ============================================================================
+// needsTx() is a full `new Function(code)` parse of the body on this engine —
+// the single most expensive thing the seed does per script. Every seed call
+// site had already run it (to decide whether to try the drop / prime Babel)
+// and then threw the verdict away, so maybeTranspile parsed the same body
+// again. Measured on the JELA-112 M63 rig against served shell d73fd58f:
+// 382 new Function() calls over 304 distinct bodies, 6.69 MB of parse input,
+// of which 65 bodies / 1.09 MB were parsed exactly twice.
+//
+// The fix is a pass-through of the verdict, so it is verdict-preserving by
+// construction. These checks pin the SHAPE in all four shipped artifacts,
+// because the redundancy is invisible in behaviour (same answer, twice the
+// cost) and no functional test can catch it coming back.
+for (const [name, src] of [
+  ["shell.js", tvSrc],
+  ["shell.min.js", tvMin],
+  ["boot-shell.src.js", bootSrc],
+  ["boot-shell.min.js", bootMin],
+]) {
+  check(
+    name + ": maybeTranspile accepts a pre-computed needsTx verdict",
+    /function maybeTranspile\(code,need\)\{if\(need===undefined\)need=needsTx\(code\);/.test(
+      src,
+    ),
+  );
+  // No seed call site may pair its own needsTx() with a verdict-less
+  // maybeTranspile() — that pairing IS the double parse.
+  check(
+    name + ": no seed call site re-derives the verdict in maybeTranspile",
+    !/maybeTranspile\((code|it\.c)\)/.test(src),
+  );
+  // The drop/prime gate must read the cached verdict, never re-parse.
+  check(
+    name + ": drop + babel-prime gates reuse the cached verdict",
+    !/pre==null&&needsTx\(/.test(src) && !/__dp=needsTx\(/.test(src),
+  );
+}
+
 const ES5_BODY = 'var a = 1; function f(b) { return a + b; }';
 const UNPARSEABLE_BODY = "var a = ;";
 const HOST_MODERN_BODY = "var x = window.__y?.z ?? 1;"; // host engine parses
