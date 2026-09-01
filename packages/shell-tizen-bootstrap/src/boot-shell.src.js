@@ -272,6 +272,36 @@
       return !1;
     }
   }
+  // JELA-853: learned per-device seed for the head-IIFE prefetch skip.
+  // JELA-226 built `jellyfin.shell.webPrefetchSkip` to stop the bootstrap
+  // issuing the /web/index.html + /web/config.json pair on boots where the
+  // shell adopts its LS body cache AND the JELA-59 epoch gate suppresses the
+  // revalidation drain — on those boots the pair is fetched and NEVER read.
+  // It shipped opt-in and so has never armed, and it cannot be flipped to
+  // opt-out the JELA-839 way because the READ SITE is primeWebBoot in the
+  // WGT bootstrap index.html, which installed widgets cannot update. The only
+  // lever on an installed TV is the flag VALUE, so this seeds it — arming one
+  // boot late, exactly as JELA-821/827/831 recorded for seeded shell flags.
+  // Seeded from what THIS boot observed, so it is self-correcting: a boot
+  // that consumed the prefetch writes '0' and the next boot prefetches again.
+  // Never removeItem (JELA-832). Kill: `jellyfin.shell.wpsAuto='0'`.
+  // SHIPS DARK behind `jellyfin.shell.wpsSeed='1'`: arming webPrefetchSkip
+  // runs a primeWebBoot branch that has never executed on a real panel, and
+  // that branch lives in the un-updatable WGT bootstrap — a defect there would
+  // need a reinstall on every TV, so it must not ride a publish silently.
+  var WPS_KEY = "jellyfin.shell.webPrefetchSkip";
+  var WPS_AUTO_KEY = "jellyfin.shell.wpsAuto";
+  var WPS_SEED_GATE_KEY = "jellyfin.shell.wpsSeed";
+  function seedWebPrefetchSkip(dead) {
+    try {
+      if (localStorage.getItem(WPS_SEED_GATE_KEY) !== "1") return;
+      if (localStorage.getItem(WPS_AUTO_KEY) === "0") return;
+      var v = dead ? "1" : "0";
+      window.__shellWpsSeed = v;
+      if (localStorage.getItem(WPS_KEY) === v) return;
+      localStorage.setItem(WPS_KEY, v);
+    } catch (_) {}
+  }
   function readWebIndexCache(serverOrigin) {
     try {
       var raw = localStorage.getItem(WEB_INDEX_CACHE_KEY);
@@ -8027,6 +8057,9 @@
       cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null,
       cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null,
       indexCacheHit = !!(cachedIndex && cachedConfig);
+    // JELA-853: on a cache MISS the primary path below consumes the prefetch
+    // (mkIdxF/mkCfgF adopt it), so it earned its place — keep prefetching.
+    if (!indexCacheHit) seedWebPrefetchSkip(false);
     if (indexCacheHit) {
       (window.__shellIndexCacheHits++,
         (window.__shellWebIndexCacheAdopted = 1));
@@ -8054,8 +8087,13 @@
         .then(function () {
           if (window.__shellCfgEM === 1) {
             ceSup("idx");
+            // JELA-853: the boot shape where the head-IIFE pair is pure
+            // waste — the cache resolved both promises and the drain that
+            // would have consumed the in-flight fetches just bailed.
+            seedWebPrefetchSkip(true);
             return;
           }
+          seedWebPrefetchSkip(false);
           var iOk = drain(mkIdxF, cachedIndex, writeWebIndexCache).then(
             function (ok) {
               if (revalStart) {
