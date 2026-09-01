@@ -1332,10 +1332,20 @@
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.bitrateCache"]="1".
+      // JELA-834: fleet-ON (opt-OUT). JELA-817 seeded "1" fleet-wide but left
+      // this gate opt-in, so it was never armed on a first boot — the JSI
+      // channel that writes the key runs only after the lite→SPA handoff
+      // (JELA-802), so on any cold boot with no prior "1" in LS (fresh
+      // install, wipe, eviction) the key is absent when this line executes and
+      // the whole block returns. That boot then SPENDS the full 5.77 MB probe
+      // and, worse, can never seed the cache it exists to write, so boots 2..N
+      // inherit nothing. Read for the kill switch instead so a key-absent boot
+      // caches. Kill switch: set "jellyfin.shell.bitrateCache" to "0" (the
+      // channel seeder guards !== "0", so a per-TV "0" is durable).
+      // Rollback is setItem(key,"0"), NEVER removeItem — key-absent is now ON.
       // Diag: window.__shellBitrate = {on,armed,hits,miss,saves,bps,age}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")==="0")return;',
       '    var K="jellyfin.shell.bitrate";',
       "    var G=window.__shellBitrate={on:1,armed:0,hits:0,miss:0,saves:0,bps:0,age:-1};",
       '    function ttl(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.bitrateTtlMs")||"",10);}catch(_){}return v>0?v:864e5;}',
@@ -7631,15 +7641,60 @@
       p = Promise.resolve();
     }
     if (!p || typeof p.then !== "function") p = Promise.resolve();
-    return p.then(function () {
-      var ok = typeof window.Babel !== "undefined";
-      if (ok) {
-        try {
-          localStorage.setItem(BABEL_NEEDED_KEY, "1");
-        } catch (_) {}
-      }
-      return ok;
-    });
+    return p
+      .then(function () {
+        // JELA-841: absolute-URL safety net for the STATIC transpile path.
+        // The widget hook resolves its <script src> against the CURRENT
+        // document, so any future change to WHEN <base href="${server}/web/">
+        // lands can send it to a 404 and settle with window.Babel undefined —
+        // which skips every legacy transpile and, on M63, hangs the boot
+        // outright. The DYNAMIC pipelines already survive that through the
+        // seed's __ensureBabelDyn (JELA-183); give the static walk the same
+        // fetch of the ABSOLUTE server drop copy so the worst case is a slow
+        // boot (~26 s, measured in the JELA-837 census) rather than an app
+        // that never loads. Only fires when Babel is still missing after the
+        // widget hook, so healthy boots pay nothing. Cached on window (one
+        // fetch per document) and cleared on failure so a later script retries.
+        if (typeof window.Babel !== "undefined") return true;
+        if (window.__shellBabelAbsP) return window.__shellBabelAbsP;
+        var base = String(loadServerUrl() || "").replace(/\/+$/, "");
+        if (!base) return false;
+        window.__shellBabelAbsP = fetch(base + "/shell/babel.min.js", {
+          credentials: "omit",
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then(function (t) {
+            try {
+              (0, eval)(t);
+            } catch (_) {}
+            var ok = typeof window.Babel !== "undefined";
+            if (!ok) window.__shellBabelAbsP = null;
+            shellLog(
+              ok
+                ? "babel loaded from server drop (static)"
+                : "server-drop babel failed to init (static)",
+            );
+            return ok;
+          })
+          .catch(function () {
+            window.__shellBabelAbsP = null;
+            shellLog("server-drop babel fetch failed (static)");
+            return false;
+          });
+        return window.__shellBabelAbsP;
+      })
+      .then(function () {
+        var ok = typeof window.Babel !== "undefined";
+        if (ok) {
+          try {
+            localStorage.setItem(BABEL_NEEDED_KEY, "1");
+          } catch (_) {}
+        }
+        return ok;
+      });
   }
 
   function transpileLegacyScriptsInner(doc, baseUrl) {

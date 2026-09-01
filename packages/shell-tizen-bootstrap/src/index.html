@@ -96,7 +96,7 @@
             // selftest.cjs asserts this equality so it can never silently drift
             // again. The AC3 overlay codename lives in HSB_CODENAME so it stays
             // on the diagnostic label without polluting the version itself.
-            var HSB_VERSION = '2.0.25';
+            var HSB_VERSION = '2.0.26';
             var HSB_CODENAME = 'ac3';
             // Composite label shown on the overlay tag, e.g. "2.0.18-ac3".
             var HSB_LABEL = HSB_VERSION + (HSB_CODENAME ? '-' + HSB_CODENAME : '');
@@ -597,7 +597,27 @@
          so it parses on M63. -->
     <script>
     (function(){
-        var BABEL_SRC = 'babel.min.js'; // sibling of index.html inside the WGT
+        // JELA-841: PIN THE ABSOLUTE URL AT PARSE TIME. babel.min.js is a
+        // sibling of index.html inside the WGT, but a bare 'babel.min.js' is
+        // resolved when __ensureBabel() builds the <script> tag, NOT now — and
+        // the shell installs <base href="${server}/web/"> before document.write-ing
+        // the web client. Which meaning wins ("WGT sibling" vs "${server}/web/…")
+        // was therefore a race: on a cold boot the head-IIFE's setTimeout(…,0)
+        // prime beat <base> by ~1 s, but once BOTH the JEL-619 shell cache and
+        // the JEL-1977 webIndexHtml cache are warm (every installed TV from
+        // roughly its third boot on) the shell reaches <base href> in ~200 ms and
+        // the prime loses. The loser resolves to ${server}/web/babel.min.js ->
+        // 404 -> onerror -> settle() with window.Babel undefined -> every legacy
+        // plugin transpile is skipped -> on M63 ApiClient is never constructed
+        // and the app never finishes loading (JELA-840 census: 6 of 7 warm boots
+        // hung at 43-46 requests / 0 cards). Snapshotting through an <a> resolves
+        // against the document base AS IT IS RIGHT NOW — the bootstrap is still
+        // parsing, so no <base> can exist yet — which removes the DEPENDENCE on
+        // the race instead of trying to win it. ES5-only, M63-safe.
+        var BABEL_SRC = (function(){
+            try { var a = document.createElement('a'); a.href = 'babel.min.js'; return a.href; }
+            catch (_) { return 'babel.min.js'; }
+        })();
         var pending = null;             // cached load promise: load babel at most once
         window.__ensureBabel = function(){
             // Already present (e.g. a prior call finished) -> nothing to do.
@@ -623,6 +643,16 @@
                 }
                 try {
                     var s = document.createElement('script');
+                    // JELA-841: babel is shell toolchain, never a plugin body to
+                    // transpile. Mark it before the src assignment so the seed's
+                    // script interceptor (shouldIntercept / isShellInternal both
+                    // honour data-shell-polyfill="1") lets it load NATIVELY. Without
+                    // this the post-write src setter hijacked the tag and did the
+                    // fetch itself — which is where the census's verbatim
+                    // "shell: setter fetch/transpile failed babel.min.js HTTP 404"
+                    // came from: srcPipeline's catch, then dispatchEvt(node,"error")
+                    // firing our own s.onerror below.
+                    try { s.setAttribute('data-shell-polyfill', '1'); } catch(_){}
                     s.src = BABEL_SRC;
                     s.onload = function(){
                         try { console.warn('shell: babel loaded for legacy transpile'); } catch(_){}

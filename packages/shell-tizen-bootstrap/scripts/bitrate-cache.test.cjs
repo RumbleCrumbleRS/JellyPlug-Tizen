@@ -1,12 +1,16 @@
 /*
  * JELA-686 (JELA-679/P2): persist the bitrate detection across boots —
- * opt-in via localStorage['jellyfin.shell.bitrateCache']='1', default OFF.
+ * fleet-ON since JELA-817, opt-OUT since JELA-834 via
+ * localStorage['jellyfin.shell.bitrateCache']='0'.
  *
  * Extracts the SHIPPED seed snippet and drives it against the
  * jellyfin-apiclient detectBitrate machinery copied VERBATIM (minified) out
  * of the live bundle node_modules.jellyfin-apiclient.bundle.js, pinning:
- *   - default OFF: no flag -> shim inert, every boot runs the full ladder
- *     and nothing is written to localStorage
+ *   - default ON (JELA-834): NO flag -> armed, and indistinguishable from a
+ *     store seeded '1'. This is the first-install case; the old opt-in gate
+ *     made it inert, so boot 1 spent the ladder and seeded nothing.
+ *   - kill switch '0' -> shim inert, every boot runs the full ladder and
+ *     nothing is written to localStorage
  *   - boot 1: detects normally (all three rungs: 500 KB / 1 MB / 3 MB) and
  *     persists {bps,t,id}
  *   - boot 2 (a fresh page, same localStorage): ZERO BitrateTest requests,
@@ -39,7 +43,10 @@ const text = fs.readFileSync(SRC, "utf8");
 function shimSource() {
   const lines = text.split("\n");
   const flag = lines.findIndex(
-    (l) => l.includes("jellyfin.shell.bitrateCache") && l.includes('!=="1"'),
+    // JELA-834 pins the POLARITY, not just the key: the gate must read for
+    // the kill switch. An opt-in '!=="1"' here is boot-1-dead, so a
+    // regression to that shape fails this extractor outright.
+    (l) => l.includes("jellyfin.shell.bitrateCache") && l.includes('==="0"'),
   );
   assert(flag !== -1, "could not find the bitrateCache shim in " + SRC);
   let a = flag;
@@ -54,6 +61,34 @@ function shimSource() {
   return eval("[" + arr + "]").join("\n");
 }
 const SHIM = shimSource();
+
+// ---- JELA-834: no opt-in survivor, in the SOURCE *or* the shipped min -----
+// The extractor above proves the opt-out line exists; this proves the opt-in
+// line does NOT, in both artifacts. A src edit that never made it through
+// build_shell_min.py would leave the fleet on the boot-1-dead gate while this
+// suite went green off the source alone.
+{
+  const OLD_OPTIN = 'localStorage.getItem("jellyfin.shell.bitrateCache")!=="1"';
+  const MIN = SRC.endsWith("boot-shell.src.js")
+    ? SRC.replace(/boot-shell\.src\.js$/, "boot-shell.min.js")
+    : SRC.replace(/shell\.js$/, "shell.min.js");
+  const NEW_OPTOUT =
+    'localStorage.getItem("jellyfin.shell.bitrateCache")==="0"';
+  for (const [label, body] of [
+    [SRC, text],
+    [MIN, fs.readFileSync(MIN, "utf8")],
+  ]) {
+    assert(
+      !body.includes(OLD_OPTIN),
+      "JELA-834: boot-1-dead opt-in gate still present in " + label,
+    );
+    assert(
+      body.includes(NEW_OPTOUT),
+      "JELA-834: opt-out gate missing from " + label,
+    );
+  }
+  console.log("OK: JELA-834 — opt-out gate in src AND min, 0 opt-in survivors");
+}
 
 // ---- jellyfin-apiclient, verbatim ----------------------------------------
 function J(e, t) {
@@ -164,7 +199,10 @@ function boot(store, opts) {
     );
   };
 
-  const api = new ApiClient(opts.addr || "https://srv.example", opts.id || "S-A");
+  const api = new ApiClient(
+    opts.addr || "https://srv.example",
+    opts.id || "S-A",
+  );
   // no __shellPaintGate in the sandbox -> the shim's documented fallback
   // arms immediately, which is the same code path onApi(cb) runs.
   const win = { localStorage, ApiClient: api };
@@ -175,21 +213,67 @@ function boot(store, opts) {
 }
 
 const ON = () => ({ "jellyfin.shell.bitrateCache": "1" });
+const OFF = () => ({ "jellyfin.shell.bitrateCache": "0" });
 const KEY = "jellyfin.shell.bitrate";
 
 (async () => {
-  // --- default OFF ---------------------------------------------------------
+  // --- JELA-834: key-absent is ARMED and matches a seeded "1" --------------
+  // The AC1 differential, pinned in the unit: a first-install boot (no key in
+  // LS, because the JSI channel that seeds "1" only runs after the lite→SPA
+  // handoff) must behave EXACTLY like a boot seeded "1". Under the old
+  // opt-in gate the key-absent arm was inert, so boot 1 both SPENT the
+  // 5.77 MB ladder and wrote nothing for boots 2..N to hit.
+  // Compare structural facts only — bps is timing-derived in this sandbox.
   {
-    const store = {};
+    const seen = [];
+    for (const [name, store] of [
+      ["key absent", {}],
+      ['seeded "1"', ON()],
+    ]) {
+      const b1 = boot(store);
+      await b1.api.detectBitrate();
+      const b2 = boot(store);
+      await b2.api.detectBitrate();
+      assert.strictEqual(
+        b1.win.__shellBitrate && b1.win.__shellBitrate.on,
+        1,
+        name + ": armed on boot 1",
+      );
+      assert.deepStrictEqual(b1.reqs, LADDER, name + ": boot 1 measures");
+      assert.ok(store[KEY], name + ": boot 1 persists the measurement");
+      assert.deepStrictEqual(
+        b2.reqs,
+        [],
+        name + ": boot 2 costs zero requests",
+      );
+      assert.strictEqual(
+        b2.win.__shellBitrate.hits,
+        1,
+        name + ": boot 2 hits=1",
+      );
+      seen.push(JSON.stringify([b1.reqs, b2.reqs, b2.win.__shellBitrate.hits]));
+    }
+    assert.strictEqual(
+      seen[0],
+      seen[1],
+      'key-absent must be indistinguishable from seeded "1"',
+    );
+    console.log('OK: JELA-834 — key-absent arms, identical to seeded "1"');
+  }
+
+  // --- kill switch: "0" leaves the shim inert ------------------------------
+  // Rollback is setItem(key,"0"), NEVER removeItem — key-absent is now ON.
+  {
+    const store = OFF();
     const b1 = boot(store);
     await b1.api.detectBitrate();
     const b2 = boot(store);
     await b2.api.detectBitrate();
-    assert.deepStrictEqual(b1.reqs, LADDER, "flag OFF: boot 1 runs the ladder");
-    assert.deepStrictEqual(b2.reqs, LADDER, "flag OFF: boot 2 runs it again");
-    assert.deepStrictEqual(Object.keys(store), [], "flag OFF: nothing stored");
-    assert.strictEqual(b1.win.__shellBitrate, undefined, "flag OFF: no state");
-    console.log("OK: default OFF — shim inert, ladder runs every boot");
+    assert.deepStrictEqual(b1.reqs, LADDER, 'flag "0": boot 1 runs the ladder');
+    assert.deepStrictEqual(b2.reqs, LADDER, 'flag "0": boot 2 runs it again');
+    assert.strictEqual(store[KEY], undefined, 'flag "0": nothing stored');
+    assert.strictEqual(b1.win.__shellBitrate, undefined, 'flag "0": no state');
+    console.log('OK: kill switch "0" — shim inert, ladder runs every boot');
   }
 
   // --- CONTROL: without the shim the ladder really does re-run -------------
@@ -232,7 +316,11 @@ const KEY = "jellyfin.shell.bitrate";
   {
     const b = boot(store);
     const v = await b.api.detectBitrate();
-    assert.deepStrictEqual(b.reqs, [], "boot 2 issues ZERO BitrateTest requests");
+    assert.deepStrictEqual(
+      b.reqs,
+      [],
+      "boot 2 issues ZERO BitrateTest requests",
+    );
     assert.strictEqual(v, first, "boot 2 returns the persisted value");
     assert.strictEqual(b.win.__shellBitrate.hits, 1, "hit counted");
     console.log("OK: AC1 boot 2 — zero requests, same value");
@@ -242,7 +330,11 @@ const KEY = "jellyfin.shell.bitrate";
   {
     const b = boot(store);
     b.api.serverAddress("https://srv.example");
-    assert.strictEqual(b.api.lastDetectedBitrate, 0, "onNetworkChange zeroed it");
+    assert.strictEqual(
+      b.api.lastDetectedBitrate,
+      0,
+      "onNetworkChange zeroed it",
+    );
     const v = await b.api.detectBitrate();
     assert.deepStrictEqual(b.reqs, [], "still zero after onNetworkChange()");
     assert.strictEqual(v, first, "still the persisted value");
@@ -287,7 +379,11 @@ const KEY = "jellyfin.shell.bitrate";
       });
     let b = boot(aged(23));
     await b.api.detectBitrate();
-    assert.deepStrictEqual(b.reqs, [], "23 h old is still fresh (24 h default)");
+    assert.deepStrictEqual(
+      b.reqs,
+      [],
+      "23 h old is still fresh (24 h default)",
+    );
 
     b = boot(aged(25));
     await b.api.detectBitrate();
@@ -316,7 +412,11 @@ const KEY = "jellyfin.shell.bitrate";
     assert.strictEqual(v1, 14e7, "in-network floors at 140 Mbit/s");
     const b2 = boot(s, { inNetwork: true });
     const v2 = await b2.api.detectBitrate();
-    assert.deepStrictEqual(b2.reqs, [], "in-network value is served from store");
+    assert.deepStrictEqual(
+      b2.reqs,
+      [],
+      "in-network value is served from store",
+    );
     assert.strictEqual(v2, v1, "and round-trips exactly");
     console.log("OK: IsInNetwork floor persists exactly");
   }
@@ -333,7 +433,11 @@ const KEY = "jellyfin.shell.bitrate";
     ]) {
       const b = boot(Object.assign(ON(), { [KEY]: bad }));
       const v = await b.api.detectBitrate();
-      assert.deepStrictEqual(b.reqs, LADDER, "corrupt store re-detects: " + bad);
+      assert.deepStrictEqual(
+        b.reqs,
+        LADDER,
+        "corrupt store re-detects: " + bad,
+      );
       assert(v > 0, "and still returns a real value: " + bad);
     }
     // A non-number bps with an OTHERWISE VALID record (matching id, fresh
@@ -345,7 +449,11 @@ const KEY = "jellyfin.shell.bitrate";
       });
       const b = boot(s);
       const v = await b.api.detectBitrate();
-      assert.deepStrictEqual(b.reqs, LADDER, "non-number bps re-detects: " + bps);
+      assert.deepStrictEqual(
+        b.reqs,
+        LADDER,
+        "non-number bps re-detects: " + bps,
+      );
       assert.strictEqual(typeof v, "number", "and yields a number: " + bps);
     }
     console.log("OK: corrupt/hostile store degrades to a real detection");
