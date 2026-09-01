@@ -1,12 +1,19 @@
 /*
  * JELA-740 (accepted CEO confirmation 45f50c90): query-param auth for API
- * GETs — opt-in via localStorage['jellyfin.shell.queryAuth']='1', default
- * OFF; 'jellyfin.shell.queryAuthDisabled'='1' is the reserved kill-switch.
+ * GETs. JELA-839 flipped it to opt-OUT — an ABSENT
+ * localStorage['jellyfin.shell.queryAuth'] now means ON, because the read
+ * site is instantHomeBody() at shell boot while the JELA-788 seeder that
+ * wrote the '1' runs from the JSI channel AFTER the lite->SPA handoff, so
+ * opt-in armed one boot late and left every cold boot paying 65-78 CORS
+ * preflights. Two independent per-TV kills: queryAuth='0' (a SET, never a
+ * removeItem) and queryAuthDisabled='1'.
  *
  * Extracts the SHIPPED instantHomeBody() and drives it through a DOM stub
  * + controllable XHR/fetch, pinning:
- *   - default OFF: no flag -> no __shellQA state, URLs and headers pass
- *     untouched; queryAuthDisabled beats queryAuth
+ *   - default ON (JELA-839): absent key -> __shellQA installs; a stored
+ *     '1' (an already-seeded fleet TV) behaves identically
+ *   - per-TV kill queryAuth='0': no __shellQA state, URLs and headers pass
+ *     untouched; queryAuthDisabled beats an armed flag
  *   - ON, fetch + plain-object headers: an absolute GET carrying
  *     Authorization (MediaBrowser ... Token="...") loses the header and
  *     gains api_key=<token>; other headers survive; the CALLER's opts and
@@ -56,10 +63,19 @@ const bodyFnSrc = extractFn("instantHomeBody");
 const body = new Function(bodyFnSrc + "; return instantHomeBody();")();
 
 // ---- static contract checks ------------------------------------------------
-assert(body.indexOf("jellyfin.shell.queryAuth") !== -1, "opt-in flag present");
+assert(body.indexOf("jellyfin.shell.queryAuth") !== -1, "flag present");
 assert(
   body.indexOf("jellyfin.shell.queryAuthDisabled") !== -1,
   "kill-switch honored",
+);
+// JELA-839: the gate must read through flgO (absent key = ON), not flg.
+assert(
+  body.indexOf('flgO("jellyfin.shell.queryAuth")') !== -1,
+  "JELA-839: queryAuth gate is opt-OUT (flgO)",
+);
+assert(
+  body.indexOf('flg("jellyfin.shell.queryAuth")') === -1,
+  "JELA-839: no opt-in (flg) read of queryAuth survives",
 );
 assert(body.indexOf("</script") === -1, "no </script literal");
 assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
@@ -254,7 +270,9 @@ function makeEnv(opts) {
       // and the netCalls indices shift.
       "jellyfin.shell.fetchCoalesceDisabled": "1",
     },
-    opts.qaOff ? {} : { "jellyfin.shell.queryAuth": "1" },
+    // JELA-839: opt-OUT. The armed arm is now the ABSENT key, so the default
+    // env seeds nothing and `qaOff` must SET "0" — a removeItem is an ON arm.
+    opts.qaOff ? { "jellyfin.shell.queryAuth": "0" } : {},
     opts.store || {},
   );
   const localStorage = {
@@ -313,17 +331,87 @@ function makeEnv(opts) {
 
 const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
 
-// ---- 1. default OFF ---------------------------------------------------------
+// ---- 1. per-TV kill: queryAuth="0" ------------------------------------------
 {
   const env = makeEnv({ qaOff: true });
   env.run();
-  assert(!env.window.__shellQA, "no flag -> no __shellQA state");
+  assert(!env.window.__shellQA, 'queryAuth="0" -> no __shellQA state');
   env.window.fetch(API, { headers: { Authorization: AUTH } });
   assert.strictEqual(env.netCalls[0].url, API, "fetch URL untouched when OFF");
   assert.strictEqual(
     env.netCalls[0].opts.headers.Authorization,
     AUTH,
     "auth header untouched when OFF",
+  );
+}
+
+// ---- 1b. JELA-839: an ABSENT key ARMS (this is the whole flip) ---------------
+// The cold-boot store below is the first-install state: no queryAuth key at
+// all, because the JELA-788 JSI seeder has not run yet on this boot. Before
+// JELA-839 this arm was inert and the boot paid a preflight per API GET.
+{
+  const env = makeEnv({});
+  assert(
+    env.store["jellyfin.shell.queryAuth"] === undefined,
+    "1b: precondition — the cold-boot store holds no queryAuth key",
+  );
+  env.run();
+  const qa = env.window.__shellQA;
+  assert(qa && qa.on === 1, "1b: absent key -> __shellQA installs (opt-OUT)");
+  env.window.fetch(API, { headers: { Authorization: AUTH } });
+  assert.strictEqual(
+    env.netCalls[0].url,
+    API + "&api_key=" + TOK,
+    "1b: cold-boot GET is rewritten to api_key (no preflight)",
+  );
+  assert.strictEqual(
+    env.netCalls[0].opts.headers.Authorization,
+    undefined,
+    "1b: the non-safelisted auth header is gone",
+  );
+}
+
+// ---- 1c. an already-seeded fleet TV ("1") behaves identically ----------------
+{
+  const env = makeEnv({ store: { "jellyfin.shell.queryAuth": "1" } });
+  env.run();
+  assert(env.window.__shellQA, '1c: stored "1" still arms');
+  env.window.fetch(API, { headers: { Authorization: AUTH } });
+  assert.strictEqual(
+    env.netCalls[0].url,
+    API + "&api_key=" + TOK,
+    '1c: stored "1" rewrites exactly as the absent key does',
+  );
+}
+
+// ---- 1d. a THROWING localStorage fails CLOSED -------------------------------
+// Compiled out of the SHIPPED helper rather than driven through the whole
+// body: under a store that throws for every key the body takes many other
+// paths, so a bare "__shellQA is absent" would pass for the wrong reason.
+// flgO must catch and return false — a device that cannot read its own kill
+// switch must not arm an un-killable feature.
+{
+  const helper = /'(function flgO\(k\)\{[^']*?\})'/.exec(
+    fs.readFileSync(SRC, "utf8"),
+  );
+  assert(helper, "1d: flgO helper found in the shipped source");
+  const flgO = new Function("localStorage", helper[1] + "; return flgO;")({
+    getItem() {
+      throw new Error("SecurityError");
+    },
+  });
+  assert.strictEqual(
+    flgO("jellyfin.shell.queryAuth"),
+    false,
+    "1d: throwing localStorage -> flgO fails closed",
+  );
+  const flgOk = new Function("localStorage", helper[1] + "; return flgO;")({
+    getItem: () => null,
+  });
+  assert.strictEqual(
+    flgOk("jellyfin.shell.queryAuth"),
+    true,
+    "1d: absent key -> flgO is ON",
   );
 }
 
@@ -334,6 +422,18 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   });
   env.run();
   assert(!env.window.__shellQA, "queryAuthDisabled -> no install");
+}
+
+// ---- 2b. queryAuthDisabled beats an explicitly seeded "1" -------------------
+{
+  const env = makeEnv({
+    store: {
+      "jellyfin.shell.queryAuth": "1",
+      "jellyfin.shell.queryAuthDisabled": "1",
+    },
+  });
+  env.run();
+  assert(!env.window.__shellQA, "2b: Disabled beats a seeded arm");
 }
 
 // ---- 3. ON: fetch + plain-object headers ------------------------------------
