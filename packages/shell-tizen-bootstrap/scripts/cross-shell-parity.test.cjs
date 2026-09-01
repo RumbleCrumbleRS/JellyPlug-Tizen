@@ -228,8 +228,11 @@ const INTENTIONAL_DIVERGENCES = [
     // d.bulkReady and now calls the shared d.want() coalescer on
     // window.__shellTxDrop. Identical block in both seeds (both go through
     // the same batcher installed by txBundleAttach); reasons unchanged.
-    retail: "ecb2af648d7e2bd9",
-    boot: "353482310345646b",
+    // JELA-834: re-pinned — the bitrateCache gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons
+    // unchanged. (Same class of fix as the JELA-827 re-pins above.)
+    retail: "22ffe711d66a82b6",
+    boot: "5b9421f786d6e7bf",
   },
   {
     name: "buildDiagSeedScript",

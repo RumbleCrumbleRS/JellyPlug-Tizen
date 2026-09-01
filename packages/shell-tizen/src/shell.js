@@ -1332,10 +1332,20 @@
       // Tunable via "jellyfin.shell.bitrateTtlMs" so the fleet can be retuned
       // without a shell release.
       //
-      // Flag-dark: opt in with localStorage["jellyfin.shell.bitrateCache"]="1".
+      // JELA-834: fleet-ON (opt-OUT). JELA-817 seeded "1" fleet-wide but left
+      // this gate opt-in, so it was never armed on a first boot — the JSI
+      // channel that writes the key runs only after the lite→SPA handoff
+      // (JELA-802), so on any cold boot with no prior "1" in LS (fresh
+      // install, wipe, eviction) the key is absent when this line executes and
+      // the whole block returns. That boot then SPENDS the full 5.77 MB probe
+      // and, worse, can never seed the cache it exists to write, so boots 2..N
+      // inherit nothing. Read for the kill switch instead so a key-absent boot
+      // caches. Kill switch: set "jellyfin.shell.bitrateCache" to "0" (the
+      // channel seeder guards !== "0", so a per-TV "0" is durable).
+      // Rollback is setItem(key,"0"), NEVER removeItem — key-absent is now ON.
       // Diag: window.__shellBitrate = {on,armed,hits,miss,saves,bps,age}.
       "  try{(function(){",
-      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")!=="1")return;',
+      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")==="0")return;',
       '    var K="jellyfin.shell.bitrate";',
       "    var G=window.__shellBitrate={on:1,armed:0,hits:0,miss:0,saves:0,bps:0,age:-1};",
       '    function ttl(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.bitrateTtlMs")||"",10);}catch(_){}return v>0?v:864e5;}',

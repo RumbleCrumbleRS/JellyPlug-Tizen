@@ -53,6 +53,10 @@
  *     C2. both flags on + cold store -> nothing pre-paint, then exactly one
  *         real detection after paint, persisted for the next boot.
  *     C3. bitrateCache alone does NOT defer — the flags stay independent.
+ *     C4. NEITHER key present (first install) -> BOTH arm, and the one
+ *         post-paint detection runs through the 686 wrap. JELA-834: before
+ *         the opt-OUT flip the 686 half was inert here, so a first boot
+ *         spent the 5.77 MB ladder AND seeded nothing for boot 2.
  *   PART D — JELA-737 SETTLE GATE (the shipped default).
  *
  * JELA-737. First paint is the wrong release gate. JELA-730 showed firstCard
@@ -151,7 +155,10 @@ const seed = buildSeed();
 
 function extractShim() {
   const kill = seed.indexOf(KILL_LINE);
-  check(srcLabel + ": built seed contains the opt-OUT gate line (JELA-823)", kill !== -1);
+  check(
+    srcLabel + ": built seed contains the opt-OUT gate line (JELA-823)",
+    kill !== -1,
+  );
   check(
     srcLabel + ": built seed does NOT contain the old opt-in gate line",
     seed.indexOf(OLD_OPTIN_LINE) === -1,
@@ -186,7 +193,10 @@ for (const [label, text] of [
   [srcLabel, src],
   [minLabel, min],
 ]) {
-  check(label + ": opt-OUT gate survives minification", text.includes(KILL_LINE));
+  check(
+    label + ": opt-OUT gate survives minification",
+    text.includes(KILL_LINE),
+  );
   check(label + ": old opt-in gate absent", !text.includes(OLD_OPTIN_LINE));
 }
 check(srcLabel + ": flag key present", src.includes(FLAG));
@@ -417,7 +427,10 @@ if (!shim) {
     r.fireApi();
     vendorSchedule(api, r.clock);
     r.clock.advance(6000);
-    check("B0b: key='0' -> no diag state (kill switch)", r.state() === undefined);
+    check(
+      "B0b: key='0' -> no diag state (kill switch)",
+      r.state() === undefined,
+    );
     check(
       "B0b: key='0' -> vendor probe fires undeferred",
       api.calls === 1,
@@ -611,11 +624,14 @@ if (!shim) {
 // post-paint probe 684 re-arms is served from 686's persisted store, so a
 // warm boot costs zero requests instead of the 5.5 MiB ladder.
 //
-// The 686 shim is lifted from the SAME built seed by its own opt-in line, so
-// if either block is dropped or mangled by a merge this part stops resolving.
+// The 686 shim is lifted from the SAME built seed by its own kill-switch line,
+// so if either block is dropped or mangled by a merge this part stops
+// resolving. JELA-834 flipped that line from opt-in to opt-OUT; both shims are
+// now fleet-ON with an absent key, so PART C seeds every arm EXPLICITLY rather
+// than relying on a default.
 // ===========================================================================
 const CACHE_FLAG = "jellyfin.shell.bitrateCache";
-const CACHE_KILL = 'localStorage.getItem("' + CACHE_FLAG + '")!=="1"';
+const CACHE_KILL = 'localStorage.getItem("' + CACHE_FLAG + '")==="0"';
 
 function extractShimAt(killLine) {
   const kill = seed.indexOf(killLine);
@@ -718,11 +734,14 @@ if (!shim || !cacheShim) {
 
   // --- C1: both flags on, warm store -> 0 probes pre-paint, cache hit after.
   {
-    const r = runBoth({ [FLAG]: "1", [CACHE_FLAG]: "1" }, {
-      bps: 42000000,
-      t: 1,
-      id: "srv1|https://tv.example.test",
-    });
+    const r = runBoth(
+      { [FLAG]: "1", [CACHE_FLAG]: "1" },
+      {
+        bps: 42000000,
+        t: 1,
+        id: "srv1|https://tv.example.test",
+      },
+    );
     const api = makeCacheApi();
     r.win.ApiClient = api;
     r.fireApi();
@@ -730,7 +749,9 @@ if (!shim || !cacheShim) {
     r.clock.advance(30000);
     check(
       "C1: both armed",
-      r.win.__shellBT && r.win.__shellBT.on === 1 && r.win.__shellBitrate.armed === 1,
+      r.win.__shellBT &&
+        r.win.__shellBT.on === 1 &&
+        r.win.__shellBitrate.armed === 1,
       JSON.stringify({ bt: r.win.__shellBT, br: r.win.__shellBitrate }),
     );
     check(
@@ -784,6 +805,47 @@ if (!shim || !cacheShim) {
       "C3: bitrateCache alone (684 killed) leaves the pre-paint probe running",
       api.calls === 1 && !r.win.__shellBT,
       JSON.stringify({ calls: api.calls, bt: r.win.__shellBT || null }),
+    );
+  }
+
+  // --- C4 (JELA-834): NEITHER key present -> BOTH shims arm. --------------
+  // This is the first-install composition: the JSI channel that seeds "1"
+  // runs only after the lite→SPA handoff, so on a cold boot both gates see
+  // an absent key. Before JELA-834 the 686 half was inert here, so boot 1
+  // both spent the ladder and persisted nothing for boot 2 to hit.
+  {
+    const store = {};
+    const r = runBoth(store, null);
+    const api = makeCacheApi(9000000);
+    r.win.ApiClient = api;
+    r.fireApi();
+    vendorSchedule(api, r.clock);
+    r.clock.advance(30000);
+    check(
+      "C4: both shims arm with NO keys in the store",
+      r.win.__shellBT &&
+        r.win.__shellBT.on === 1 &&
+        r.win.__shellBitrate &&
+        r.win.__shellBitrate.armed === 1,
+      JSON.stringify({ bt: r.win.__shellBT, br: r.win.__shellBitrate || null }),
+    );
+    check(
+      "C4: still zero detection before paint",
+      api.calls === 0,
+      JSON.stringify({ calls: api.calls }),
+    );
+    r.firePaint();
+    r.clock.advance(5000);
+    // Same assertion shape as C2, and for the same reason: the store write
+    // happens in a REAL promise .then, which the virtual clock does not own,
+    // so `saves`/the stored row are not yet visible on this synchronous tick.
+    // `miss === 1` is the sound proof that the wrap ran and took the
+    // measure-then-persist path. The persisted row on an ABSENT key is pinned
+    // in bitrate-cache.test.cjs, which awaits properly.
+    check(
+      "C4: exactly one real detection after paint, through the 686 wrap",
+      api.calls === 1 && r.win.__shellBitrate.miss === 1,
+      JSON.stringify({ calls: api.calls, br: r.win.__shellBitrate }),
     );
   }
 }
