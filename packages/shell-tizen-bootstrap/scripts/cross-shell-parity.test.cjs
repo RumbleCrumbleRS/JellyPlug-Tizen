@@ -228,14 +228,17 @@ const INTENTIONAL_DIVERGENCES = [
     // d.bulkReady and now calls the shared d.want() coalescer on
     // window.__shellTxDrop. Identical block in both seeds (both go through
     // the same batcher installed by txBundleAttach); reasons unchanged.
+    // JELA-834: re-pinned — the bitrateCache gate flipped from opt-in to
+    // opt-OUT in both seeds. Identical change in both shells; reasons
+    // unchanged. (Same class of fix as the JELA-827 re-pins above.)
     // JELA-848: re-pinned — the drop fetch+eval moved into a shared
     // __babelFromDrop(tag) helper, and both interception paths (rewrite +
     // srcPipeline) now short-circuit a babel.min.js src into __babelRepoint
     // instead of fetching the bootstrap's relative URL. Identical block in
     // both seeds; the divergence reason (retail's __txResolve vs boot's
     // per-call-site __dp/pre gate) is unchanged.
-    retail: "33a22f6b868317e2",
-    boot: "aa06786c1dd7a283",
+    retail: "4dddbdd0d3a2e8d8",
+    boot: "e3bc36e134434c2f",
   },
   {
     name: "buildDiagSeedScript",
