@@ -68,6 +68,37 @@ public static class TxDropConstants
     public const string ScrapeTplSrc =
         "`(/?[A-Za-z0-9_@%-]+(?:/[A-Za-z0-9_@%.-]+)*\\.js)(\\?[^`]*)?`";
 
+    /// <summary>
+    /// The seed __txScrapeBodies name cap. The device primer is a SPECULATIVE
+    /// prefetch running on the TV's login screen, so 80 bounds how many
+    /// requests a TV will fire at a plugin it knows nothing about. Reference
+    /// value only — the builder must NOT inherit it (see BuilderScrapeNameCap).
+    /// </summary>
+    public const int SeedScrapeNameCap = 80;
+
+    /// <summary>
+    /// JELA-850: the BUILDER's name cap, deliberately divorced from
+    /// SeedScrapeNameCap. The two sides bound different costs — the seed
+    /// bounds TV requests, the builder bounds a background scheduled task
+    /// fetching over loopback. Sharing 80 silently truncated the drop: the
+    /// measured Jellyfin Enhanced loader lists 152 module names, so 70 were
+    /// never fetched and 63 of them were Babel-transpiled on the TV main
+    /// thread every cold boot (2,362 ms; a 2.2-4.9 s post-paint freeze).
+    /// Drop coverage does NOT depend on the primer having prefetched a body —
+    /// the device resolves the drop by content hash on whatever it loads — so
+    /// the builder may scrape wider than the seed without breaking parity.
+    /// Still bounded: a body full of string literals must not run away.
+    /// </summary>
+    public const int BuilderScrapeNameCap = 512;
+
+    /// <summary>
+    /// JELA-850: total fetch attempts (dir probes included) the dynamic scan
+    /// may spend. Raised alongside BuilderScrapeNameCap — leaving it at the
+    /// old 200 would just move the truncation from the scrape to the fetch
+    /// loop. Purely a runaway backstop; a healthy rebuild uses ~160.
+    /// </summary>
+    public const int DynScanFetchCap = 1000;
+
     // RegexOptions.ECMAScript keeps \d/\w/\s ASCII-only, matching the JS
     // regexes these sources are lockstep with.
     public static readonly Regex OracleRe = new(OracleSrc, RegexOptions.ECMAScript | RegexOptions.Compiled);

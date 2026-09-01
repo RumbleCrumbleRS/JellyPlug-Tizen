@@ -56,7 +56,7 @@
  * dynamic module URLs it would inject at runtime (mirror of the seed's
  * __txScrapeBodies — plugin-agnostic, regex-driven); discovered modules are
  * fetched and lowered into the drop too, so on-device dynamic injection
- * drop-HITs and Babel never loads. Capped at 200 fetch attempts.
+ * drop-HITs and Babel never loads. Capped at DYN_FETCH_CAP fetch attempts.
  */
 
 import { createRequire } from "node:module";
@@ -122,6 +122,27 @@ export const SCRAPE_ABS_SRC =
 // complete .js path; interpolation is only tolerated after the `?`.
 export const SCRAPE_TPL_SRC =
   "`(/?[A-Za-z0-9_@%-]+(?:/[A-Za-z0-9_@%.-]+)*\\.js)(\\?[^`]*)?`";
+
+// The seed __txScrapeBodies name cap. The device primer is a SPECULATIVE
+// prefetch on the TV's login screen, so 80 bounds how many requests a TV
+// fires at a plugin it knows nothing about. Reference value only.
+export const SCRAPE_NAME_CAP_SEED = 80;
+// JELA-850: the BUILDER's name cap, deliberately divorced from the seed's.
+// The two bound different costs — the seed bounds TV requests, the builder
+// bounds an offline/loopback fetch loop. Sharing 80 silently truncated the
+// drop: the measured Jellyfin Enhanced loader lists 152 module names, so 70
+// were never fetched and 63 of them were Babel-transpiled on the TV main
+// thread every cold boot (2,362 ms; a 2.2-4.9 s post-paint freeze). Drop
+// coverage does NOT depend on the primer having prefetched a body — the
+// device resolves the drop by content hash on whatever it loads — so the
+// builder may scrape wider than the seed without breaking parity. Still
+// bounded: a body full of string literals must not run away.
+export const SCRAPE_NAME_CAP_BUILD = 512;
+// JELA-850: total fetch attempts (dir probes included) the dynamic scan may
+// spend. Raised with SCRAPE_NAME_CAP_BUILD — leaving it at the old 200 would
+// just move the truncation from the scrape to the fetch loop. Runaway
+// backstop only; a healthy build uses ~160.
+export const DYN_FETCH_CAP = 1000;
 
 // Same fnv1a-over-UTF-16-code-units the shells use (txFnv1a / seed __txFnv).
 export function txFnv1a(s) {
@@ -230,7 +251,9 @@ function scriptUrlsFromWebIndex(html, serverUrl) {
 // /js|/scripts|/modules last-segment first) plus the source's own directory;
 // the driver probes names[0] across them and commits to the dir that answers
 // with JS. Absolute .js literals are exact candidates as-is.
-export function scrapeDynamicRefs(body, from) {
+// JELA-850: nameCap defaults to the BUILDER bound, not the seed's 80 — see
+// SCRAPE_NAME_CAP_BUILD. Pass SCRAPE_NAME_CAP_SEED to reproduce the seed.
+export function scrapeDynamicRefs(body, from, nameCap = SCRAPE_NAME_CAP_BUILD) {
   const REL = new RegExp(SCRAPE_REL_SRC, "g");
   const ABS = new RegExp(SCRAPE_ABS_SRC, "g");
   body = String(body || "");
@@ -241,7 +264,7 @@ export function scrapeDynamicRefs(body, from) {
   const dirs = [];
   const seenD = new Set();
   let m;
-  while ((m = REL.exec(body)) && names.length < 80) {
+  while ((m = REL.exec(body)) && names.length < nameCap) {
     const nm = m[2];
     if (seenN.has(nm)) continue;
     seenN.add(nm);
@@ -249,7 +272,7 @@ export function scrapeDynamicRefs(body, from) {
     else names.push(nm);
   }
   const TPL = new RegExp(SCRAPE_TPL_SRC, "g");
-  while ((m = TPL.exec(body)) && names.length < 80) {
+  while ((m = TPL.exec(body)) && names.length < nameCap) {
     const nm = m[1];
     if (seenN.has(nm)) continue;
     seenN.add(nm);
@@ -525,7 +548,7 @@ async function main() {
   let discovered = 0;
   if (!args.noDynScan) {
     const seenUrls = new Set(sources.map((s) => s.from));
-    const dyn = await discoverDynamicSources(finals, seenUrls, 200);
+    const dyn = await discoverDynamicSources(finals, seenUrls, DYN_FETCH_CAP);
     for (const s of dyn) {
       if ((await lowerOne(s, true)) != null) discovered++;
     }
