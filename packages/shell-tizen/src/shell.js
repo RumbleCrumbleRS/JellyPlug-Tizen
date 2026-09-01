@@ -440,6 +440,55 @@
     }
   }
 
+  // ---- Head-IIFE prefetch skip, learned per device (JELA-853) ------------
+  //
+  // JELA-226 built `jellyfin.shell.webPrefetchSkip` to stop the head IIFE
+  // issuing the /web/index.html + /web/config.json pair on boots where the
+  // shell adopts its LS body cache AND the JELA-59 epoch gate suppresses the
+  // revalidation drain — on those boots the pair is fetched and NEVER read.
+  // The flag shipped opt-in (default off) and so has never armed.
+  //
+  // It cannot be flipped to opt-out the way JELA-839 flipped queryAuth: the
+  // READ SITE is `primeWebBoot` in the WGT bootstrap index.html, which is
+  // baked into installed widgets and cannot be updated without a reinstall.
+  // The only lever the shell has on installed TVs is the flag VALUE, so this
+  // seeds it — and therefore arms one boot late, exactly as JELA-821/827/831
+  // recorded for every channel-seeded shell flag.
+  //
+  // Seeded from what THIS boot observed rather than set once, so it is
+  // self-correcting: a boot that consumed the prefetch writes '0' and the
+  // next boot prefetches again. Worst case is always today's behaviour.
+  //   drain suppressed + cache hit -> pair was dead   -> '1'
+  //   anything else                -> pair was used   -> '0'
+  // Never removeItem: an absent key is the bootstrap's "prefetch" arm, so a
+  // remove would silently mean '0' anyway and lose the distinction (JELA-832).
+  // Operator kill: `jellyfin.shell.wpsAuto='0'` stops the seeder writing at
+  // all, leaving whatever value is already there.
+  //
+  // SHIPS DARK — `jellyfin.shell.wpsSeed` must be '1' for the seeder to write.
+  // Not the usual dark-merge caution: arming webPrefetchSkip runs a branch of
+  // `primeWebBoot` that has NEVER executed on a real panel, and that branch
+  // lives in the WGT bootstrap, which installed TVs cannot update. A defect
+  // there could not be fixed by shipping a new shell — it would need a
+  // reinstall on every TV. So this must not ride a publish silently: it needs
+  // an explicit flip AND on-device (Q60R) validation of a skipped boot first.
+  // Arms TWO boots late once flipped: boot N seeds nothing (gate off), boot
+  // N+1 seeds webPrefetchSkip, boot N+2 is the first that skips.
+  var WPS_KEY = "jellyfin.shell.webPrefetchSkip";
+  var WPS_AUTO_KEY = "jellyfin.shell.wpsAuto";
+  var WPS_SEED_GATE_KEY = "jellyfin.shell.wpsSeed";
+
+  function seedWebPrefetchSkip(dead) {
+    try {
+      if (localStorage.getItem(WPS_SEED_GATE_KEY) !== "1") return;
+      if (localStorage.getItem(WPS_AUTO_KEY) === "0") return;
+      var v = dead ? "1" : "0";
+      window.__shellWpsSeed = v;
+      if (localStorage.getItem(WPS_KEY) === v) return;
+      localStorage.setItem(WPS_KEY, v);
+    } catch (_) {}
+  }
+
   function readWebIndexCache(serverOrigin) {
     try {
       var raw = localStorage.getItem(WEB_INDEX_CACHE_KEY);
@@ -10138,6 +10187,11 @@
     var cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null;
     var cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null;
     var indexCacheHit = !!(cachedIndex && cachedConfig);
+    // JELA-853: on a cache MISS the primary path below consumes the prefetch
+    // (mkIdxF/mkCfgF adopt it), so it earned its place — keep prefetching.
+    // Seeded synchronously here because the cache-miss path never reaches the
+    // epoch callback that carries the other verdict.
+    if (!indexCacheHit) seedWebPrefetchSkip(false);
     if (indexCacheHit) {
       window.__shellIndexCacheHits++;
       window.__shellWebIndexCacheAdopted = 1;
@@ -10169,8 +10223,14 @@
         .then(function () {
           if (window.__shellCfgEM === 1) {
             ceSup("idx");
+            // JELA-853: this is the boot shape where the head-IIFE pair is
+            // pure waste — the cache resolved both promises and the drain
+            // that would have consumed the in-flight fetches just bailed.
+            // Tell the next boot's bootstrap not to issue them.
+            seedWebPrefetchSkip(true);
             return;
           }
+          seedWebPrefetchSkip(false);
           var iOk = drain(mkIdxF, cachedIndex, writeWebIndexCache).then(
             function (ok) {
               if (revalStart) {
