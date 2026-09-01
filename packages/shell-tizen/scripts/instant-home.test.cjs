@@ -1045,6 +1045,7 @@ function settleHome(env) {
 // ============================================================================
 
 const CAPKEY = "jellyfin.shell.instantHomeSettleCapMs";
+const SAMPLEKEY = "jellyfin.shell.instantHomeMutationSampleMs";
 
 // ---- static contract: kill-switch keys + dismiss reasons exist, stock path kept ----
 assert(
@@ -1069,6 +1070,18 @@ assert(
   body.indexOf("v>=1000&&v<=23000") !== -1 &&
     body.indexOf("return 23000") !== -1,
   "settle cap clamps to <= 23000 ms (never tunable up)",
+);
+// JELA-851: the mutation gate samples at most once per muGap() ms (0..2000,
+// default 300; 0 restores every-batch). The per-batch scan is capped so one
+// large burst cannot walk the whole record list.
+assert(body.indexOf(SAMPLEKEY) !== -1, "mutation sample-interval key present");
+assert(
+  body.indexOf("v>=0&&v<=2000") !== -1 && body.indexOf("return 300") !== -1,
+  "mutation sample interval clamps to 0..2000 ms, default 300",
+);
+assert(
+  body.indexOf("if(mn>48)mn=48") !== -1,
+  "per-batch record scan is capped",
 );
 
 // Fake MutationObserver the body picks up via window.MutationObserver.
@@ -1249,6 +1262,130 @@ function fakeMO(env) {
   );
   assert.strictEqual(G.why, "settled");
   assert.strictEqual(mo.disconnected, 1, "observer disconnected on dismissal");
+}
+
+// ---- 24b. JELA-851: the settle observer SAMPLES instead of testing every batch --
+// Every visibility test calls getBoundingClientRect inside a MutationObserver
+// microtask, which forces a synchronous layout. Measured on a cold census boot
+// the callback cost 2.30 ms per INVOCATION but only 0.41 ms per record, so the
+// bill tracks how OFTEN it runs. muGap() (default 300 ms) is the throttle.
+// NB env.advance(t) is an ABSOLUTE clock set, not a delta.
+{
+  const store = makeSnapshotStore();
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  const G = env.window.__shellIH;
+  const above = visibleCard(env);
+  // Count rect reads, not just the counter the body keeps: a throttle that
+  // skipped the counter but still read the rect would pass a muRun-only check.
+  let rects = 0;
+  const target = {
+    getBoundingClientRect() {
+      rects++;
+      return above.rect;
+    },
+  };
+  mo.cb([{ target }]); // t=0, first batch after arming always samples
+  assert.strictEqual(rects, 1, "first batch samples");
+  for (const t of [50, 100, 150, 200, 250, 290]) {
+    env.advance(t);
+    mo.cb([{ target }]);
+  }
+  assert.strictEqual(rects, 1, "batches inside the 300 ms window read no rect");
+  assert.strictEqual(G.muRun, 1, "one sample taken");
+  assert.strictEqual(G.muSkip, 6, "the other six batches were skipped");
+
+  // Past the window, the next batch samples again.
+  env.advance(400);
+  mo.cb([{ target }]);
+  assert.strictEqual(rects, 2, "a batch after the gap samples again");
+  assert.strictEqual(G.muRun, 2);
+}
+
+// ---- 24c. JELA-851: throttling must not break the settle semantics -----------
+// Settling EARLY over a still-shifting page is the dangerous direction, so pin
+// that sustained above-fold churn still holds the overlay through the sampler.
+{
+  const store = makeSnapshotStore();
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  const G = env.window.__shellIH;
+  const above = visibleCard(env);
+  // One batch every 400 ms — each clears the 300 ms gap, so each is sampled.
+  for (let t = 1000; t <= 3800; t += 400) {
+    env.advance(t);
+    mo.cb([{ target: above }]);
+  }
+  assert.strictEqual(G.dismissed, 0, "sustained above-fold churn still holds");
+  env.advance(5600); // 1.8 s after the last above-fold mutation
+  assert.strictEqual(G.dismissed, 1, "settles once the churn stops");
+  assert.strictEqual(G.why, "settled");
+}
+
+// ---- 24d. JELA-851: sample=0 restores the pre-throttle every-batch behaviour --
+{
+  const store = makeSnapshotStore();
+  store[SAMPLEKEY] = "0";
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  const G = env.window.__shellIH;
+  const above = visibleCard(env);
+  let rects = 0;
+  const target = {
+    getBoundingClientRect() {
+      rects++;
+      return above.rect;
+    },
+  };
+  mo.cb([{ target }]);
+  for (const t of [10, 20, 30, 40, 50]) {
+    env.advance(t);
+    mo.cb([{ target }]);
+  }
+  assert.strictEqual(rects, 6, "kill switch: every batch reads a rect again");
+  assert.strictEqual(G.muRun, 6);
+  assert(!G.muSkip, "kill switch: nothing skipped");
+}
+
+// ---- 24e. JELA-851: a throwing visibility check still fails CLOSED ------------
+{
+  const store = makeSnapshotStore();
+  const env = makeEnv({ store });
+  const mo = fakeMO(env);
+  env.run();
+  env.setCards([
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+    visibleCard(env),
+  ]);
+  const G = env.window.__shellIH;
+  const boom = {
+    getBoundingClientRect() {
+      throw new Error("layout exploded");
+    },
+  };
+  env.advance(2500);
+  mo.cb([{ target: boom }]);
+  env.advance(3500);
+  assert.strictEqual(
+    G.dismissed,
+    0,
+    "a throwing check counts as a mutation (overlay holds)",
+  );
+  // and the clock it stamped is the throw time, not a stale value
+  env.advance(4500);
+  assert.strictEqual(G.dismissed, 1, "settles 1.5 s after the throwing batch");
+  assert.strictEqual(G.why, "settled");
 }
 
 // ---- 25. WS-2 new stylesheets reset the settle clock ---------------------------

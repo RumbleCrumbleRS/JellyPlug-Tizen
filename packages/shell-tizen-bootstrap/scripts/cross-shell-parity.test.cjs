@@ -108,6 +108,7 @@ const EXPECTED_MIRRORED = [
   "readBundlePatchState",
   "writeBundlePatchState",
   "webCacheEnabled",
+  "seedWebPrefetchSkip",
   "readWebIndexCache",
   "readWebConfigCache",
   "writeWebConfigCache",
@@ -249,8 +250,16 @@ const INTENTIONAL_DIVERGENCES = [
     // tx reclaim (__TXBK/__txBudgetOn/__txNsScan/__txReclaim, plus __txSet's
     // quota arm routing through it), byte-identical in the two shells; only
     // the surrounding buildSeedScript stays divergent.
-    retail: "ee3538df800c609f",
-    boot: "9ea41d44648da548",
+    // JELA-861: re-pinned — maybeTranspile now takes the caller's already-
+    // computed needsTx() verdict (`need`) instead of re-deriving it, and every
+    // seed call site in BOTH shells hoists that verdict into __n and reuses it
+    // across the drop attempt, the Babel prime and maybeTranspile. needsTx is a
+    // full `new Function(code)` parse, so this removes a whole redundant parse
+    // per body: 65 of 304 distinct bodies / 1.09 MB of 6.69 MB on the JELA-112
+    // M63 rig. Landed in both shells; only the surrounding buildSeedScript
+    // (retail __txResolve vs boot per-call-site gate) stays divergent.
+    retail: "311baccd51d3c9be",
+    boot: "a3ac40c8646a3f0d",
   },
   {
     name: "buildDiagSeedScript",
@@ -306,8 +315,11 @@ const INTENTIONAL_DIVERGENCES = [
     // helper) after the JELA-710 font rewrite.
     // JELA-716: re-pinned — both load paths now also route the html through
     // stripDeadMediaBarJs (shared, auto-guarded) after the JE-defer strip.
-    retail: "4e85661be234164c",
-    boot: "ca0eed4d39976fb6",
+    // JELA-853: re-pinned — both load paths now seed
+    // `jellyfin.shell.webPrefetchSkip` from what the boot observed, so the
+    // next boot's head IIFE stops issuing a /web/ pair nothing will read.
+    retail: "db9f0c1875856c37",
+    boot: "0a1959c4eb6ed17f",
   },
   {
     name: "bootstrap",
