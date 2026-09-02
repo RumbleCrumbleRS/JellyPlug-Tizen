@@ -26,10 +26,13 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-557 cache transpiled plugin bodies in localStorage so warm cold
 *JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
 *JEL-1150 TX_VER is derived from babel inputs at widget parse time
+*JEL-184 Deliberately NOT derived from document.baseURI alone: the
 *JEL-178 drop ONLY the per-load epoch-ms cache-buster (JE's
 *JEL-26 side txKey above lockstep).
 *JEL-619 version-keyed plugin fetch caching in the DYNAMIC pipeline
 *JEL-554 v34): record the first 10 missed src URLs alongside the
+*JEL-131 the primer — lands here, so refusing a foreign-origin key
+*JEL-619 "vqk:" path index are all named after the URL they serve
 *JEL-405 dynamic-injection paths inline plugin bodies via textContent
 *JEL-557 cache short-circuit before network fetch.
 *JEL-554 v32): only call babel.transform when the body actually
@@ -199,10 +202,13 @@ HARD_CAP budget on code. Floor: >= 80 breadcrumb lines (JEL-929).
 *JEL-557 cache transpiled plugin bodies in localStorage so warm cold
 *JEL-557 v36): expose TXVER on window so QA HUD/overlay can read
 *JEL-1150 TX_VER is derived from babel inputs at widget parse time
+*JEL-184 Deliberately NOT derived from document.baseURI alone: the
 *JEL-178 drop ONLY the per-load epoch-ms cache-buster (JE's
 *JEL-26 side txKey above lockstep).
 *JEL-619 version-keyed plugin fetch caching in the DYNAMIC pipeline
 *JEL-554 v34): record the first 10 missed src URLs alongside the
+*JEL-131 the primer — lands here, so refusing a foreign-origin key
+*JEL-619 "vqk:" path index are all named after the URL they serve
 *JEL-405 dynamic-injection paths inline plugin bodies via textContent
 *JEL-557 cache short-circuit before network fetch.
 *JEL-554 v32): only call babel.transform when the body actually

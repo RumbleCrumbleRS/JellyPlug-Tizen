@@ -258,8 +258,13 @@ const INTENTIONAL_DIVERGENCES = [
     // per body: 65 of 304 distinct bodies / 1.09 MB of 6.69 MB on the JELA-112
     // M63 rig. Landed in both shells; only the surrounding buildSeedScript
     // (retail __txResolve vs boot per-call-site gate) stays divergent.
-    retail: "311baccd51d3c9be",
-    boot: "a3ac40c8646a3f0d",
+    // JELA-854: re-pinned — both seeds gained the tx-cache origin guard
+    // (__TXOGK/__txOgOn/__TXORG/__txForeign, the __txSet refusal, the
+    // __recDyn + primer-norm() filters, __txSweepForeign and the __DYNKEY
+    // rewrite on the 12 s hygiene timer). Landed byte-identically in both;
+    // they still hash apart only for the reason above.
+    retail: "5c5b29fd1f687898",
+    boot: "ef8a1f65453bbd68",
   },
   {
     name: "buildDiagSeedScript",

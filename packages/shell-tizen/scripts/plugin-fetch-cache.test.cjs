@@ -147,13 +147,19 @@ function compileSeed(src, label) {
     "__txFam",
     "__txGenRec",
     "__txGet",
+    // JELA-854: see tx-origin-guard.test.cjs — __txSet consults __txForeign.
+    "__txForeign",
     "__txSet",
   ]
     .map((n) => liftSeedFn(src, n, label))
     .join("\n");
   const prelude =
     'var __TXPFX="tx:";var __TXLRUKEY="txlru";var __TXREF="@@shellref:";' +
-    'var __TXGENK="jellyfin.shell.txGenSweep";';
+    'var __TXGENK="jellyfin.shell.txGenSweep";' +
+    // JELA-854: arm the origin guard on the origin these cases actually
+    // use, so every existing assertion below doubles as proof that the
+    // guard is inert on same-origin traffic.
+    'var __txOgOn=true;var __TXORG=["https://srv"];';
   // eslint-disable-next-line no-new-func
   return new Function(
     "localStorage",
@@ -189,7 +195,8 @@ const BARE = "https://srv/Simple/plain.js"; // no query
 const VUNK = "https://srv/JellyfinEnhanced/js/others/splashscreen.js?v=unknown";
 const VUNK_B =
   "https://srv/JellyfinEnhanced/js/enhanced/translations.js?v=unknown";
-const VUNK_C = "https://srv/JellyfinEnhanced/js/extras/login-image.js?v=unknown";
+const VUNK_C =
+  "https://srv/JellyfinEnhanced/js/extras/login-image.js?v=unknown";
 const VERWORD = "https://srv/Enh/y.js?version=unknown"; // ?version= keys too
 const VEMPTY = "https://srv/Enh/x.js?v="; // EMPTY value = no signal -> class 0
 
@@ -203,7 +210,10 @@ for (const [label, src] of [
   const w = compileWidget(src, label)(ls, {});
 
   check(label + ": ticks URL is class 2", w.txQueryClass(TICKS) === 2);
-  check(label + ": dotted-version URL is class 2", w.txQueryClass(DOTTED) === 2);
+  check(
+    label + ": dotted-version URL is class 2",
+    w.txQueryClass(DOTTED) === 2,
+  );
   check(label + ": long-hex URL is class 2", w.txQueryClass(HEX) === 2);
   check(label + ": epoch-busted URL is class 1", w.txQueryClass(EPOCH) === 1);
   check(label + ": static marker URL is class 0", w.txQueryClass(MARKER) === 0);
@@ -304,7 +314,10 @@ for (const [label, src] of [
 
   // Bare URLs keep the JEL-554 behaviour (no TTL, direct body).
   w.txSetStatic(BARE, "BODY_BARE");
-  check(label + ": bare URL round trip unchanged", w.txGetStatic(BARE) === "BODY_BARE");
+  check(
+    label + ": bare URL round trip unchanged",
+    w.txGetStatic(BARE) === "BODY_BARE",
+  );
 
   // Kill-switch restores fetch-every-boot.
   const ls2 = makeLS();
@@ -472,7 +485,9 @@ for (const [label, src] of [
 }
 
 if (failures) {
-  console.error("\nJEL-619 plugin-fetch-cache verification FAILED: " + failures);
+  console.error(
+    "\nJEL-619 plugin-fetch-cache verification FAILED: " + failures,
+  );
   process.exit(1);
 }
 console.log("\nAll JEL-619 plugin-fetch-cache checks passed.");
