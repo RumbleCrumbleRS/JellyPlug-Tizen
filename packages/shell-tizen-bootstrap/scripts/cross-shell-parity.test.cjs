@@ -278,8 +278,11 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-867 paint gate: re-pinned — __yqRun now checks
     // __shellPaintGate.fired and runs inline (no yield) before paint,
     // queued after. Same condition in both seeds; divergence unchanged.
-    retail: "ab428523e6b1ff56",
-    boot: "9b89238698026043",
+    // JELA-867 diag: re-pinned — __shellTxYield gained `inl` counter for
+    // inline (pre-paint) calls; queued path now writes on=1 so the tri-state
+    // reflects the actual mode boundary crossing. Both seeds identical change.
+    retail: "47b1b81a8f7034fb",
+    boot: "4a513eda50244187",
   },
   {
     name: "buildDiagSeedScript",

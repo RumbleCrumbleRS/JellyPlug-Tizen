@@ -1984,7 +1984,7 @@
       // (jobs run in push order = fetch-completion order).
       // Kill switch localStorage["jellyfin.shell.txYield"]="0"; budget
       // "jellyfin.shell.txYieldMs" (default 16 ms). Diag window.__shellTxYield.
-      "    try{window.__shellTxYield={on:1,n:0,slices:0,max:0,gap:0,qmax:0};}catch(_){}",
+      "    try{window.__shellTxYield={on:1,n:0,inl:0,slices:0,max:0,gap:0,qmax:0};}catch(_){}",
       "    var __yq=[],__yqOn=0,__yqOff=null,__yqB=null,__yqLast=0;",
       '    function __yqDisabled(){if(__yqOff===null){__yqOff=false;try{__yqOff=(localStorage.getItem("jellyfin.shell.txYield")==="0");}catch(_){}}return __yqOff;}',
       // The budget is per SLICE and defaults to 0 — one job per task.
@@ -2020,7 +2020,8 @@
       // pre-paint scripts stay on the critical path. After paint, queue and
       // yield so input interleaves. on=0 means disabled, on=2 means inline
       // (pre-paint), on=1 means queued (post-paint).
-      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0)d0.on=__yqDisabled()?0:2;}catch(_){}return fn();}",
+      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0){d0.on=__yqDisabled()?0:2;d0.inl++;}}catch(_){}return fn();}",
+      "      try{var d1=window.__shellTxYield;if(d1)d1.on=1;}catch(_){}",
       "      return new Promise(function(res,rej){",
       "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
       "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",
