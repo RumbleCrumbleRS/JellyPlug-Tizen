@@ -2155,10 +2155,10 @@
       // hit only has the second: (a) __txResolve — needsTx's `new Function`
       // parse plus Babel.transform on a miss; (b) the insert — textContent +
       // insert is a synchronous compile+execute of the lowered body.
-      // Per-slice budget (default 16 ms) lets several trivial jobs share a
-      // task without ever starting a new one late; the slice can still
-      // overrun by one job, so the real ceiling is budget + slowest single
-      // job (132 ms measured, so ~150 ms).
+      // The per-slice budget defaults to 0 — one job per task — for the
+      // reason spelled out on __yqBudget below. The ceiling on a slice is
+      // therefore the slowest single job (132 ms measured), not a packed
+      // slice's worth of them.
       //
       // Order is preserved exactly: jobs run in push order, which is the
       // fetch-completion order they already ran in. What changes is that
@@ -2202,7 +2202,11 @@
       "      __yqOn=0;",
       "    }",
       "    function __yqRun(fn){",
-      "      if(__yqDisabled())return fn();",
+      // JELA-872: the diag is seeded with on:1 before the kill switch is ever
+      // read, so on ALONE cannot tell an armed queue from a disabled one — a
+      // kill-switched boot reported {on:1,n:0}. Clear it on the bypass path so
+      // the flag means what it says; n/slices remain the load-bearing counters.
+      "      if(__yqDisabled()){try{var d0=window.__shellTxYield;if(d0)d0.on=0;}catch(_){}return fn();}",
       "      return new Promise(function(res,rej){",
       "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
       "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",

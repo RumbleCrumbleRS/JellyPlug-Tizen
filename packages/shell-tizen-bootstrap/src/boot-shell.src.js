@@ -140,9 +140,9 @@
   }
   function txFnv1a(s) {
     for (var h = 2166136261, i = 0; i < s.length; i++)
-      (h ^= s.charCodeAt(i)),
+      ((h ^= s.charCodeAt(i)),
         (h =
-          (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0);
+          (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0));
     return h.toString(36);
   }
   // JEL-178: cache-epoch salt. Bumping this string changes TX_VER, which
@@ -213,7 +213,7 @@
       } catch (__) {}
     }
     if (rec.body) {
-      delete rec.body, delete rec.patches;
+      (delete rec.body, delete rec.patches);
       try {
         localStorage.setItem(BUNDLE_CACHE_KEY, JSON.stringify(rec));
       } catch (__) {}
@@ -417,7 +417,8 @@
     };
     try {
       return (
-        localStorage.setItem(STYLESHEET_BODIES_KEY, JSON.stringify(rec)), !0
+        localStorage.setItem(STYLESHEET_BODIES_KEY, JSON.stringify(rec)),
+        !0
       );
     } catch (_) {
       try {
@@ -483,9 +484,9 @@
             sz > biggestSize && ((biggestSize = sz), (biggestKey = keys[i]));
           }
           if (biggestKey === null) break;
-          delete items[biggestKey],
+          (delete items[biggestKey],
             (total -= biggestSize),
-            keys.splice(keys.indexOf(biggestKey), 1);
+            keys.splice(keys.indexOf(biggestKey), 1));
         }
         writeStylesheetBodies(serverOrigin, items);
       });
@@ -528,23 +529,23 @@
           item.body.indexOf("</style") < 0
         ) {
           var styleEl = doc.createElement("style");
-          styleEl.setAttribute("data-shell-css-from-cache", "1"),
+          (styleEl.setAttribute("data-shell-css-from-cache", "1"),
             styleEl.setAttribute("data-shell-css-url", url),
             (styleEl.textContent = item.body),
             ln.parentNode.replaceChild(styleEl, ln),
             hits++,
-            (bytes += item.body.length);
+            (bytes += item.body.length));
         } else misses++;
       }
     }
-    hits > 0 &&
+    (hits > 0 &&
       ((window.__shellCssInlineAdopted = 1),
       (window.__shellCssInlineHits = (window.__shellCssInlineHits || 0) + hits),
       (window.__shellCssInlineBytes =
         (window.__shellCssInlineBytes || 0) + bytes)),
       misses > 0 &&
         (window.__shellCssInlineMisses =
-          (window.__shellCssInlineMisses || 0) + misses);
+          (window.__shellCssInlineMisses || 0) + misses));
   }
   function loadServerUrl() {
     try {
@@ -639,7 +640,7 @@
         if (window.__jellyfinShellBootDone) return;
         var lite = window.__shellLite;
         if (lite && (lite.st === "live" || lite.st === "handoff")) return;
-        ev.preventDefault(), exitApp();
+        (ev.preventDefault(), exitApp());
       }
     });
   }
@@ -690,18 +691,18 @@
                         webapis.productinfo.isUdPanelSupported() &&
                         (ratio = 2));
                 } catch (e) {}
-                (systeminfo = {
+                ((systeminfo = {
                   resolutionWidth: Math.floor(result.resolutionWidth * ratio),
                   resolutionHeight: Math.floor(result.resolutionHeight * ratio),
                 }),
-                  resolve(systeminfo);
+                  resolve(systeminfo));
               },
               function () {
-                (systeminfo = {
+                ((systeminfo = {
                   resolutionWidth: 1920,
                   resolutionHeight: 1080,
                 }),
-                  resolve(systeminfo);
+                  resolve(systeminfo));
               },
             );
           });
@@ -808,7 +809,7 @@
     },
     downloadFile: function () {},
     selectServer: function () {
-      clearServerUrl(), window.location.replace("index.html");
+      (clearServerUrl(), window.location.replace("index.html"));
     },
   };
   function buildSeedScript(serverUrl, upstreamCfg) {
@@ -2015,7 +2016,11 @@
       "      __yqOn=0;",
       "    }",
       "    function __yqRun(fn){",
-      "      if(__yqDisabled())return fn();",
+      // JELA-872: the diag is seeded with on:1 before the kill switch is ever
+      // read, so on ALONE cannot tell an armed queue from a disabled one — a
+      // kill-switched boot reported {on:1,n:0}. Clear it on the bypass path so
+      // the flag means what it says; n/slices remain the load-bearing counters.
+      "      if(__yqDisabled()){try{var d0=window.__shellTxYield;if(d0)d0.on=0;}catch(_){}return fn();}",
       "      return new Promise(function(res,rej){",
       "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
       "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",
@@ -3309,7 +3314,7 @@
       m = /(?:Chrome|Chromium)\/(\d+)\./.exec(ua);
     if (m && parseInt(m[1], 10) < 70) return !0;
     try {
-      return new Function("var a={};return a?.b"), !1;
+      return (new Function("var a={};return a?.b"), !1);
     } catch (e) {
       return !0;
     }
@@ -3323,7 +3328,7 @@
     if (SHELL_DEBUG)
       try {
         var args = Array.prototype.slice.call(arguments);
-        args.unshift("[shell]"), console.log.apply(console, args);
+        (args.unshift("[shell]"), console.log.apply(console, args));
       } catch (_) {}
   }
   function babelTranspile(src) {
@@ -3652,9 +3657,9 @@
   function injectBootProgress(doc) {
     if (isLegacyChromium()) {
       var progressTag = doc.createElement("script");
-      progressTag.setAttribute("data-shell-boot-progress", "1"),
+      (progressTag.setAttribute("data-shell-boot-progress", "1"),
         (progressTag.textContent = bootProgressBody()),
-        doc.head.appendChild(progressTag);
+        doc.head.appendChild(progressTag));
     }
   }
   // JEL-647: Instant-Home. Netflix paints a cached snapshot of the last
@@ -5641,12 +5646,12 @@
       // Result: the TV always runs the CURRENT snippets, re-transpiling only
       // when the content actually changed. The idempotency guard above still
       // matches because channelPath remains a substring of src. Plugin-agnostic.
-      (s.src =
+      ((s.src =
         serverUrl +
         channelPath +
         (channelPath.indexOf("?") < 0 ? "?_jsi=1" : "&_jsi=1")),
         s.setAttribute("data-shell-jsi-channel", "1"),
-        doc.body.appendChild(s);
+        doc.body.appendChild(s));
       // JEL-216: an active channel on a legacy engine used to GUARANTEE a
       // transpile (the channel body is the only place a user can introduce
       // `?.`/`??`). Kick the babel load now (idempotent, cached promise) so it
@@ -5861,8 +5866,8 @@
       }
       if (v == null) {
         var miss = window.__shellTxCacheMissUrlsStatic;
-        miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
-          miss.length < 10 && miss.push(url);
+        (miss || ((miss = []), (window.__shellTxCacheMissUrlsStatic = miss)),
+          miss.length < 10 && miss.push(url));
       } else {
         // A static hit is the ONLY recency signal a txc: body ever gets.
         txLruTouch(bk);
@@ -6784,7 +6789,7 @@
     );
     var scripts = Array.prototype.slice.call(doc.querySelectorAll("script")),
       counts = (window.__shellDiagInit = window.__shellDiagInit || {});
-    (counts.legacy = legacy),
+    ((counts.legacy = legacy),
       (counts.babel = typeof window.Babel != "undefined"),
       (counts.polyfilled = !0),
       (counts.scriptsFound = 0),
@@ -6796,7 +6801,7 @@
       (counts.babelLazyTriggered = 0),
       (counts.pluginBabelLazy = 0),
       (counts.pluginPrefetchAdopted = 0),
-      (counts.txDropHits = 0);
+      (counts.txDropHits = 0));
     for (
       var pluginPrefetch = window.__shellPluginPrefetch || null,
         pluginUrlsForNextBoot = [],
@@ -6930,12 +6935,12 @@
       // syntax pre-check over ~1 MB — or worse, a string-literal false
       // positive re-babeling it — would refund the entire caching win.
       if (s.getAttribute("data-shell-jsi-cached") === "1")
-        return counts.skipped++, null;
+        return (counts.skipped++, null);
       if (s.getAttribute("data-shell-bundle-patched"))
-        return counts.skipped++, null;
+        return (counts.skipped++, null);
       var src = s.getAttribute("src");
       if (src) {
-        if (isJellyfinWebBundle(src)) return counts.skipped++, null;
+        if (isJellyfinWebBundle(src)) return (counts.skipped++, null);
         counts.scriptsFound++;
         // JEL-618: adopt the finished channel body into the channel cache.
         // Attribute-matched (our own injected tag), never URL-matched, so a
@@ -7010,7 +7015,7 @@
               var ck = url.indexOf("?") >= 0 ? "txc:" + txFnv1a(code) : url;
               var pre = txGetStatic(ck);
               if (pre != null) {
-                s.removeAttribute("src"),
+                (s.removeAttribute("src"),
                   s.removeAttribute("defer"),
                   s.removeAttribute("async"),
                   s.removeAttribute("type"),
@@ -7018,7 +7023,7 @@
                   s.setAttribute("data-shell-transpiled-from", url),
                   s.setAttribute("data-shell-tx-cached", "1"),
                   counts.transpiled++,
-                  counts.cachedHits++;
+                  counts.cachedHits++);
                 if (isJsiChannelTag) jsiChannelCacheSet(pre);
                 // JEL-619: promote the content-hash hit to the version-keyed
                 // slot so the NEXT boot skips the download too (token changed
@@ -7027,13 +7032,13 @@
                 return;
               }
               if (!needsTranspile(code)) {
-                s.removeAttribute("src"),
+                (s.removeAttribute("src"),
                   s.removeAttribute("defer"),
                   s.removeAttribute("async"),
-                  s.removeAttribute("type");
+                  s.removeAttribute("type"));
                 var gatedRaw = needsJQueryGate(code),
                   bodyRaw = gatedRaw ? wrapForJQuery(code) : code;
-                (s.textContent = bodyRaw),
+                ((s.textContent = bodyRaw),
                   s.setAttribute("data-shell-transpiled-from", url),
                   s.setAttribute("data-shell-fast-path", "1"),
                   gatedRaw && s.setAttribute("data-shell-jquery-gated", "1"),
@@ -7048,7 +7053,7 @@
                     "fast-path+inlined",
                     url,
                     gatedRaw ? "(jq-gated)" : "",
-                  );
+                  ));
                 return;
               }
               // JEL-621: pre-lowered drop attempt before the Babel slow path.
@@ -7057,13 +7062,13 @@
               // as the Babel path) and never touch Babel for this script.
               return txDropResolve(code).then(function (dropped) {
                 if (dropped != null) {
-                  s.removeAttribute("src"),
+                  (s.removeAttribute("src"),
                     s.removeAttribute("defer"),
                     s.removeAttribute("async"),
-                    s.removeAttribute("type");
+                    s.removeAttribute("type"));
                   var gatedD = needsJQueryGate(dropped),
                     bodyD = gatedD ? wrapForJQuery(dropped) : dropped;
-                  (s.textContent = bodyD),
+                  ((s.textContent = bodyD),
                     s.setAttribute("data-shell-transpiled-from", url),
                     s.setAttribute("data-shell-tx-drop", "1"),
                     gatedD && s.setAttribute("data-shell-jquery-gated", "1"),
@@ -7077,7 +7082,7 @@
                       "tx-drop+inlined",
                       url,
                       gatedD ? "(jq-gated)" : "",
-                    );
+                    ));
                   return;
                 }
                 return (
@@ -7112,14 +7117,14 @@
                       neutralizeUntranspiled(s, url);
                       return;
                     }
-                    counts.transpiled++,
+                    (counts.transpiled++,
                       s.removeAttribute("src"),
                       s.removeAttribute("defer"),
                       s.removeAttribute("async"),
-                      s.removeAttribute("type");
+                      s.removeAttribute("type"));
                     var gated = needsJQueryGate(out),
                       body = gated ? wrapForJQuery(out) : out;
-                    (s.textContent = body),
+                    ((s.textContent = body),
                       s.setAttribute("data-shell-transpiled-from", url),
                       gated && s.setAttribute("data-shell-jquery-gated", "1"),
                       txSetStatic(ck, body, txStaticVal(url)),
@@ -7131,7 +7136,7 @@
                         "transpiled+inlined",
                         url,
                         gated ? "(jq-gated)" : "",
-                      );
+                      ));
                   })
                 );
               });
@@ -7152,11 +7157,11 @@
             // inline bodies hash the same way as fetched external sources.
             txDropResolve(content).then(function (droppedInline) {
               if (droppedInline != null) {
-                (s.textContent = droppedInline),
+                ((s.textContent = droppedInline),
                   s.setAttribute("data-shell-transpiled-inline", "1"),
                   s.setAttribute("data-shell-tx-drop", "1"),
                   counts.txDropHits++,
-                  shellLog("tx-drop inline script");
+                  shellLog("tx-drop inline script"));
                 return;
               }
               return (
@@ -7229,7 +7234,7 @@
       (window.__shellBundleCacheBodyHit = 0),
       !isLegacyChromium())
     )
-      return (window.__shellBundlePatchSkipped = 1), Promise.resolve();
+      return ((window.__shellBundlePatchSkipped = 1), Promise.resolve());
     // JELA-865: keep the patch, stop inlining it. When the drop is armed and
     // the server advertises a patched body for THIS jellyfin-web build, the
     // tag is repointed and everything below is skipped — no bundle fetch, no
@@ -7313,12 +7318,12 @@
                   return r.text();
                 })
                 .then(function (code) {
-                  window.__shellBundlesScanned++,
+                  (window.__shellBundlesScanned++,
                     writeVendorsBundleState({
                       url,
                       needsPatch: !1,
                       body: code,
-                    });
+                    }));
                 })
                 .catch(function (e) {
                   try {
@@ -7331,13 +7336,13 @@
                 });
         if (cache && cache.url === url) {
           if (cache.body && cache.body.indexOf("</script") < 0) {
-            s.removeAttribute("src"),
+            (s.removeAttribute("src"),
               s.removeAttribute("defer"),
               s.removeAttribute("async"),
               s.removeAttribute("type"),
               (s.textContent = cache.body),
               s.setAttribute("data-shell-bundle-patched", url),
-              s.setAttribute("data-shell-bundle-from-cache", "1");
+              s.setAttribute("data-shell-bundle-from-cache", "1"));
             var cachedPatches =
               cache.needsPatch &&
               typeof cache.patches == "number" &&
@@ -7363,7 +7368,7 @@
               null
             );
           }
-          if (!cache.needsPatch) return window.__shellBundleCacheHit++, null;
+          if (!cache.needsPatch) return (window.__shellBundleCacheHit++, null);
         }
         var bundleFetch;
         return (
@@ -7398,7 +7403,7 @@
                 } catch (_) {}
                 return;
               }
-              s.removeAttribute("src"),
+              (s.removeAttribute("src"),
                 s.removeAttribute("defer"),
                 s.removeAttribute("async"),
                 s.removeAttribute("type"),
@@ -7417,7 +7422,7 @@
                   needsPatch: !0,
                   body: result.source,
                   patches: result.patches,
-                });
+                }));
               try {
                 console.log(
                   "shell: patched bundle",
@@ -7520,10 +7525,10 @@
         )
           return;
         if (alreadyRan()) {
-          (window.__shellDeferWatchdogSkipped =
+          ((window.__shellDeferWatchdogSkipped =
             (window.__shellDeferWatchdogSkipped || 0) + 1),
             (window.__shellDeferWatchdogSkipReason =
-              "regEl>" + (window.__shellRegElCalls || 0));
+              "regEl>" + (window.__shellRegElCalls || 0)));
           return;
         }
         // JEL-137: a partially-executed defer sequence is NOT the JEL-99
@@ -7542,9 +7547,9 @@
           wpc = window.webpackChunk || window.webpackJsonp;
         } catch (_) {}
         if (wpc) {
-          (window.__shellDeferWatchdogSkipped =
+          ((window.__shellDeferWatchdogSkipped =
             (window.__shellDeferWatchdogSkipped || 0) + 1),
-            (window.__shellDeferWatchdogSkipReason = "webpackChunkExists");
+            (window.__shellDeferWatchdogSkipReason = "webpackChunkExists"));
           return;
         }
         var defers = document.querySelectorAll("script[defer][src]");
@@ -7558,9 +7563,9 @@
             "scripts",
           );
         } catch (_) {}
-        (window.__shellDeferWatchdogFired = defers.length),
+        ((window.__shellDeferWatchdogFired = defers.length),
           (window.__shellDeferWatchdogReason = reason),
-          (window.__shellDeferWatchdogAtMs = Date.now() - started);
+          (window.__shellDeferWatchdogAtMs = Date.now() - started));
         for (var i = 0; i < defers.length; i++) {
           var src = defers[i].getAttribute("src");
           if (src) {
@@ -7582,10 +7587,10 @@
             // load-order interleaving without it). In-order dynamic scripts
             // are also immune to the style-blocking that wedges the
             // parser-inserted defer queue.
-            (s2.src = src),
+            ((s2.src = src),
               (s2.async = false),
               s2.setAttribute("data-shell-defer-watchdog", "1"),
-              document.head.appendChild(s2);
+              document.head.appendChild(s2));
           }
         }
       } catch (e) {
@@ -7669,8 +7674,8 @@
     VENDORS_FAST_RE =
       /<script\b[^>]*\bsrc\s*=\s*["']([^"']*vendors\.[^"']*\.bundle\.js[^"']*)["'][^>]*>\s*<\/script>/i;
   function maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg) {
-    window.__shellFastPathHits || (window.__shellFastPathHits = 0),
-      window.__shellFastPathFallbacks || (window.__shellFastPathFallbacks = 0);
+    (window.__shellFastPathHits || (window.__shellFastPathHits = 0),
+      window.__shellFastPathFallbacks || (window.__shellFastPathFallbacks = 0));
     function bail(reason) {
       return (
         window.__shellFastPathFallbacks++,
@@ -7778,10 +7783,10 @@
           return bail("vendorsScriptClose");
       } else return bail("vendorsBodyMissing");
     }
-    (window.__shellDiagInit = window.__shellDiagInit || {}),
+    ((window.__shellDiagInit = window.__shellDiagInit || {}),
       (window.__shellDiagInit.legacy = !0),
       (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
-      (window.__shellDiagInit.polyfilled = !0);
+      (window.__shellDiagInit.polyfilled = !0));
     // JEL-379: the diag HUD's "shell v" line reports the DEPLOYED widget
     // version (single source of truth = config.xml, currently 2.0.26) so an
     // operator can identify a TV's installed bootstrap build. This mirrors the
@@ -7856,7 +7861,7 @@
         !replaced)
       )
         return bail("bundleReplaceFail");
-      cachedPatches > 0 && (window.__shellBundlePatches += cachedPatches),
+      (cachedPatches > 0 && (window.__shellBundlePatches += cachedPatches),
         window.__shellBundleCacheHit++,
         window.__shellBundleCacheBodyHit++,
         window.__shellBundlesPatchedFiles.push(
@@ -7865,7 +7870,7 @@
         (window.__shellMainBundleLSAdopted = 1),
         (window.__shellMainBundleInlineHits =
           (window.__shellMainBundleInlineHits || 0) + 1),
-        (window.__shellMainBundleLSBytes = inlineBundleBody.length);
+        (window.__shellMainBundleLSBytes = inlineBundleBody.length));
     } else bundleMatch && window.__shellBundleCacheHit++;
     if (inlineVendorsBody) {
       var vReplaced = !1;
@@ -7883,13 +7888,13 @@
         !vReplaced)
       )
         return bail("vendorsReplaceFail");
-      window.__shellBundleCacheHit++,
+      (window.__shellBundleCacheHit++,
         window.__shellBundleCacheBodyHit++,
         window.__shellBundlesPatchedFiles.push("fastpath:vcache0"),
         (window.__shellVendorsBundleLSAdopted = 1),
         (window.__shellVendorsBundleInlineHits =
           (window.__shellVendorsBundleInlineHits || 0) + 1),
-        (window.__shellVendorsBundleLSBytes = inlineVendorsBody.length);
+        (window.__shellVendorsBundleLSBytes = inlineVendorsBody.length));
     }
     if (!0) {
       var TX_SCRIPT_RE =
@@ -7902,7 +7907,6 @@
       for (
         TX_SCRIPT_RE.lastIndex = 0;
         (txMatch = TX_SCRIPT_RE.exec(patched)) !== null;
-
       ) {
         var rawSrc = txMatch[1];
         if (!isJellyfinWebBundle(rawSrc)) {
@@ -7941,7 +7945,7 @@
             txBail = "txScriptClose";
             break;
           }
-          (txRewritten += patched.slice(txLastIdx, txMatch.index)),
+          ((txRewritten += patched.slice(txLastIdx, txMatch.index)),
             (txRewritten +=
               '<script data-shell-transpiled-from="' +
               escAttr(txAbsUrl) +
@@ -7949,14 +7953,14 @@
               txBody +
               "</script>"),
             (txLastIdx = TX_SCRIPT_RE.lastIndex),
-            txInlines++;
+            txInlines++);
         }
       }
       if (txBail) return bail(txBail);
-      txInlines > 0 &&
+      (txInlines > 0 &&
         ((txRewritten += patched.slice(txLastIdx)), (patched = txRewritten)),
         (window.__shellFastPathTxInlines =
-          (window.__shellFastPathTxInlines || 0) + txInlines);
+          (window.__shellFastPathTxInlines || 0) + txInlines));
     }
     // JEL-618: splice the cached channel body in last, immediately before
     // </body> — after the bundle/tx inlining so its position mirrors the
@@ -7966,7 +7970,7 @@
       if (jsiAt < 0) return bail("jsiChannelNoBody");
       patched = patched.slice(0, jsiAt) + jsiInlineTag + patched.slice(jsiAt);
     }
-    return window.__shellFastPathHits++, patched;
+    return (window.__shellFastPathHits++, patched);
   }
   //@@SHELL_CORE:markDocumentWrite@@
   function restoreCredsVault() {
@@ -8272,9 +8276,9 @@
           "web config",
         );
       };
-    (window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
+    ((window.__shellIndexCacheRecords = window.__shellIndexCacheRecords || 0),
       (window.__shellIndexCacheHits = window.__shellIndexCacheHits || 0),
-      (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0);
+      (window.__shellIndexCacheSavedMs = window.__shellIndexCacheSavedMs || 0));
     var cacheGateOn = webCacheEnabled(),
       cachedIndex = cacheGateOn ? readWebIndexCache(serverUrl) : null,
       cachedConfig = cacheGateOn ? readWebConfigCache(serverUrl) : null,
@@ -8283,7 +8287,8 @@
     // (mkIdxF/mkCfgF adopt it), so it earned its place — keep prefetching.
     if (!indexCacheHit) seedWebPrefetchSkip(false);
     if (indexCacheHit) {
-      window.__shellIndexCacheHits++, (window.__shellWebIndexCacheAdopted = 1);
+      (window.__shellIndexCacheHits++,
+        (window.__shellWebIndexCacheAdopted = 1));
       var revalStart = typeof Date != "undefined" ? Date.now() : 0;
       // JELA-59: the SWR revalidation pair now waits for the epoch gate. A
       // matched boot skips it (suppression point (a)); any other state
@@ -8405,29 +8410,29 @@
           upstreamCfg = results[1],
           fast = maybeStringFastPath(html, serverUrl, baseUrl, upstreamCfg);
         if (fast) {
-          (window.__jellyfinShellBootDone = !0),
+          ((window.__jellyfinShellBootDone = !0),
             markDocumentWrite(),
             document.open("text/html", "replace"),
             document.write(fast),
             document.close(),
-            armDeferWatchdog();
+            armDeferWatchdog());
           return;
         }
         var doc = new DOMParser().parseFromString(html, "text/html"),
           existingBase = doc.querySelector("base");
         existingBase && existingBase.remove();
         var baseTag = doc.createElement("base");
-        (baseTag.href = baseUrl),
+        ((baseTag.href = baseUrl),
           doc.head.insertBefore(baseTag, doc.head.firstChild),
           (window.__shellDiagInit = window.__shellDiagInit || {}),
           (window.__shellDiagInit.legacy = isLegacyChromium()),
           (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
-          (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy);
+          (window.__shellDiagInit.polyfilled = window.__shellDiagInit.legacy));
         var diagTag = doc.createElement("script");
-        diagTag.setAttribute("data-shell-diag", "1"),
+        (diagTag.setAttribute("data-shell-diag", "1"),
           // JEL-379: deployed widget version (see fast-path note above; == config.xml, guarded by selftest 13).
           (diagTag.textContent = buildDiagSeedScript("2.0.26")),
-          doc.head.insertBefore(diagTag, baseTag);
+          doc.head.insertBefore(diagTag, baseTag));
         var seedTag = doc.createElement("script");
         return (
           seedTag.setAttribute("data-shell-seed", "1"),
@@ -8453,12 +8458,12 @@
               } catch (_) {}
               rewriteStylesheetsFromCache(doc, baseUrl, ssOrigin);
             } catch (_) {}
-            (window.__jellyfinShellBootDone = !0),
+            ((window.__jellyfinShellBootDone = !0),
               markDocumentWrite(),
               document.open("text/html", "replace"),
               document.write("<!DOCTYPE html>" + doc.documentElement.outerHTML),
               document.close(),
-              armDeferWatchdog();
+              armDeferWatchdog());
           })
         );
       },
@@ -8538,21 +8543,21 @@
         showError("Please enter a server URL.");
         return;
       }
-      showError(""),
+      (showError(""),
         validateServer(url)
           .then(function () {
-            return saveServerUrl(url), loadRemoteWebClient(url);
+            return (saveServerUrl(url), loadRemoteWebClient(url));
           })
           .catch(function (err) {
             showError(
               "Could not reach server: " +
                 (err && err.message ? err.message : "unknown error"),
             );
-          });
+          }));
     });
   }
   function bootstrap() {
-    registerRemoteKeys(), installBackHandler(), installResumeEpochCheck();
+    (registerRemoteKeys(), installBackHandler(), installResumeEpochCheck());
     var stored = loadServerUrl();
     if (stored) {
       // JEL-647: paint the cached home snapshot in the WIDGET document
@@ -8564,10 +8569,10 @@
         injectInstantHome(document);
       } catch (_) {}
       loadRemoteWebClient(stored).catch(function () {
-        attachConnectForm(),
+        (attachConnectForm(),
           showError(
             "Could not reach saved server. Check your network and try again.",
-          );
+          ));
       });
     } else {
       attachConnectForm();

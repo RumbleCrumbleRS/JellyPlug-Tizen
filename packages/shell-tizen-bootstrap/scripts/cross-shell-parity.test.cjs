@@ -271,8 +271,12 @@ const INTENTIONAL_DIVERGENCES = [
     // both shells; they read differently only because retail's costs sit
     // inside __txResolve while boot inlines them per call site — the
     // pre-existing divergence reason above.
-    retail: "8d372c06abb6a597",
-    boot: "927e133091e467aa",
+    // JELA-872: re-pinned — __yqRun's kill-switch bypass now clears the diag
+    // flag (window.__shellTxYield.on = 0) so a disabled queue cannot report
+    // itself as armed. Identical one-line change in both seeds; the
+    // divergence reasons above are unchanged.
+    retail: "ca597f7ab9c8ac37",
+    boot: "79048191cd23ef15",
   },
   {
     name: "buildDiagSeedScript",
