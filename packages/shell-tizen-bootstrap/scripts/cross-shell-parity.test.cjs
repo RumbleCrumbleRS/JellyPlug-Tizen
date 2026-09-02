@@ -263,8 +263,16 @@ const INTENTIONAL_DIVERGENCES = [
     // __recDyn + primer-norm() filters, __txSweepForeign and the __DYNKEY
     // rewrite on the 12 s hygiene timer). Landed byte-identically in both;
     // they still hash apart only for the reason above.
-    retail: "5c5b29fd1f687898",
-    boot: "ef8a1f65453bbd68",
+    // JELA-867: re-pinned — both seeds gained the __yq yield queue
+    // (__yqDisabled/__yqBudget/__yqKick/__yqPump/__yqRun + the
+    // window.__shellTxYield diag) and route the dynamic pipeline's two
+    // synchronous costs through it: the needsTx parse + Babel pass, and the
+    // insert (compile+execute of the lowered body). Same two hop points in
+    // both shells; they read differently only because retail's costs sit
+    // inside __txResolve while boot inlines them per call site — the
+    // pre-existing divergence reason above.
+    retail: "8d372c06abb6a597",
+    boot: "927e133091e467aa",
   },
   {
     name: "buildDiagSeedScript",
