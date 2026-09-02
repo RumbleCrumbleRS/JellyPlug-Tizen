@@ -94,12 +94,66 @@ premise unprovable. There is no version of the cleanup that pays.
 1. **Keep the entry permanently.** It is not a temporary neutralisation; it is the
    permanent repair seed for a key whose read site ships in un-updatable vehicles.
 2. **Relabel the entry's comment header** so it stops advertising its own removal.
-   The current header ends `Drop this entry only after it has propagated to the
-   fleet.` — that sentence is what will get it deleted by a future cleanup. It
-   should say the entry is permanent and why.
+   The old header ended `Drop this entry only after it has propagated to the
+   fleet.` — that sentence is what would have got it deleted by a future cleanup.
+   Done 2026-09-02; see *Outcome* below.
 3. Any future `txBundle` kill switch should be **seeded from a key the hosted
    shell alone reads**, so that its rollback is a delete rather than an
    unprovable propagation wait.
+
+## Outcome — accepted and executed 2026-09-02
+
+The board accepted the disposition on JELA-836 (interaction
+`559e8a99-4aee-4d62-a9f1-56b98af95006`): **keep the seed permanently, and relabel
+the comment that advertises its own removal.**
+
+The relabel is deployed. Only the entry's `Name` and its comment header changed;
+the executable body is byte-identical to what JELA-835 left on the wire, and no
+other entry of the 109 moved.
+
+| | before | after |
+| --- | --- | --- |
+| entry name | `JellyPlug — txBundle kill switch (JELA-824)` | `JellyPlug — txBundle repair seed (JELA-824/836, PERMANENT)` |
+| header ends | `Drop this entry only after it has propagated to the fleet.` | `This entry is the only repair channel, permanently. … Details: docs/jela836-txbundle-seed-disposition.md.` |
+| `public.js` | 923,444 B, sha256 `92cf94068510…` | 924,051 B, sha256 `d7b6a5b3e958…` |
+
+Verification (per `jsi-config-save-off-by-one`, both sides read):
+
+- config re-GET: entry 108 byte-identical to the posted body, `Enabled: true`,
+  `RequiresAuthentication: false`; diff against the pre-deploy snapshot shows
+  **entry 108 only**, array length 109 → 109.
+- served bundle re-GET: carries the new header, no longer carries
+  `Drop this entry`, still carries exactly one
+  `localStorage.setItem("jellyfin.shell.txBundleDisabled","0")`, and the whole
+  923 KB bundle parses (`node --check`).
+- the served bundle rebuilt on the first POST this time — the save count is not
+  fixed; the rule is *POST until the served artifact carries your bytes*.
+
+The deployed entry, verbatim (the JSI config is not in git):
+
+```js
+/* JellyPlug — PERMANENT tx-bundle repair seed. Hands every TV back to the
+   JELA-833 coalesced tx-bundle path by writing "0" UNCONDITIONALLY.
+
+   DO NOT DELETE THIS ENTRY. Disposition settled on JELA-836 (approved
+   2026-09-02): "drop it once \"0\" has propagated" has no terminating
+   condition. The JELA-824 emergency kill wrote "1" into each TV's
+   localStorage and that value outlives this channel entry; the read site is
+   opt-OUT (jellyfin.shell.txBundleDisabled === "1" kills) and ALSO ships
+   inside two un-updatable vehicles — the legacy full WGT's baked
+   shell.min.js and the HSB WGT's baked boot-shell.min.js fallback — so no
+   shell release can retire the key on a fielded TV, and no fleet signal can
+   prove propagation (the diag device id is minted per profile, so it can
+   never say "this TV booted again"). This entry is the only repair channel,
+   permanently. Cost to keep: 0.066% of public.js. Cost of dropping it one TV
+   early: +62 requests / +26 KB on every cold boot of that TV, forever.
+   Details: docs/jela836-txbundle-seed-disposition.md. jp824kill */
+(function(){try{localStorage.setItem("jellyfin.shell.txBundleDisabled","0");}catch(e){}})();
+```
+
+Snapshots (rollback + clobber-detection reference) are kept in the agent
+workspace as `jela836/pre-relabel-20260902.json` and
+`jela836/post-relabel-20260902.json`.
 
 ## Lesson
 
