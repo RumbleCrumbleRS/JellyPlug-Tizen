@@ -6078,7 +6078,17 @@
       // 2-4x each. The kill switch is read FIRST so a fleet that has never
       // seen the enable key can still be stopped from boot 1
       // ([[jela838-channel-flag-boot1-optout]]).
-      'var cCO=!flg("jellyfin.shell.cfgOnceDisabled")&&flg("jellyfin.shell.cfgOnce");' +
+      //
+      // JELA-852 flips the enable key from flg (opt-in) to flgO (opt-OUT), so
+      // an ABSENT key arms the coalescer and only the literal "0" stands it
+      // down. It cannot be a seeded opt-in: the JSI channel writes its keys
+      // only after the lite->SPA handoff, so a seeded flag arms one boot LATE
+      // ([[jela821-deferje-opt-out]]) — and every measured saving here is a
+      // COLD-boot saving, i.e. exactly the boot a late arm gives up. Reading
+      // cfgOnceDisabled FIRST is what keeps the flip revocable from boot 1;
+      // rollback therefore SETS "0" and never removes the key, because after
+      // this flip a key-absent arm is an ON arm ([[jela832-idsunion-acceptance]]).
+      'var cCO=!flg("jellyfin.shell.cfgOnceDisabled")&&flgO("jellyfin.shell.cfgOnce");' +
       "if((cAL||cIC||cCO)&&!W.__shellACo){try{" +
       'var cC=null;try{var cc0=JSON.parse(localStorage.getItem("jellyfin_credentials")||"null"),cs0=cc0&&cc0.Servers&&cc0.Servers[0];if(cs0&&cs0.AccessToken&&cs0.UserId)cC={t:cs0.AccessToken,u:String(cs0.UserId).toLowerCase(),a:String(cs0.ManualAddress||cs0.LocalAddress||"")}}catch(_){}' +
       'var cB="";try{cB=String(srv()||(cC&&cC.a)||"").replace(/\\/+$/,"")}catch(_){}' +
