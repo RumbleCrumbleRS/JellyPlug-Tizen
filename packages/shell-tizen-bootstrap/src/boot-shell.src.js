@@ -2016,11 +2016,11 @@
       "      __yqOn=0;",
       "    }",
       "    function __yqRun(fn){",
-      // JELA-872: the diag is seeded with on:1 before the kill switch is ever
-      // read, so on ALONE cannot tell an armed queue from a disabled one — a
-      // kill-switched boot reported {on:1,n:0}. Clear it on the bypass path so
-      // the flag means what it says; n/slices remain the load-bearing counters.
-      "      if(__yqDisabled()){try{var d0=window.__shellTxYield;if(d0)d0.on=0;}catch(_){}return fn();}",
+      // Paint gate: before __shellPaintGate.fired, run inline (no yield) so
+      // pre-paint scripts stay on the critical path. After paint, queue and
+      // yield so input interleaves. on=0 means disabled, on=2 means inline
+      // (pre-paint), on=1 means queued (post-paint).
+      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0)d0.on=__yqDisabled()?0:2;}catch(_){}return fn();}",
       "      return new Promise(function(res,rej){",
       "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
       "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",

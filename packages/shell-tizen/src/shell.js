@@ -2149,12 +2149,16 @@
       // <script>, and 63 of those in one drain is the same block, smaller.
       //
       // So run the per-script work through a queue that yields to the task
-      // loop. The browser services input BETWEEN tasks, so the ceiling on
-      // input latency becomes one slice, not the whole fan-out. Two hop
-      // points per script, because there are two synchronous costs and a drop
-      // hit only has the second: (a) __txResolve — needsTx's `new Function`
-      // parse plus Babel.transform on a miss; (b) the insert — textContent +
-      // insert is a synchronous compile+execute of the lowered body.
+      // loop, but ONLY after the home screen has painted. Before paint,
+      // scripts run inline so they stay on the critical path (yielding here
+      // costs ~1 s of first card for no input benefit — nobody presses keys
+      // before the screen is on the glass). After paint, the browser services
+      // input BETWEEN tasks, so the ceiling on input latency becomes one
+      // slice, not the whole fan-out. Two hop points per script, because
+      // there are two synchronous costs and a drop hit only has the second:
+      // (a) __txResolve — needsTx's `new Function` parse plus Babel.transform
+      // on a miss; (b) the insert — textContent + insert is a synchronous
+      // compile+execute of the lowered body.
       // The per-slice budget defaults to 0 — one job per task — for the
       // reason spelled out on __yqBudget below. The ceiling on a slice is
       // therefore the slowest single job (132 ms measured), not a packed
@@ -2202,11 +2206,11 @@
       "      __yqOn=0;",
       "    }",
       "    function __yqRun(fn){",
-      // JELA-872: the diag is seeded with on:1 before the kill switch is ever
-      // read, so on ALONE cannot tell an armed queue from a disabled one — a
-      // kill-switched boot reported {on:1,n:0}. Clear it on the bypass path so
-      // the flag means what it says; n/slices remain the load-bearing counters.
-      "      if(__yqDisabled()){try{var d0=window.__shellTxYield;if(d0)d0.on=0;}catch(_){}return fn();}",
+      // Paint gate: before __shellPaintGate.fired, run inline (no yield) so
+      // pre-paint scripts stay on the critical path. After paint, queue and
+      // yield so input interleaves. on=0 means disabled, on=2 means inline
+      // (pre-paint), on=1 means queued (post-paint).
+      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0)d0.on=__yqDisabled()?0:2;}catch(_){}return fn();}",
       "      return new Promise(function(res,rej){",
       "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
       "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",

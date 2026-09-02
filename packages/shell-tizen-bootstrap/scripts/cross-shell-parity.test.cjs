@@ -275,8 +275,11 @@ const INTENTIONAL_DIVERGENCES = [
     // flag (window.__shellTxYield.on = 0) so a disabled queue cannot report
     // itself as armed. Identical one-line change in both seeds; the
     // divergence reasons above are unchanged.
-    retail: "ca597f7ab9c8ac37",
-    boot: "79048191cd23ef15",
+    // JELA-867 paint gate: re-pinned — __yqRun now checks
+    // __shellPaintGate.fired and runs inline (no yield) before paint,
+    // queued after. Same condition in both seeds; divergence unchanged.
+    retail: "ab428523e6b1ff56",
+    boot: "9b89238698026043",
   },
   {
     name: "buildDiagSeedScript",
