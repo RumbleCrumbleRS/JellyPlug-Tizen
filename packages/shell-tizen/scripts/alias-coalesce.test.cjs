@@ -43,10 +43,16 @@
  *   - with the drill flag off, JELA-742's behaviour is unchanged
  *
  * JELA-842 widens the same store once more, behind
- * localStorage['jellyfin.shell.cfgOnce']='1' (kill-switch
+ * localStorage['jellyfin.shell.cfgOnce'] (kill-switch
  * 'jellyfin.shell.cfgOnceDisabled', read FIRST), for the eight singleton CONFIG
- * endpoints JELA-840 measured 2-4x per cold boot. Section I pins:
+ * endpoints JELA-840 measured 2-4x per cold boot. JELA-852 flipped that key
+ * from opt-IN to opt-OUT: an ABSENT key arms it, only "0" stands it down, and
+ * the kill switch still wins. Every section outside I therefore sets
+ * cfgOnce='0' explicitly so it keeps testing one mechanism at a time.
+ * Section I pins:
  *   - gating, and that cfgOnce arms the shim with neither sibling flag set
+ *   - JELA-852 AC2/AC3: an unseeded store arms on boot 1 (I1b) and the same
+ *     store plus cfgOnceDisabled=1 puts the duplicate GET back (I1c)
  *   - AC1: /CustomTabs/Config x5 = ONE request — four of them CONCURRENT, so
  *     only the in-flight park can collapse them — and all eight shapes over
  *     mixed fetch/XHR
@@ -101,10 +107,26 @@ assert(
 );
 assert(body.indexOf("__shellACo") !== -1, "counter surface present");
 assert(body.indexOf("jellyfin.shell.cfgOnce") !== -1, "JELA-842 flag present");
+// JELA-852 AC1. The whole read site is pinned as one literal because the two
+// halves only mean something together: `flgO` is what makes the enable key
+// opt-OUT (absent => armed on the FIRST boot), and putting the `!flg(...
+// Disabled)` conjunct FIRST is what keeps that default revocable from boot 1
+// on a fleet that has never seen either key. A refactor that reorders them, or
+// that quietly reverts flgO to flg, fails here rather than in a census.
+assert(
+  body.indexOf(
+    'var cCO=!flg("jellyfin.shell.cfgOnceDisabled")&&flgO("jellyfin.shell.cfgOnce");',
+  ) !== -1,
+  "JELA-852: cfgOnce is opt-OUT (flgO) and cfgOnceDisabled is read FIRST",
+);
 assert(
   body.indexOf("jellyfin.shell.cfgOnceDisabled") <
-    body.indexOf('flg("jellyfin.shell.cfgOnce")'),
+    body.indexOf('flgO("jellyfin.shell.cfgOnce")'),
   "JELA-842 kill-switch is read BEFORE the enable key",
+);
+assert(
+  body.indexOf('flg("jellyfin.shell.cfgOnce")') === -1,
+  "JELA-852: no opt-IN read of cfgOnce survives",
 );
 assert(body.indexOf("</script") === -1, "no </script literal");
 assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
@@ -288,6 +310,13 @@ function makeEnv(opts) {
       "jellyfin.shell.fetchCoalesceDisabled": "1",
     },
     opts.flagOff ? {} : { "jellyfin.shell.aliasCoalesce": "1" },
+    // JELA-852: cfgOnce is opt-OUT, so an ABSENT key now ARMS the block. Every
+    // section outside I unit-tests one mechanism in isolation and asserts
+    // request counts that a second armed mechanism would move (it also widens
+    // cMAX from 8 to 24), so they stand cfgOnce down explicitly. Section I
+    // passes cfgAbsent to exercise the shipped default — the ONLY place the
+    // absent-key state is under test, which is what makes it the AC2 assert.
+    opts.cfgAbsent ? {} : { "jellyfin.shell.cfgOnce": "0" },
     opts.store || {},
   );
   const localStorage = {
@@ -1059,20 +1088,20 @@ const CFG = JSON.stringify({ Tabs: [{ Id: 1 }] });
 const CFG2 = JSON.stringify({ Tabs: [{ Id: 2 }] });
 
 // cfgOnce ALONE — aliasCoalesce off, itemCache off — so every count below is
-// attributable to this flag and nothing else.
+// attributable to this flag and nothing else. JELA-852: the key is left ABSENT
+// rather than set to "1", so section I now measures the shipped opt-OUT
+// default on a store that looks exactly like a fresh profile's.
 function cfgEnv(extra) {
-  return makeEnv({
-    flagOff: true,
-    store: Object.assign({ "jellyfin.shell.cfgOnce": "1" }, extra || {}),
-  });
+  return makeEnv({ flagOff: true, cfgAbsent: true, store: extra || {} });
 }
 
 async function I() {
-  // I1 — gating. The kill switch is read FIRST, so it wins on a boot that has
-  // never seen the enable key ([[jela838-channel-flag-boot1-optout]]).
+  // I1 — gating, JELA-852 polarity. The explicit opt-out value "0" stands the
+  // flag down; the kill switch still wins ahead of it on a boot that has never
+  // seen either key ([[jela838-channel-flag-boot1-optout]]).
   let e = makeEnv({ flagOff: true });
   e.run();
-  assert(!e.window.__shellACo, "I1: no flag -> inert");
+  assert(!e.window.__shellACo, "I1: cfgOnce=0 -> inert");
   let p = get(e, "/CustomTabs/Config");
   e.netCalls[0].resolve(200, CFG);
   await bodyOf(p);
@@ -1088,7 +1117,7 @@ async function I() {
 
   e = cfgEnv({ "jellyfin.shell.cfgOnceDisabled": "1" });
   e.run();
-  assert(!e.window.__shellACo, "I1: cfgOnceDisabled=1 beats cfgOnce=1");
+  assert(!e.window.__shellACo, "I1: cfgOnceDisabled=1 beats the opt-OUT arm");
 
   e = cfgEnv();
   e.run();
@@ -1096,7 +1125,54 @@ async function I() {
     e.window.__shellACo && e.window.__shellACo.co === 1,
     "I1: cfgOnce arms the shim on its own",
   );
-  console.log("OK: I1: default OFF, kill-switch first, arms without siblings");
+  console.log("OK: I1: kill-switch first, arms without siblings");
+
+  // I1b — JELA-852 AC2, the unit half of the two-boot arm proof. The store here
+  // holds NO cfgOnce key at all, which is precisely a fresh profile's boot 1;
+  // the block must already be armed. The three states are asserted together
+  // because the flip's whole risk is that they collapse into each other: an
+  // absent key must NOT read as OFF (that is the pre-flip bug this ticket
+  // fixes), and "0" must NOT read as ON (that is the rollback path).
+  e = cfgEnv();
+  e.run();
+  assert.strictEqual(
+    e.store["jellyfin.shell.cfgOnce"],
+    undefined,
+    "I1b: the fixture really has no seeded enable key",
+  );
+  assert(
+    e.window.__shellACo && e.window.__shellACo.co === 1,
+    "I1b/AC2: an ABSENT cfgOnce key arms the coalescer on boot 1",
+  );
+  p = get(e, "/CustomTabs/Config");
+  const dup = get(e, "/CustomTabs/Config");
+  assert.strictEqual(
+    e.netCalls.length,
+    1,
+    "I1b/AC2: the unseeded boot already collapses the duplicate",
+  );
+  e.netCalls[0].resolve(200, CFG);
+  assert.strictEqual(await bodyOf(p), CFG, "I1b: first read served");
+  assert.strictEqual(await bodyOf(dup), CFG, "I1b: parked read served");
+
+  // I1c — JELA-852 AC3, the differential: the SAME unseeded store plus the kill
+  // switch leaves the shim absent and the duplicate GET back on the wire.
+  e = cfgEnv({ "jellyfin.shell.cfgOnceDisabled": "1" });
+  e.run();
+  assert(!e.window.__shellACo, "I1c/AC3: cfgOnceDisabled=1 disarms boot 1");
+  p = get(e, "/CustomTabs/Config");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/CustomTabs/Config");
+  assert.strictEqual(
+    e.netCalls.length,
+    2,
+    "I1c/AC3: killed -> the duplicate GET is back",
+  );
+  e.netCalls[1].resolve(200, CFG);
+  await bodyOf(p);
+  console.log("OK: I1b/I1c: absent key arms boot 1, cfgOnceDisabled revokes it");
 
   // I2 — AC1, the JELA-840 headline: /CustomTabs/Config asked 4x inside 82 ms.
   // All four are CONCURRENT, so only the in-flight park can collapse them.

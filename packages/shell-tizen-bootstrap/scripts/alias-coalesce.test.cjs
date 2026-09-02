@@ -80,6 +80,21 @@ assert(
   "reserved kill-switch honored",
 );
 assert(body.indexOf("__shellACo") !== -1, "counter surface present");
+// JELA-852 AC1, pinned in BOTH packages because the read site is mirrored: the
+// enable key must be read through flgO (absent => armed on the first boot) and
+// the kill-switch conjunct must come FIRST so the flip stays revocable from
+// boot 1. The behavioural half of this lives in section I of the shell-tizen
+// copy; here the mirror itself is what is under test.
+assert(
+  body.indexOf(
+    'var cCO=!flg("jellyfin.shell.cfgOnceDisabled")&&flgO("jellyfin.shell.cfgOnce");',
+  ) !== -1,
+  "JELA-852: cfgOnce is opt-OUT (flgO) and cfgOnceDisabled is read FIRST",
+);
+assert(
+  body.indexOf('flg("jellyfin.shell.cfgOnce")') === -1,
+  "JELA-852: no opt-IN read of cfgOnce survives",
+);
 assert(body.indexOf("</script") === -1, "no </script literal");
 assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
 assert(body.indexOf("`") === -1, "body must be ES5 (no template literals)");
@@ -262,6 +277,12 @@ function makeEnv(opts) {
       "jellyfin.shell.fetchCoalesceDisabled": "1",
     },
     opts.flagOff ? {} : { "jellyfin.shell.aliasCoalesce": "1" },
+    // JELA-852: cfgOnce is opt-OUT, so an ABSENT key now ARMS the same block
+    // these sections gate on aliasCoalesce/itemCache. Stand it down explicitly
+    // or every "flag off -> inert" assertion below would arm anyway (and cMAX
+    // would widen from 8 to 24). The opt-OUT default itself is exercised in
+    // section I of the shell-tizen copy of this suite.
+    opts.cfgAbsent ? {} : { "jellyfin.shell.cfgOnce": "0" },
     opts.store || {},
   );
   const localStorage = {
