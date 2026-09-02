@@ -158,6 +158,8 @@ function compile(src, label) {
     "__txBudgetOn",
     "__txNsScan",
     "__txReclaim",
+    // JELA-854: see tx-origin-guard.test.cjs — __txSet consults __txForeign.
+    "__txForeign",
     "__txSet",
   ]
     .map((n) => liftSeedFn(src, n, label))
@@ -182,7 +184,11 @@ function compile(src, label) {
     'var __TXGENK="jellyfin.shell.txGenSweep";' +
     'var __TXBK="' +
     BUDGET_KEY +
-    '";';
+    '";' +
+    // JELA-854: arm the origin guard on the origin these cases actually
+    // use, so every existing assertion below doubles as proof that the
+    // guard is inert on same-origin traffic.
+    'var __txOgOn=true;var __TXORG=["https://srv"];';
   // eslint-disable-next-line no-new-func
   return new Function(
     "localStorage",

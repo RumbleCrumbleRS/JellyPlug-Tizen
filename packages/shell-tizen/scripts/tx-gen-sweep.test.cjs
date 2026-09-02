@@ -131,6 +131,9 @@ function compile(src, label) {
     "__txBudgetOn",
     "__txNsScan",
     "__txReclaim",
+    // JELA-854: __txSet now refuses a foreign-origin key before it writes
+    // anything — lift the predicate or every set reference-errors.
+    "__txForeign",
     "__txSet",
   ]
     .map((n) => liftSeedFn(src, n, label))
@@ -153,7 +156,11 @@ function compile(src, label) {
     // JELA-844 flag key (dark by default, so every existing case here keeps
     // exercising the pre-844 fixed-ten prune path).
     'var TX_BUDGET_KEY="jellyfin.shell.txBudget";var TX_RECLAIM_SLACK=8192;' +
-    'var __TXBK="jellyfin.shell.txBudget";';
+    'var __TXBK="jellyfin.shell.txBudget";' +
+    // JELA-854: arm the origin guard on the origin these cases actually
+    // use, so every existing assertion below doubles as proof that the
+    // guard is inert on same-origin traffic.
+    'var __txOgOn=true;var __TXORG=["https://srv"];';
   // eslint-disable-next-line no-new-func
   return new Function(
     "localStorage",

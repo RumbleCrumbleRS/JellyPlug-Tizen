@@ -2161,6 +2161,38 @@
       "    try{window.__TXVER=__TXVER;}catch(_){}",
       '    var __TXPFX="shell.tx"+__TXVER+":";',
       '    var __TXLRUKEY="shell.txLru"+__TXVER;',
+      // JELA-854: the tx cache key IS the URL, so a key whose origin the
+      // runtime never asks for is unreachable BY CONSTRUCTION — it can be
+      // created but never hit. Measured on a five-boot kept-profile lineage
+      // (JELA-112 rig, shell 25f8ed83): the store gained 305 keys /
+      // 1,813,571 units (34.6% of the M63 5,242,880-unit quota) addressed
+      // `http://<server-lan-host>/JellyfinEnhanced/js/...` while the SAME
+      // modules were already cached — and being hit — under the real server
+      // origin. Headroom went 1,550,000 -> ZERO in three boots. Proof of
+      // deadness: those keys appear in "shell.txLru<VER>" with write-time
+      // stamps that NEVER advance, while every server-origin sibling's stamp
+      // is refreshed each boot (__txGet touches the LRU on a hit). The second
+      // origin comes from the plugin's own config (a reverse-proxied Jellyfin
+      // emits its LOCAL address into the module list it serves), so this is a
+      // class, not one server's quirk.
+      //   Anchor the guard on a KNOWN-GOOD origin set rather than a single
+      // derived one: `S` is the server URL this shell was built for, and
+      // document.baseURI is the document we are actually running in. A key
+      // is foreign only when it matches NEITHER — so a rig/LAN/proxied boot
+      // where those two disagree keeps caching normally, and only a third
+      // origin nobody is talking to is refused. Non-URL keys ("txc:" content
+      // hashes, relative srcs) are never foreign: they carry no origin.
+      //   Deliberately NOT derived from document.baseURI alone: the JEL-184
+      // isForeignOrigin() guard already is, and it FAILS OPEN when baseURI
+      // has no usable origin (the document.open()/write() handoff window) —
+      // which is exactly how these keys got minted past it.
+      '    var __TXOGK="jellyfin.shell.txOriginGuardDisabled";',
+      '    var __txOgOn=(function(){try{return localStorage.getItem(__TXOGK)!=="1";}catch(_){return true;}})();',
+      '    var __TXORG=(function(){var a=[];function add(u){try{var o=new URL(String(u||"")).origin;if(o&&o!=="null"&&a.indexOf(o)<0)a.push(o);}catch(_){}}add(S);try{add(document.baseURI);}catch(_){}return a;})();',
+      // Returns true only for an absolute http(s) key whose origin is in
+      // neither anchor. Anything unparseable, relative, or anchor-less
+      // answers false — the guard can only ever be inert, never wrong-way.
+      '    function __txForeign(k){if(!__txOgOn||!__TXORG.length)return false;var s=String(k||"");if(!/^https?:\\/\\//i.test(s))return false;var o;try{o=new URL(s).origin;}catch(_){return false;}return __TXORG.indexOf(o)<0;}',
       // JEL-178: drop ONLY the per-load epoch-ms cache-buster (JE's
       // ?v=Date.now()); keep config-version tokens (JS-Injector .NET ticks,
       // HomeScreen plugin version) so a config change cache-misses instead
@@ -2262,7 +2294,15 @@
       '    function __txBudgetOn(){try{return localStorage.getItem(__TXBK)==="1"&&localStorage.getItem(__TXBK+"Disabled")!=="1";}catch(_){return false;}}',
       '    function __txNsScan(){var o={e:[],ref:{}};var n=0;try{n=localStorage.length;}catch(_){return o;}for(var i=0;i<n;i++){var k=null;try{k=localStorage.key(i);}catch(_){}if(!k||k.lastIndexOf(__TXPFX,0)!==0)continue;var s=k.substring(__TXPFX.length);if(s.lastIndexOf("vqk:",0)===0||s.lastIndexOf("gqk:",0)===0||s.lastIndexOf("ts:",0)===0)continue;var v=null;try{v=localStorage.getItem(k);}catch(_){}if(v==null)continue;if(v.lastIndexOf(__TXREF,0)===0){o.ref[v.substring(__TXREF.length)]=1;continue;}o.e.push({k:s,n:k.length+v.length,t:1});}return o;}',
       '    function __txReclaim(need,keep,maxT1){var got=0;try{var sc=__txNsScan();var m=__txLru();var c=[];for(var i=0;i<sc.e.length;i++){var e=sc.e[i];if(e.k===keep)continue;if(e.k.lastIndexOf("txc:",0)===0&&!sc.ref[e.k])e.t=0;if(e.t===1&&maxT1<=0)continue;c.push(e);}c.sort(function(a,b){return a.t-b.t||b.n-a.n;});var cut=0,t1=0,dirty=false;for(var j=0;j<c.length&&got<need;j++){var x=c[j];if(x.t===1&&t1>=maxT1)break;try{localStorage.removeItem(__TXPFX+x.k);}catch(_){continue;}try{localStorage.removeItem(__TXPFX+"ts:"+x.k);}catch(_){}if(m[x.k]!=null){delete m[x.k];dirty=true;}got+=x.n;cut++;if(x.t===1)t1++;}if(dirty)__txPersistLru(m);if(cut){try{var q=window.__shellTxReclaim||{n:0,b:0};q.n+=cut;q.b+=got;window.__shellTxReclaim=q;}catch(_){}}}catch(_){}return got;}',
-      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){if(__txBudgetOn()){var nd=body.length+k.length+8192;if(__txReclaim(nd,k,1)>=nd){try{localStorage.setItem(__TXPFX+k,body);var m3=__txLru();m3[k]=Date.now();__txPersistLru(m3);return;}catch(_){}}__qeB();return;}__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
+      // JELA-854: single choke point. Every layer that mints a by-URL tx key
+      // — the appendChild/insertBefore rewrite, the src-setter pipeline, and
+      // the JEL-131 primer — lands here, so refusing a foreign-origin key
+      // once covers all three without having to prove which one wrote a
+      // given entry. The refusal is storage-only: the caller has already
+      // inlined the transpiled body, so the script still runs; it just costs
+      // a fetch again next boot instead of a permanently unreachable slot.
+      // Nothing else is touched on refusal (no "ts:", no "gqk:", no LRU).
+      '    function __txSet(src,body){if(typeof body!=="string"||body.length>262144)return;var s=String(src||"");var k=__txKey(s);if(__txForeign(k)){try{window.__shellTxOriginSkip=(window.__shellTxOriginSkip||0)+1;}catch(_){}return;}if(s.indexOf("?")>=0){var qc=__txQGate(s);if(qc===0)return;if(qc===1)try{localStorage.setItem(__TXPFX+"ts:"+k,String(Date.now()));}catch(_){}__txGenRec(k);}try{localStorage.setItem(__TXPFX+k,body);var m=__txLru();m[k]=Date.now();__txPersistLru(m);}catch(e){if(__txBudgetOn()){var nd=body.length+k.length+8192;if(__txReclaim(nd,k,1)>=nd){try{localStorage.setItem(__TXPFX+k,body);var m3=__txLru();m3[k]=Date.now();__txPersistLru(m3);return;}catch(_){}}__qeB();return;}__txPrune();try{localStorage.setItem(__TXPFX+k,body);var m2=__txLru();m2[k]=Date.now();__txPersistLru(m2);}catch(__){__qeB();}}}',
       // JELA-749: drop bare slots SHADOWED by a version-keyed sibling. The
       // JELA-183 primer's scrape path minted `<url>` keys for modules the
       // runtime only ever asks for as `<url>?v=<token>`; __txKey keeps a
@@ -2294,6 +2334,40 @@
       "      }",
       "      if(dirty)__txPersistLru(m);",
       "      try{window.__shellTxSweep={n:cut,b:by};}catch(_){}",
+      "    }catch(_){}}",
+      // JELA-854: reclaim the foreign-origin residue an already-poisoned
+      // store is carrying. The write guard in __txSet stops the bleeding but
+      // cannot undo it — the measured store was at 5,241,305 of 5,242,880
+      // units with ZERO headroom and 1,813,571 of that provably unreachable,
+      // so without this pass a fixed shell inherits a permanently full store
+      // and keeps paying JELA-844's +49% requests / +49% bytes every boot.
+      // Unlike an eviction policy this costs nothing: there is no cached
+      // request to lose, because no request was ever addressed to these keys.
+      //   Sweeps the WHOLE "shell.tx<VER>:" namespace, not just body slots:
+      // a "ts:" freshness sibling, a "gqk:" family index (JELA-799) and a
+      // "vqk:" path index (JEL-619) are all named after the URL they serve,
+      // so each is dead exactly when its URL is. Dropping a "vqk:"/"gqk:"
+      // index leaves its "txc:" body unreferenced, which is precisely the
+      // tier-0 state __txReclaim already frees first — so the transpile-only
+      // blobs behind a dead origin come back too, one boot later.
+      "    function __txSweepForeign(){try{",
+      "      if(!__txOgOn||!__TXORG.length)return;",
+      "      var n=0;try{n=localStorage.length;}catch(_){return;}",
+      "      var i,k,ks=[];",
+      "      for(i=0;i<n;i++){try{k=localStorage.key(i);}catch(_){continue;}if(k&&k.lastIndexOf(__TXPFX,0)===0)ks.push(k.substring(__TXPFX.length));}",
+      "      var m=__txLru(),cut=0,by=0,dirty=false,j,s,u;",
+      "      for(j=0;j<ks.length;j++){",
+      "        s=ks[j];u=s;",
+      '        if(u.lastIndexOf("ts:",0)===0)u=u.substring(3);',
+      '        else if(u.lastIndexOf("gqk:",0)===0||u.lastIndexOf("vqk:",0)===0)u=u.substring(4);',
+      "        if(!__txForeign(u))continue;",
+      "        var v=null;try{v=localStorage.getItem(__TXPFX+s);}catch(_){}",
+      "        try{localStorage.removeItem(__TXPFX+s);}catch(_){continue;}",
+      "        cut++;by+=__TXPFX.length+s.length+(v==null?0:v.length);",
+      "        if(m[s]!=null){delete m[s];dirty=true;}",
+      "      }",
+      "      if(dirty)__txPersistLru(m);",
+      "      try{window.__shellTxOriginSweep={n:cut,b:by};}catch(_){}",
       "    }catch(_){}}",
       // JEL-405: dynamic-injection paths inline plugin bodies via textContent,
       // so a plugin that references `$`/`jQuery` may execute before the
@@ -2517,6 +2591,12 @@
       "    function __recDyn(src){try{",
       "      if(!src)return;",
       "      var abs;try{abs=new URL(src,document.baseURI).href;}catch(_){return;}",
+      // JELA-854: __DYNKEY is capped at the LAST 100 URLs, so recording an
+      // origin the runtime never asks for does not merely add dead weight —
+      // it EVICTS the real URLs this list exists to replay, and then feeds
+      // them back to the primer as fetch candidates next boot. Filter at the
+      // recorder so the poison never enters the list.
+      "      if(__txForeign(abs))return;",
       '      if(!__dynRec){__dynRec={};try{var prev=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");for(var i=0;i<prev.length;i++)__dynRec[prev[i]]=1;}catch(_){}}',
       "      if(__dynRec[abs])return;",
       "      __dynRec[abs]=1;",
@@ -2599,7 +2679,12 @@
       '      try{var __ds=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");for(var __di=0;__di<__ds.length;__di++){var __du=String(__ds[__di]||"");var __dqi=__du.indexOf("?");if(__dqi<0)continue;var __dp=__du.substring(0,__dqi),__dqs=__du.substring(__dqi);__dqP[__dp]=__dqs;var __dsl=__dp.lastIndexOf("/");if(__dsl>0&&!__dqD[__dp.substring(0,__dsl)])__dqD[__dp.substring(0,__dsl)]=__dqs;if(__dqU===null)__dqU=__dqs;else if(__dqU!==__dqs)__dqUok=false;}}catch(_){}',
       '      function __dqFor(abs){try{var q=__dqP[abs];if(q)return q;var sl=abs.lastIndexOf("/");if(sl>0){q=__dqD[abs.substring(0,sl)];if(q)return q;}if(__dqUok&&__dqU)return __dqU;}catch(_){}return "";}',
       '      function __dqAdd(abs){if(String(abs).indexOf("?")>=0)return abs;var q=__dqFor(abs);return q?abs+q:abs;}',
-      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(isBundle(abs))return null;abs=__dqAdd(abs);if(String(abs).indexOf('?')>=0&&__txQGate(abs)!==2)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
+      // JELA-854: `origin` above is document.baseURI's, which is empty when
+      // that parse threw — and an empty `origin` short-circuits the check to
+      // "accept everything". __txForeign is anchored on `S` as well, so a
+      // stale __DYNKEY entry pointing at an origin nobody talks to can no
+      // longer cost a fan-out of fetches that can only 404 or hang.
+      "      function norm(u){var abs;try{abs=new URL(u,document.baseURI).href;}catch(_){return null;}try{if(origin&&new URL(abs).origin!==origin)return null;}catch(_){return null;}if(__txForeign(abs))return null;if(isBundle(abs))return null;abs=__dqAdd(abs);if(String(abs).indexOf('?')>=0&&__txQGate(abs)!==2)return null;var k=__txKey(abs);if(seen[k])return null;var hit=null;try{hit=localStorage.getItem(__TXPFX+k);}catch(_){}if(hit!=null)return null;seen[k]=1;return abs;}",
       "      function enq(u){var abs=norm(u);if(abs&&P.q<220){P.q++;fq.push(abs);}}",
       '      function stopAuth(){stopped=true;P.st="auth";}',
       "      function finishMaybe(){if(!stopped&&!fq.length&&!pend&&!bodies.length&&!busy)P.done=1;}",
@@ -2699,6 +2784,22 @@
       // primer's kill switch — the residue it clears outlives whichever boot
       // wrote it. 12 s is well past the boot window this program measures.
       "    try{setTimeout(__txSweepBare,12000);}catch(_){}",
+      // JELA-854: same 12 s post-boot slot. __recDyn's filter only stops NEW
+      // poison; a store that already banked 100 foreign URLs would replay
+      // them into the primer forever, so rewrite the recorded list once too.
+      "    try{setTimeout(function(){",
+      "      __txSweepForeign();",
+      "      try{",
+      "        if(!__txOgOn||!__TXORG.length)return;",
+      '        var ds=JSON.parse(localStorage.getItem(__DYNKEY)||"[]");',
+      "        if(!ds||!ds.length)return;",
+      "        var keep=[],di;",
+      "        for(di=0;di<ds.length;di++)if(!__txForeign(ds[di]))keep.push(ds[di]);",
+      "        if(keep.length===ds.length)return;",
+      "        localStorage.setItem(__DYNKEY,JSON.stringify(keep));",
+      "        try{window.__shellDynOriginDrop=ds.length-keep.length;}catch(_){}",
+      "      }catch(_){}",
+      "    },12000);}catch(_){}",
       "    try{",
       '      if(localStorage.getItem("jellyfin.shell.txPrimeDisabled")!=="1"){',
       '        var __tpP={q:0,f:0,t:0,e:0,st:"",done:0};',

@@ -227,6 +227,10 @@ function loadShell(src, label, store) {
     JSON.stringify(constStr(src, "__TXBK", label)) +
     ", __TXREF = " +
     JSON.stringify(constStr(src, "__TXREF", label)) +
+    // JELA-854: arm the origin guard on the origin these cases actually use,
+    // so every quota assertion below doubles as proof that the guard is inert
+    // on same-origin traffic.
+    ', __txOgOn = true, __TXORG = ["https://demo.jellyfin.org"]' +
     ";\n";
 
   const realFns = [
@@ -252,6 +256,8 @@ function loadShell(src, label, store) {
     "__txBudgetOn",
     "__txNsScan",
     "__txReclaim",
+    // JELA-854: see tx-origin-guard.test.cjs — __txSet consults __txForeign.
+    "__txForeign",
     "__txSet",
   ];
 
