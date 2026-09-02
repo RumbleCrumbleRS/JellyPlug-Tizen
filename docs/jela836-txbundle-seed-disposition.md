@@ -12,6 +12,11 @@ Measured 2026-09-02 against live prod. Follow-up from [JELA-835](./jela835-tx-bu
 JSI `CustomJavaScripts` array, `Enabled: true`, 610 chars (428 of comment, 92 of
 code):
 
+<!-- Deployed payload, recorded byte-for-byte. Do not let prettier expand it: the
+     92 code chars below are what is on the wire, and 610 is the measured length
+     of the whole entry. Reformatting would make this document describe a payload
+     that was never deployed. -->
+<!-- prettier-ignore -->
 ```js
 (function(){try{localStorage.setItem("jellyfin.shell.txBundleDisabled","0");}catch(e){}})();
 ```
@@ -24,15 +29,15 @@ trap cuts both ways).
 
 ### 1. The key has read sites in vehicles that no deploy can reach
 
-| read site | vehicle | updatable? |
-| --- | --- | --- |
-| `packages/shell-tizen/src/shell.js:7855` | hosted `/shell/shell.min.js` | **yes** — server-plugin, `max-age=60`, `?v=<sha>` |
-| `packages/shell-tizen/src/shell.js:7855` | legacy full WGT (`shell-tizen/src/index.html:119` loads the *local* `shell.min.js`) | **no** |
-| `packages/shell-tizen-bootstrap/src/boot-shell.src.js:6396` | HSB WGT baked last-known-good fallback (`bootstrap/src/index.html`: loaded on 404 / timeout / script-error) | **no** |
+| read site                                                   | vehicle                                                                                                     | updatable?                                        |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `packages/shell-tizen/src/shell.js:7855`                    | hosted `/shell/shell.min.js`                                                                                | **yes** — server-plugin, `max-age=60`, `?v=<sha>` |
+| `packages/shell-tizen/src/shell.js:7855`                    | legacy full WGT (`shell-tizen/src/index.html:119` loads the _local_ `shell.min.js`)                         | **no**                                            |
+| `packages/shell-tizen-bootstrap/src/boot-shell.src.js:6396` | HSB WGT baked last-known-good fallback (`bootstrap/src/index.html`: loaded on 404 / timeout / script-error) | **no**                                            |
 
 The gate is armed once per boot and shared: `ceTxdState()` calls
 `txBundleAttach(d, u)`, which leaves `d.want` undefined when the key reads `"1"`,
-and the `/web/`-side seed pipeline (`__txDropGet`) reads `d.want` off the *same*
+and the `/web/`-side seed pipeline (`__txDropGet`) reads `d.want` off the _same_
 `window.__shellTxDrop`. So one read of the key decides the whole boot's path —
 and on a fallback or legacy-WGT boot that read happens in code we cannot ship to.
 
@@ -50,7 +55,7 @@ pulled; both are structurally unable to answer the question.
 newest ring received **2026-09-01T13:05:59Z** (25.7 h before this read; nothing
 since).
 
-- The device id is `oid()`, minted into localStorage per *profile*. **Every one of
+- The device id is `oid()`, minted into localStorage per _profile_. **Every one of
   the 627 ids appears exactly once** in `LatestPerDevice`. A wiped or fresh
   profile mints a new id, so the beacon cannot express "this TV booted again" —
   the exact predicate the drop decision needs.
@@ -71,7 +76,7 @@ channel-executing (Tizen family / Jellyfin Web), 94 shell-capable.
   2026-09-01T13:03:52Z); the newest non-rig Tizen client
   (`Tyler | Samsung Smart TV | Jellyfin for Tizen 0.1.0`) last checked in
   2026-08-31T01:48:31Z — **before** the window, so it was never exposed.
-- `DateLastActivity` is per *client*, so it can only identify devices that never
+- `DateLastActivity` is per _client_, so it can only identify devices that never
   came back. It cannot enumerate who was present during the window.
 
 **The two signals disagree by two orders of magnitude** — ~300 beacon rings on
@@ -81,9 +86,9 @@ device count as a fleet size.
 
 ## The cost asymmetry
 
-| | cost |
-| --- | --- |
-| **keep the entry forever** | 610 chars of 923,444 (**0.066 %**) of a bundle that is itself localStorage-cached per boot (`jsiChannelCache`), plus one `localStorage.setItem` per boot |
+|                                      | cost                                                                                                                                                                                                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **keep the entry forever**           | 610 chars of 923,444 (**0.066 %**) of a bundle that is itself localStorage-cached per boot (`jsiChannelCache`), plus one `localStorage.setItem` per boot                                                                                                    |
 | **drop it while one TV holds `"1"`** | that TV pays the per-body path on every cold boot, **forever**, with no repair channel left: 68 requests / 223,434 B instead of 6 / 196,989 B (JELA-835 measured pair) — +62 requests, +26 KB, and the JELA-824 tx storm carries 3.9–10.2 s of client queue |
 
 Unbounded-in-duration downside against a 0.066 % upside, with the propagation
@@ -94,9 +99,9 @@ premise unprovable. There is no version of the cleanup that pays.
 1. **Keep the entry permanently.** It is not a temporary neutralisation; it is the
    permanent repair seed for a key whose read site ships in un-updatable vehicles.
 2. **Relabel the entry's comment header** so it stops advertising its own removal.
-   The old header ended `Drop this entry only after it has propagated to the
-   fleet.` — that sentence is what would have got it deleted by a future cleanup.
-   Done 2026-09-02; see *Outcome* below.
+   The old header ended `Drop this entry only after it has propagated to the fleet.`
+   — that sentence is what would have got it deleted by a future cleanup.
+   Done 2026-09-02; see _Outcome_ below.
 3. Any future `txBundle` kill switch should be **seeded from a key the hosted
    shell alone reads**, so that its rollback is a delete rather than an
    unprovable propagation wait.
@@ -111,11 +116,11 @@ The relabel is deployed. Only the entry's `Name` and its comment header changed;
 the executable body is byte-identical to what JELA-835 left on the wire, and no
 other entry of the 109 moved.
 
-| | before | after |
-| --- | --- | --- |
-| entry name | `JellyPlug — txBundle kill switch (JELA-824)` | `JellyPlug — txBundle repair seed (JELA-824/836, PERMANENT)` |
+|             | before                                                       | after                                                                                                       |
+| ----------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| entry name  | `JellyPlug — txBundle kill switch (JELA-824)`                | `JellyPlug — txBundle repair seed (JELA-824/836, PERMANENT)`                                                |
 | header ends | `Drop this entry only after it has propagated to the fleet.` | `This entry is the only repair channel, permanently. … Details: docs/jela836-txbundle-seed-disposition.md.` |
-| `public.js` | 923,444 B, sha256 `92cf94068510…` | 924,051 B, sha256 `d7b6a5b3e958…` |
+| `public.js` | 923,444 B, sha256 `92cf94068510…`                            | 924,051 B, sha256 `d7b6a5b3e958…`                                                                           |
 
 Verification (per `jsi-config-save-off-by-one`, both sides read):
 
@@ -127,10 +132,11 @@ Verification (per `jsi-config-save-off-by-one`, both sides read):
   `localStorage.setItem("jellyfin.shell.txBundleDisabled","0")`, and the whole
   923 KB bundle parses (`node --check`).
 - the served bundle rebuilt on the first POST this time — the save count is not
-  fixed; the rule is *POST until the served artifact carries your bytes*.
+  fixed; the rule is _POST until the served artifact carries your bytes_.
 
 The deployed entry, verbatim (the JSI config is not in git):
 
+<!-- prettier-ignore -->
 ```js
 /* JellyPlug — PERMANENT tx-bundle repair seed. Hands every TV back to the
    JELA-833 coalesced tx-bundle path by writing "0" UNCONDITIONALLY.
@@ -159,7 +165,7 @@ workspace as `jela836/pre-relabel-20260902.json` and
 
 **An opt-OUT flag whose read site ships in an un-updatable vehicle converts its
 own seed into permanent infrastructure.** The rollback of such a seed is never a
-delete, and it is never *eventually* a delete either — the "wait for propagation"
+delete, and it is never _eventually_ a delete either — the "wait for propagation"
 plan has no terminating condition, because the only instrument that could
 terminate it (a per-device boot signal) does not survive a profile wipe. Decide
 the flag's vehicle before you decide its polarity.
