@@ -163,6 +163,7 @@ public class TxDropRebuildTask : IScheduledTask
         // those URLs — mirror of the seed's __txScrapeBodies, plugin-agnostic
         // by construction — fetch them and lower them into the drop too, so
         // dynamic injection drop-HITs and Babel never loads.
+        var reachable = new Dictionary<string, string>(result.DiscoveredHashes, StringComparer.Ordinal);
         if (!config.DisableTxDynScan)
         {
             progress.Report(60);
@@ -172,10 +173,36 @@ public class TxDropRebuildTask : IScheduledTask
                 progress.Report(75);
                 var dynResult = await _builder.RebuildAsync(discovered, timeout, cancellationToken).ConfigureAwait(false);
                 _drop.ResetTxGzipCache();
+                foreach (var kv in dynResult.DiscoveredHashes)
+                {
+                    reachable[kv.Key] = kv.Value;
+                }
+
                 _logger.LogInformation(
                     "tx-drop dynamic scan: {Discovered} module bodies discovered; manifest now {Entries} entries",
                     discovered.Count,
                     dynResult.EntryCount);
+            }
+        }
+
+        // JELA-881: garbage-collect what the walk can no longer reach. Runs
+        // ONCE, after BOTH passes, over the UNION of what they discovered —
+        // pruning inside RebuildAsync would make the dynamic pass delete every
+        // static body, because each pass only ever sees its own slice of the
+        // walk.
+        if (!config.DisableTxPrune)
+        {
+            progress.Report(90);
+            var pruned = TxDropPruner.Prune(
+                _drop.TxDir,
+                _drop.TxManifestPath,
+                _drop.TxPruneStatePath,
+                reachable,
+                config.TxPruneGraceRebuilds,
+                _logger);
+            if (pruned.Deleted > 0)
+            {
+                _drop.ResetTxGzipCache(); // per-hash gzips of bodies that are gone
             }
         }
 

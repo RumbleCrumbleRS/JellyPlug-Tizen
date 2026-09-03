@@ -71,6 +71,7 @@ public class ShellDropService
         DropDir = Path.Combine(appPaths.DataPath, "jellyplug-shell");
         TxDir = Path.Combine(DropDir, "tx");
         TxManifestPath = Path.Combine(DropDir, "tx-manifest.json");
+        TxPruneStatePath = Path.Combine(DropDir, "tx-prune-state.json");
     }
 
     private readonly Dictionary<string, object?> _baseManifest;
@@ -262,6 +263,15 @@ public class ShellDropService
     public string TxDir { get; }
 
     public string TxManifestPath { get; }
+
+    /// <summary>
+    /// JELA-881: sidecar holding <see cref="TxDropPruner"/>'s hash → (owning
+    /// source URL, consecutive misses) bookkeeping. Deliberately NOT part of
+    /// tx-manifest.json: that file is TV-facing and its normalized sha gates
+    /// the config fingerprint, so prune bookkeeping in it would churn both.
+    /// Losing this file costs one extra grace cycle, never a deletion.
+    /// </summary>
+    public string TxPruneStatePath { get; }
 
     /// <summary>
     /// JELA-708: bound for <see cref="_txGzip"/>. A cold boot pulls ~69 tx
