@@ -1973,6 +1973,61 @@
       "    function needsJq(code){return __jqRe.test(code);}",
       '    function wrapJq(code){return "(function(){function __run(){"+code+"\\n}if(typeof window.jQuery!=\\"undefined\\"){__run();return;}var __to;var __t=setInterval(function(){if(typeof window.jQuery!=\\"undefined\\"){clearInterval(__t);clearTimeout(__to);try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}}},20);__to=setTimeout(function(){clearInterval(__t);try{console.warn(\\"shell: jQuery wait timed out, running anyway\\");}catch(_){}try{__run();}catch(e){try{console.error(\\"shell: deferred plugin failed\\",e&&e.message);}catch(_){}}},10000);})();";}',
       '    function dispatchEvt(node,type){try{var ev=document.createEvent("Event");ev.initEvent(type,false,false);node.dispatchEvent(ev);}catch(_){}try{var fn=node["on"+type];if(typeof fn==="function")fn.call(node,{type:type,target:node});}catch(_){}}',
+      // JELA-867 (mirror of shell.js): yield between dynamic transpile jobs.
+      // JellyfinEnhanced appends its whole module fan-out at once, so every
+      // body's fetch settles together and all N continuations drain in ONE
+      // microtask checkpoint — one task, measured at 2.5 s of dead remote
+      // 3.5 s after the home screen paints. Run the two synchronous costs
+      // (needsTx's parse + Babel on a drop miss; the insert's compile+execute)
+      // through a queue that yields to the task loop, so the input latency
+      // ceiling is one slice instead of the whole fan-out. Order is preserved
+      // (jobs run in push order = fetch-completion order).
+      // Kill switch localStorage["jellyfin.shell.txYield"]="0"; budget
+      // "jellyfin.shell.txYieldMs" (default 16 ms). Diag window.__shellTxYield.
+      "    try{window.__shellTxYield={on:1,n:0,inl:0,slices:0,max:0,gap:0,qmax:0};}catch(_){}",
+      "    var __yq=[],__yqOn=0,__yqOff=null,__yqB=null,__yqLast=0;",
+      '    function __yqDisabled(){if(__yqOff===null){__yqOff=false;try{__yqOff=(localStorage.getItem("jellyfin.shell.txYield")==="0");}catch(_){}}return __yqOff;}',
+      // The budget is per SLICE and defaults to 0 — one job per task.
+      // Anything higher is a trap, and the first cut of this fix fell in it:
+      // a job's cost is NOT visible in the synchronous return of the function
+      // this loop calls. __txResolve resolves an ALREADY-RESOLVED promise, so
+      // the drop decision and the whole Babel pass ride the MICROTASK TAIL,
+      // which cannot drain until the pump's while-loop returns. A 16 ms budget
+      // therefore measured ~1 ms per job, packed 17 jobs into a slice, and all
+      // 17 Babel passes still ran back-to-back in one microtask checkpoint —
+      // 306 jobs in 18 slices, and a 1,969 ms stall survived on the rig. One
+      // job per task is the only bound that holds when the work can be
+      // deferred behind a resolved promise. d.gap records the wall time
+      // between slices, which is where that tail shows up.
+      '    function __yqBudget(){if(__yqB===null){__yqB=0;try{var v=parseInt(localStorage.getItem("jellyfin.shell.txYieldMs")||"",10);if(v>=0&&v<=5000)__yqB=v;}catch(_){}}return __yqB;}',
+      "    function __yqKick(){var ok=false;try{setTimeout(__yqPump,0);ok=true;}catch(_){}return ok;}",
+      "    function __yqPump(){",
+      "      var t=Date.now(),b=__yqBudget(),d=window.__shellTxYield;",
+      "      try{if(d&&__yqLast&&t-__yqLast>d.gap)d.gap=t-__yqLast;}catch(_){}",
+      "      while(__yq.length){",
+      "        var f=__yq.shift();",
+      "        try{f();}catch(_){}",
+      "        try{if(d)d.n++;}catch(_){}",
+      "        if(Date.now()-t>=b)break;",
+      "      }",
+      "      __yqLast=Date.now();",
+      "      try{if(d){d.slices++;var el=__yqLast-t;if(el>d.max)d.max=el;}}catch(_){}",
+      "      if(__yq.length){if(!__yqKick())__yqPump();return;}",
+      "      __yqOn=0;",
+      "    }",
+      "    function __yqRun(fn){",
+      // Paint gate: before __shellPaintGate.fired, run inline (no yield) so
+      // pre-paint scripts stay on the critical path. After paint, queue and
+      // yield so input interleaves. on=0 means disabled, on=2 means inline
+      // (pre-paint), on=1 means queued (post-paint).
+      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0){d0.on=__yqDisabled()?0:2;d0.inl++;}}catch(_){}return fn();}",
+      "      try{var d1=window.__shellTxYield;if(d1)d1.on=1;}catch(_){}",
+      "      return new Promise(function(res,rej){",
+      "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
+      "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",
+      "        if(!__yqOn){__yqOn=1;if(!__yqKick()){__yqOn=0;__yqPump();}}",
+      "      });",
+      "    }",
       "    function rewrite(parent,node,ref,origMethod){",
       '      var src=node.getAttribute("src");',
       // JELA-848: same repoint on the appendChild path (mirror of shell.js).
@@ -2006,11 +2061,17 @@
       // __ensureBabel nor maybeTranspile runs for this script.
       // JELA-861: one needsTx() parse per body, carried through the drop
       // attempt, the Babel prime and maybeTranspile (was three).
+      // JELA-867: the two synchronous costs run as queued jobs — the outer
+      // one carries needsTx and (on a drop miss, whose promises are all
+      // already-resolved) the Babel pass in the same task; the inner one
+      // carries the insert, which is a compile+execute of the lowered body.
+      "          return __yqRun(function(){",
       "          var __n=needsTx(code);",
       "          var __dp=__n?__txDropGet(code):Promise.resolve(null);",
       "          return __dp.then(function(pre){",
       "          var __p=pre==null&&__n?__ensureBabelDyn():Promise.resolve(true);",
       "          return __p.then(function(){",
+      "            return __yqRun(function(){",
       "            var out=pre!=null?pre:maybeTranspile(code,__n);",
       "            if(out==null){",
       "              try{parent.removeChild(stub);}catch(_){}",
@@ -2027,6 +2088,8 @@
       "            try{parent.replaceChild(node,stub);}catch(_){try{parent.appendChild(node);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "            });",
+      "          });",
       "          });",
       "          });",
       "        })",
@@ -2085,11 +2148,14 @@
       // JEL-621: server pre-lowered drop attempt first (see rewrite above).
       // JELA-861: one needsTx() parse per body, carried through the drop
       // attempt, the Babel prime and maybeTranspile (was three).
+      // JELA-867: same two queued jobs as rewrite() above.
+      "          return __yqRun(function(){",
       "          var __n=needsTx(code);",
       "          var __dp=__n?__txDropGet(code):Promise.resolve(null);",
       "          return __dp.then(function(pre){",
       "          var __p=pre==null&&__n?__ensureBabelDyn():Promise.resolve(true);",
       "          return __p.then(function(){",
+      "            return __yqRun(function(){",
       "            var out=pre!=null?pre:maybeTranspile(code,__n);",
       '            if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '            var ns=document.createElement("script");',
@@ -2103,6 +2169,8 @@
       "            catch(_){try{(document.head||document.documentElement).appendChild(ns);}catch(__){}}",
       "            __txSet(src,body);",
       '            dispatchEvt(node,"load");',
+      "            });",
+      "          });",
       "          });",
       "          });",
       "        })",

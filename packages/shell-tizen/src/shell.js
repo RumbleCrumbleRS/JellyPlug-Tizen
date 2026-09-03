@@ -2135,6 +2135,89 @@
       // scripts all drop-hit never loads Babel, and every dynamically-
       // injected module that misses the drop (e.g. a plugin's versioned
       // submodules) nulls out as "setter transpile failed".
+      // JELA-867: the dynamic pipeline's transpile+insert work is what makes
+      // the remote go dead ~3.5 s after the home screen paints. JellyfinEnhanced
+      // appends its whole module fan-out at once, so every body's fetch settles
+      // in the same window and all N continuations drain in ONE microtask
+      // checkpoint — i.e. one task. Measured on the JELA-112 rig against the
+      // served shell (JELA-866/867): 63 Babel.transform calls, 2,418 ms, 62 of
+      // them in a single contiguous 5,619->8,288 ms run, against a 2,568 ms
+      // main-thread stall on the 20 ms heartbeat and a 2,280 ms worst key
+      // latency. The COST is JELA-850's problem (a drop that covered all 153
+      // scripts would delete most of it); the SHAPE is this one's, and it
+      // survives 850 — a drop hit still compiles and executes an inserted
+      // <script>, and 63 of those in one drain is the same block, smaller.
+      //
+      // So run the per-script work through a queue that yields to the task
+      // loop, but ONLY after the home screen has painted. Before paint,
+      // scripts run inline so they stay on the critical path (yielding here
+      // costs ~1 s of first card for no input benefit — nobody presses keys
+      // before the screen is on the glass). After paint, the browser services
+      // input BETWEEN tasks, so the ceiling on input latency becomes one
+      // slice, not the whole fan-out. Two hop points per script, because
+      // there are two synchronous costs and a drop hit only has the second:
+      // (a) __txResolve — needsTx's `new Function` parse plus Babel.transform
+      // on a miss; (b) the insert — textContent + insert is a synchronous
+      // compile+execute of the lowered body.
+      // The per-slice budget defaults to 0 — one job per task — for the
+      // reason spelled out on __yqBudget below. The ceiling on a slice is
+      // therefore the slowest single job (132 ms measured), not a packed
+      // slice's worth of them.
+      //
+      // Order is preserved exactly: jobs run in push order, which is the
+      // fetch-completion order they already ran in. What changes is that
+      // timers, network callbacks and INPUT now interleave between modules.
+      // Nothing in the JE fan-out depends on being uninterrupted — each
+      // module is an independent <script> whose only ordering contract is
+      // the load event this pipeline already dispatches.
+      //
+      // Kill switch: localStorage["jellyfin.shell.txYield"]="0" restores the
+      // inline (one-block) behaviour. Budget: "jellyfin.shell.txYieldMs".
+      // Diag: window.__shellTxYield = {on,n,slices,max,gap,qmax}.
+      "    try{window.__shellTxYield={on:1,n:0,inl:0,slices:0,max:0,gap:0,qmax:0};}catch(_){}",
+      "    var __yq=[],__yqOn=0,__yqOff=null,__yqB=null,__yqLast=0;",
+      '    function __yqDisabled(){if(__yqOff===null){__yqOff=false;try{__yqOff=(localStorage.getItem("jellyfin.shell.txYield")==="0");}catch(_){}}return __yqOff;}',
+      // The budget is per SLICE and defaults to 0 — one job per task.
+      // Anything higher is a trap, and the first cut of this fix fell in it:
+      // a job's cost is NOT visible in the synchronous return of the function
+      // this loop calls. __txResolve resolves an ALREADY-RESOLVED promise, so
+      // the drop decision and the whole Babel pass ride the MICROTASK TAIL,
+      // which cannot drain until the pump's while-loop returns. A 16 ms budget
+      // therefore measured ~1 ms per job, packed 17 jobs into a slice, and all
+      // 17 Babel passes still ran back-to-back in one microtask checkpoint —
+      // 306 jobs in 18 slices, and a 1,969 ms stall survived on the rig. One
+      // job per task is the only bound that holds when the work can be
+      // deferred behind a resolved promise. d.gap records the wall time
+      // between slices, which is where that tail shows up.
+      '    function __yqBudget(){if(__yqB===null){__yqB=0;try{var v=parseInt(localStorage.getItem("jellyfin.shell.txYieldMs")||"",10);if(v>=0&&v<=5000)__yqB=v;}catch(_){}}return __yqB;}',
+      "    function __yqKick(){var ok=false;try{setTimeout(__yqPump,0);ok=true;}catch(_){}return ok;}",
+      "    function __yqPump(){",
+      "      var t=Date.now(),b=__yqBudget(),d=window.__shellTxYield;",
+      "      try{if(d&&__yqLast&&t-__yqLast>d.gap)d.gap=t-__yqLast;}catch(_){}",
+      "      while(__yq.length){",
+      "        var f=__yq.shift();",
+      "        try{f();}catch(_){}",
+      "        try{if(d)d.n++;}catch(_){}",
+      "        if(Date.now()-t>=b)break;",
+      "      }",
+      "      __yqLast=Date.now();",
+      "      try{if(d){d.slices++;var el=__yqLast-t;if(el>d.max)d.max=el;}}catch(_){}",
+      "      if(__yq.length){if(!__yqKick())__yqPump();return;}",
+      "      __yqOn=0;",
+      "    }",
+      "    function __yqRun(fn){",
+      // Paint gate: before __shellPaintGate.fired, run inline (no yield) so
+      // pre-paint scripts stay on the critical path. After paint, queue and
+      // yield so input interleaves. on=0 means disabled, on=2 means inline
+      // (pre-paint), on=1 means queued (post-paint).
+      "      if(__yqDisabled()||(window.__shellPaintGate&&!window.__shellPaintGate.fired)){try{var d0=window.__shellTxYield;if(d0){d0.on=__yqDisabled()?0:2;d0.inl++;}}catch(_){}return fn();}",
+      "      try{var d1=window.__shellTxYield;if(d1)d1.on=1;}catch(_){}",
+      "      return new Promise(function(res,rej){",
+      "        __yq.push(function(){try{res(fn());}catch(e){rej(e);}});",
+      "        try{var d=window.__shellTxYield;if(d&&__yq.length>d.qmax)d.qmax=__yq.length;}catch(_){}",
+      "        if(!__yqOn){__yqOn=1;if(!__yqKick()){__yqOn=0;__yqPump();}}",
+      "      });",
+      "    }",
       "    function __txResolve(code){",
       "      if(!needsTx(code)){try{window.__shellTxSkipCount=(window.__shellTxSkipCount||0)+1;}catch(_){}return Promise.resolve(code);}",
       "      return __txDropGet(code).then(function(b){",
@@ -2416,8 +2499,8 @@
       // Chromium 56 as-is and don\'t need the ~50–200 ms transpile pass.
       // JEL-621: __txResolve tries the server's pre-lowered drop first,
       // then falls back to the same maybeTranspile contract.
-      "        .then(function(code){return __txResolve(code);})",
-      "        .then(function(out){",
+      "        .then(function(code){return __yqRun(function(){return __txResolve(code);});})",
+      "        .then(function(out){return __yqRun(function(){",
       "          if(out==null){",
       "            try{parent.removeChild(stub);}catch(_){}",
       '            try{console.warn("shell: dynamic transpile failed",src);}catch(_){}',
@@ -2433,7 +2516,7 @@
       "          try{parent.replaceChild(node,stub);}catch(_){try{parent.appendChild(node);}catch(__){}}",
       "          __txSet(src,body);",
       '          dispatchEvt(node,"load");',
-      "        })",
+      "        });})",
       "        .catch(function(err){",
       "          try{parent.removeChild(stub);}catch(_){}",
       '          try{console.warn("shell: dynamic fetch/transpile failed",src,err&&err.message);}catch(_){}',
@@ -2506,8 +2589,8 @@
       '        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})',
       // JEL-554 (v32): fast path for plugin bodies that parse on Chromium 56.
       // JEL-621: server pre-lowered drop attempt first (see __txResolve).
-      "        .then(function(code){return __txResolve(code);})",
-      "        .then(function(out){",
+      "        .then(function(code){return __yqRun(function(){return __txResolve(code);});})",
+      "        .then(function(out){return __yqRun(function(){",
       '          if(out==null){try{console.warn("shell: setter transpile failed",src);}catch(_){}dispatchEvt(node,"error");return;}',
       '          var ns=document.createElement("script");',
       "          var gated=needsJq(out);",
@@ -2520,7 +2603,7 @@
       "          catch(_){try{(document.head||document.documentElement).appendChild(ns);}catch(__){}}",
       "          __txSet(src,body);",
       '          dispatchEvt(node,"load");',
-      "        })",
+      "        });})",
       '        .catch(function(err){try{console.warn("shell: setter fetch/transpile failed",src,err&&err.message);}catch(_){}dispatchEvt(node,"error");});',
       "    }",
       "    function isShellInternal(node){",
@@ -3525,7 +3608,7 @@
       // after the entry ran anyway, so waiting loses nothing.
       '        if(typeof window.ApiClient==="undefined"){',
       "          if(window.__shellCMTries<240)setTimeout(__shellWalkWebpack,500);",
-      '          else window.__shellCMErr=\"noApiClient\";',
+      '          else window.__shellCMErr="noApiClient";',
       "          return;",
       "        }",
       "        var chunkKey=null;",

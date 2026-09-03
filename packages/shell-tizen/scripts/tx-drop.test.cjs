@@ -417,7 +417,11 @@ function makeHarness(seedText, opts) {
   XHR.prototype.send = function () {};
   const win = {};
   const timers = [];
-  const vTimer = (fn) => (timers.push(fn), timers.length);
+  // JELA-867: the seed's dynamic pipeline hops through setTimeout(...,0)
+  // between transpile jobs (the __yq yield queue), so the fake timer has to
+  // actually fire for a scenario to complete. Register globally; drain()
+  // alternates microtask flushes with a timer flush.
+  const vTimer = (fn) => (timers.push(fn), PENDING_TIMERS.push(fn), timers.length);
   const sandbox = {
     window: win,
     document: doc,
@@ -495,8 +499,18 @@ function makeHarness(seedText, opts) {
   return { win, doc, created, fetched, store, sandbox };
 }
 
+const PENDING_TIMERS = [];
+
 async function drain() {
-  for (let i = 0; i < 60; i++) await Promise.resolve();
+  for (let round = 0; round < 24; round++) {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    if (!PENDING_TIMERS.length) continue;
+    for (const fn of PENDING_TIMERS.splice(0, PENDING_TIMERS.length)) {
+      try {
+        fn();
+      } catch (_) {}
+    }
+  }
 }
 
 async function runSeedScenarios(label, src) {
