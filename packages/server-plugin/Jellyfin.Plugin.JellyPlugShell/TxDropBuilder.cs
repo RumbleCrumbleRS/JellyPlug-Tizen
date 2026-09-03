@@ -13,8 +13,18 @@ public record TxSource(string From, string Text);
 /// FINAL body the device would inline (raw text for ES5-safe sources,
 /// lowered output otherwise). The JELA-186 dynamic-module scan runs over
 /// these bodies — the same bytes the seed's __txScrapeBodies would see.
+///
+/// <see cref="DiscoveredHashes"/> maps every source this pass was HANDED to
+/// the publish hash of the text it served, whatever became of it — precheck
+/// skips and transform failures included. That is the reachability set
+/// <see cref="TxDropPruner"/> prunes against, and hashing the INPUT rather
+/// than the outcome is what keeps a failed transform from evicting the body
+/// its last successful run published (the JELA-833 / --merge invariant).
 /// </summary>
-public record TxRebuildResult(int EntryCount, IReadOnlyList<TxSource> FinalBodies);
+public record TxRebuildResult(
+    int EntryCount,
+    IReadOnlyList<TxSource> FinalBodies,
+    IReadOnlyDictionary<string, string> DiscoveredHashes);
 
 /// <summary>One scraped candidate group: relative script names plus the ranked candidate dirs that may host them.</summary>
 public record TxScrapeGroup(IReadOnlyList<string> Dirs, IReadOnlyList<string> Names);
@@ -233,9 +243,18 @@ public class TxDropBuilder
 
         int lowered = 0, skipped = 0, failed = 0;
         var finals = new List<TxSource>();
+        var discovered = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var s in sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // JELA-881: record the reachability fact BEFORE any gate below can
+            // skip, fail, or short-circuit this source. "The walk found this
+            // text" is what the pruner needs; whether we managed to lower it
+            // is a separate question with its own counters.
+            var hash = TxDropConstants.TxFnv1a(s.Text);
+            discovered[s.From] = hash;
+
             if (!TxDropConstants.PrecheckRe.IsMatch(s.Text))
             {
                 skipped++;
@@ -243,7 +262,6 @@ public class TxDropBuilder
                 continue;
             }
 
-            var hash = TxDropConstants.TxFnv1a(s.Text);
             var rel = "tx/" + hash + ".js";
             var outPath = Path.Combine(_drop.TxDir, hash + ".js");
             if (entries.TryGetValue(hash, out var existing) && existing == rel && File.Exists(outPath))
@@ -308,7 +326,7 @@ public class TxDropBuilder
             lowered,
             skipped,
             failed);
-        return new TxRebuildResult(entries.Count, finals);
+        return new TxRebuildResult(entries.Count, finals, discovered);
     }
 
     private Dictionary<string, string> LoadPreviousEntries()

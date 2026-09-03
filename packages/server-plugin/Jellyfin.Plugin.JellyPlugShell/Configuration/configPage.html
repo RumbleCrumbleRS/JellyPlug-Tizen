@@ -95,6 +95,23 @@
                                 modules then miss the drop and fresh boots lazy-load Babel on the TV.
                             </div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableTxPrune" />
+                                <span>Disable stale-body prune</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                The drop keeps every body it has ever published, including the superseded copy left
+                                behind by each script-config save (~800&nbsp;KB apiece), and grows without bound.
+                            </div>
+                        </div>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="TxPruneGraceRebuilds" min="0" step="1" label="Prune grace (rebuilds)" />
+                            <div class="fieldDescription">
+                                Consecutive rebuilds an undiscovered body survives before deletion. A body whose own
+                                source URL answered and no longer produces it is deleted regardless. Default 1.
+                            </div>
+                        </div>
                         <div class="inputContainer">
                             <input is="emby-input" type="text" id="JsiChannelPath" label="Snippet channel path" />
                             <div class="fieldDescription">
@@ -298,6 +315,8 @@
                     { id: 'VolatileScriptConfigKeys', type: 'text' },
                     { id: 'DisableTxRebuild', type: 'bool' },
                     { id: 'DisableTxDynScan', type: 'bool' },
+                    { id: 'DisableTxPrune', type: 'bool' },
+                    { id: 'TxPruneGraceRebuilds', type: 'number' },
                     { id: 'JsiChannelPath', type: 'text' },
                     { id: 'ExtraSourceUrls', type: 'text' },
                     { id: 'TransformTimeoutSeconds', type: 'number' },

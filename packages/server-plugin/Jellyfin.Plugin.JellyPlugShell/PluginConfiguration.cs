@@ -47,6 +47,24 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool DisableTxDynScan { get; set; }
 
     /// <summary>
+    /// JELA-881: disable the post-rebuild prune. The drop then grows without
+    /// bound again (one stale lowered body per JSI config save, ~800 KB each),
+    /// which is exactly the state this switch exists to let an operator
+    /// return to if a prune ever evicts something it should not have.
+    /// </summary>
+    public bool DisableTxPrune { get; set; }
+
+    /// <summary>
+    /// JELA-881: how many consecutive rebuilds an UNCLAIMED published body
+    /// survives before it is deleted. A body whose owning source URL answered
+    /// this run and no longer produces it is superseded, not merely unseen,
+    /// and is deleted regardless of this setting. Raise it if discovery on
+    /// this server is flaky (a wrongly pruned body costs on-device Babel until
+    /// the next rebuild republishes it); 0 prunes on first miss.
+    /// </summary>
+    public int TxPruneGraceRebuilds { get; set; } = TxDropPruner.DefaultGraceRebuilds;
+
+    /// <summary>
     /// JELA-30 (WS-C): refuse all boot-ring diag beacons at POST /shell/diag.
     /// JELA-827: the TV-side gate is now opt-OUT — the shell posts unless
     /// localStorage["jellyfin.shell.diagBeacon"]==="0" (the "1" was seeded by
