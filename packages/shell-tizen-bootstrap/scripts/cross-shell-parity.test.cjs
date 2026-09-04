@@ -341,8 +341,13 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-853: re-pinned — both load paths now seed
     // `jellyfin.shell.webPrefetchSkip` from what the boot observed, so the
     // next boot's head IIFE stops issuing a /web/ pair nothing will read.
-    retail: "db9f0c1875856c37",
-    boot: "0a1959c4eb6ed17f",
+    // JELA-856: re-pinned — both load paths now publish the RAW resolved
+    // /web/index.html body + its origin on `window.__shellWebIndexHtml` /
+    // `__shellWebIndexOrigin` before document.write, so an in-document
+    // consumer (the JELA-110/542 media-bar hero probe) can read the document
+    // the shell already holds instead of re-fetching a `no-store` copy.
+    retail: "46e7121f8624c6a5",
+    boot: "318fe6eb12b03e22",
   },
   {
     name: "bootstrap",
