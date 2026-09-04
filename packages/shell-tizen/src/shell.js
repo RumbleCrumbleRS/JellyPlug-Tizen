@@ -6711,6 +6711,33 @@
       // reclaim. A fleet with rb>0 is a fleet whose stores have started to fill.
       "try{var z=lsz();p.tx.ls=z[0];p.tx.lk=z[1];p.tx.qe=W.__shellLsQuotaErr||0;p.tx.gd=W.__shellTxGenDrop||0;p.tx.ps=W.__shellTxPruneStatic||0;var rq=W.__shellTxReclaim;if(rq){p.tx.rc=rq.n;p.tx.rb=rq.b}}catch(_){}" +
       "var v=W.__shellPhases&&W.__shellPhases.ver;if(v)p.ver=String(v);" +
+      // JELA-879: hsb = the INSTALLED BOOTSTRAP version, which `ver` above is
+      // not. `ver` is the SHELL version, and the shell ships in the served,
+      // auto-propagating plugin drop; the bootstrap ships baked into the
+      // installed .wgt and has no OTA path at all (ShellDropService hardcodes
+      // bootstrapWgt = null). So every bootstrap-side change — JELA-66's LS
+      // shell byte cache, JELA-226/853's read site, JELA-841, JELA-857 — is
+      // currently unmeasurable on the fleet: nobody can say which widget build
+      // a fielded TV actually runs.
+      //
+      // The un-updatable vehicle already publishes its own version to the
+      // updatable one. Every shipped bootstrap (verified on 2.0.19, the newest
+      // tagged build, and 2.0.20, the newest one installed anywhere) opens
+      // renderHsb() with an UNCONDITIONAL `window.__hsbState = hsbState`
+      // BEFORE the hsbDebugOn gate, and runs hsbPhase('boot','ok') at
+      // bootstrap start — so __hsbState.version (= HSB_VERSION = the
+      // config.xml widget version, equality asserted by selftest.cjs per
+      // JEL-332) is readable on every fielded TV today. window globals survive
+      // the document.open/write handoff (same window, new document — the same
+      // property __shellDiagBeaconArmed relies on), so the beacon can read it
+      // straight out of the widget document that wrote us.
+      //
+      // Absent/unreadable -> the field is OMITTED, never null and never "": an
+      // older or unexpected bootstrap that lacks __hsbState must not poison
+      // the ring with a sentinel that later reads as a real version. Sent as a
+      // string; the server re-sanitizes it through the same SanitizeVer
+      // leading-dotted-numeric extractor as `ver` (nothing here is trusted).
+      "try{var hb=W.__hsbState&&W.__hsbState.version;if(hb)p.hsb=String(hb)}catch(_){}" +
       "if(!p.id)return null;return p" +
       "}catch(_){st.err++;return null}}" +
       "function send(){if(st.sent)return;var b=base();var p=payload();if(!b||!p)return;st.sent=1;" +

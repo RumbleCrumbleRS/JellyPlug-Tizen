@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Jellyfin.Plugin.JellyPlugShell;
@@ -12,11 +13,12 @@ namespace Jellyfin.Plugin.JellyPlugShell;
 /// **Redaction is by construction (the WS-F egress audit, folded in here).**
 /// The ingest NEVER trusts the shape of the posted JSON: it copies a fixed
 /// whitelist of fields into a fresh record, coercing every timing/counter to a
-/// finite number and EXTRACTING the two string fields (opaque device id, shell
-/// version) against strict shapes rather than merely stripping characters —
+/// finite number and EXTRACTING the three string fields (opaque device id,
+/// shell version, and JELA-879's installed bootstrap version) against strict
+/// shapes rather than merely stripping characters —
 /// stripping is not enough, because "https://home.example.org" strips to a
 /// dotted hostname that still leaks. The id keeps only the longest [0-9a-z]
-/// run; the ver keeps only a leading dotted-numeric version. A URL, access
+/// run; ver and hsb keep only a leading dotted-numeric version. A URL, access
 /// token, server hostname, or any other free-form string simply has nowhere
 /// to land — a value where a number is expected is dropped, and a string not
 /// shaped like an opaque hash / version collapses to its one plausible token
@@ -92,6 +94,23 @@ public class DiagIngestService
             ? SanitizeVer(verEl.GetString())
             : string.Empty;
 
+        // JELA-879: the INSTALLED BOOTSTRAP version, posted by the shell out of
+        // window.__hsbState.version. `ver` above is the SHELL version, which
+        // rides the auto-propagating plugin drop; the bootstrap is baked into
+        // the installed .wgt and has no OTA path, so it is the one version
+        // nobody could previously read off a fielded TV. Same shape as `ver`
+        // (a dotted-numeric widget version) => same SanitizeVer extractor, and
+        // therefore the same egress guarantee: a URL/token/hostname has no
+        // leading digit and extracts to nothing at all.
+        //
+        // Deliberately whitelisted BY NAME. CleanRing/CleanTx copy only fields
+        // named here into a fresh record, so an un-named string field is
+        // silently dropped — which is the correct default, and the reason this
+        // needs an explicit clause rather than riding along for free.
+        var topHsb = root.TryGetProperty("hsb", out var hsbEl) && hsbEl.ValueKind == JsonValueKind.String
+            ? SanitizeVer(hsbEl.GetString())
+            : string.Empty;
+
         var tx = root.TryGetProperty("tx", out var txEl) ? CleanTx(txEl) : null;
 
         if (!root.TryGetProperty("ring", out var ringEl) || ringEl.ValueKind != JsonValueKind.Array)
@@ -123,6 +142,14 @@ public class DiagIngestService
             if (topVer.Length > 0)
             {
                 line["ver"] = topVer;
+            }
+
+            // JELA-879 (AC2): omit the key entirely when the device did not
+            // report a usable bootstrap version. A stored null/"" would read
+            // back as a device that HAS a bootstrap version, just an empty one.
+            if (topHsb.Length > 0)
+            {
+                line["hsb"] = topHsb;
             }
 
             if (tx is not null)
@@ -252,6 +279,13 @@ public class DiagIngestService
                 Rcv = rcv,
                 Ver = line.TryGetProperty("ver", out var v) && v.ValueKind == JsonValueKind.String
                     ? v.GetString()
+                    : null,
+
+                // JELA-879: null here is serialized away (see DiagDeviceEntry),
+                // so a device on a bootstrap that does not expose __hsbState
+                // shows NO hsb key rather than a null one.
+                Hsb = line.TryGetProperty("hsb", out var hb) && hb.ValueKind == JsonValueKind.String
+                    ? hb.GetString()
                     : null,
                 Ring = line.GetProperty("ring").Clone(),
                 Tx = line.TryGetProperty("tx", out var t) ? t.Clone() : null,
@@ -457,6 +491,16 @@ public class DiagDeviceEntry
     public long Rcv { get; set; }
 
     public string? Ver { get; set; }
+
+    /// <summary>
+    /// JELA-879: the installed BOOTSTRAP (.wgt) version this device reported,
+    /// read by the shell out of <c>window.__hsbState.version</c>. Distinct from
+    /// <see cref="Ver"/>, which is the served SHELL version. Null (and omitted
+    /// from the JSON, so an absent bootstrap version is never mistaken for an
+    /// empty one) when the device's bootstrap does not expose it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Hsb { get; set; }
 
     /// <summary>Sanitized ring JSON (numbers + version only).</summary>
     public JsonElement Ring { get; set; }

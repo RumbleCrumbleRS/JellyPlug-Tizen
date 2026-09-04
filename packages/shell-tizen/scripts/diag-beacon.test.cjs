@@ -287,6 +287,8 @@ const WIN = () => ({
 
   const p = JSON.parse(x.body);
   // Whitelist of top-level payload keys — nothing else may ride along.
+  // JELA-879 adds `hsb` (the installed bootstrap version). This window has no
+  // __hsbState, so the key must be ABSENT here — not null, not "".
   assert.deepStrictEqual(Object.keys(p).sort(), ["id", "ring", "tx", "ver"]);
   assert.ok(/^[0-9a-z]{6,24}$/.test(p.id), "id must be opaque base36: " + p.id);
   assert.deepStrictEqual(p.ring, RING, "ring must be the persisted bootPhases");
@@ -447,6 +449,101 @@ const WIN = () => ({
   assert.strictEqual(tx.ls, -1);
   assert.strictEqual(tx.lk, -1);
   assert.strictEqual(tx.ch, 120, "the rest of the payload is unaffected");
+}
+
+// 10. JELA-879: the installed BOOTSTRAP version. `ver` is the SHELL version,
+// which rides the served, auto-propagating plugin drop; the bootstrap is baked
+// into the installed .wgt and has NO OTA path, so it is the one version nobody
+// could read off a fielded TV. Every shipped bootstrap (2.0.19 tagged, 2.0.20
+// installed) sets window.__hsbState = hsbState UNCONDITIONALLY at the top of
+// renderHsb(), before the debug gate, and hsbPhase('boot','ok') runs at
+// bootstrap start — so __hsbState.version is already there on the window the
+// beacon runs on (window globals survive the document.open/write handoff, the
+// same property __shellDiagBeaconArmed relies on).
+{
+  const win = WIN();
+  win.__hsbState = {
+    version: "2.0.19",
+    codename: "hsb",
+    phase: "boot",
+    // The real hsbState carries the server URL and the manifest/shell URLs.
+    // Only `.version` may be read — nothing else may ride out of the widget
+    // document into the beacon body.
+    server: SERVER,
+    manifestUrl: SERVER + "shell/manifest.json",
+    shellUrl: SERVER + "shell/shell.min.js",
+    errors: ["connect failed for " + SERVER],
+  };
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  const p = JSON.parse(env.xhrs[0].body);
+  assert.strictEqual(p.hsb, "2.0.19", "bootstrap version must be reported");
+  assert.strictEqual(p.ver, "1.0.75", "shell version must be unchanged");
+  assert.deepStrictEqual(
+    Object.keys(p).sort(),
+    ["hsb", "id", "ring", "tx", "ver"],
+    "hsb must be the ONLY new top-level key",
+  );
+  // The rest of hsbState carries the server URL; none of it may ride along.
+  for (const leak of [
+    "tv-owner-server",
+    "8096",
+    "manifest.json",
+    "shell.min.js",
+    "errors",
+    "codename",
+    "connect failed",
+  ]) {
+    assert.ok(
+      env.xhrs[0].body.indexOf(leak) === -1,
+      "EGRESS LEAK: hsbState field reached the beacon body: '" + leak + "'",
+    );
+  }
+}
+
+// 10b. AC2: a bootstrap that does not expose __hsbState (or exposes it without
+// a usable version) must report NO hsb field — never null, never "". A
+// sentinel would later read as a real bootstrap version and re-create exactly
+// the ambiguity this field exists to remove.
+for (const [label, hsbState] of [
+  ["absent", undefined],
+  ["null", null],
+  ["no version key", { phase: "boot" }],
+  ["empty version", { version: "" }],
+  ["null version", { version: null }],
+]) {
+  const win = WIN();
+  if (hsbState !== undefined) win.__hsbState = hsbState;
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  const p = JSON.parse(env.xhrs[0].body);
+  assert.ok(
+    !("hsb" in p),
+    "AC2: hsb must be absent when __hsbState is " + label + ": " + p.hsb,
+  );
+  assert.strictEqual(p.ver, "1.0.75", "the rest of the payload still ships");
+}
+
+// 10c. A throwing __hsbState getter must not cost us the whole beacon. The
+// widget document is code we cannot update or fix; reading it must be
+// strictly optional.
+{
+  const win = WIN();
+  Object.defineProperty(win, "__hsbState", {
+    get() {
+      throw new Error("hostile bootstrap");
+    },
+  });
+  const env = makeEnv(LS_ON, win);
+  env.run();
+  env.tick(3000);
+  assert.strictEqual(env.xhrs.length, 1, "a throwing __hsbState must still POST");
+  const p = JSON.parse(env.xhrs[0].body);
+  assert.ok(!("hsb" in p), "a throwing read must omit hsb");
+  assert.strictEqual(p.ver, "1.0.75");
+  assert.ok(p.tx.ls > 0, "the census still ships");
 }
 
 console.log("diag-beacon.test.cjs OK");
