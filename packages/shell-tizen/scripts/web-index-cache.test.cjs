@@ -189,7 +189,10 @@ function loadCache(src, label, store) {
 // A realistic Jellyfin index.html body (>1 KB, contains <html). 4 KB.
 const ORIGIN_A = "https://demo.jellyfin.org";
 const ORIGIN_B = "https://other.example.com";
-const HTML_OK = "<!DOCTYPE html><html><head></head><body>" + "x".repeat(4000) + "</body></html>";
+const HTML_OK =
+  "<!DOCTYPE html><html><head></head><body>" +
+  "x".repeat(4000) +
+  "</body></html>";
 const CONFIG_OK = JSON.stringify({ multiserver: true, themes: [] });
 
 // ============================================================================
@@ -205,7 +208,10 @@ function behavioural(src, label) {
   check(label + ": cap is 256 KB (" + CACHE_MAX + ")", c.MAX === CACHE_MAX);
 
   // -- Gate semantics (JEL-622): ON by default, '0' opts out ----------------
-  check(label + ": gate ON when unset (default-on)", c.webCacheEnabled() === true);
+  check(
+    label + ": gate ON when unset (default-on)",
+    c.webCacheEnabled() === true,
+  );
   store.raw.set(GATE_KEY, "0");
   check(label + ": gate OFF when '0' (opt-out)", c.webCacheEnabled() === false);
   store.raw.set(GATE_KEY, "1");
@@ -310,8 +316,14 @@ function behavioural(src, label) {
   bad.setThrow(true);
   let threw = false;
   try {
-    check(label + ": webCacheEnabled on broken storage returns false", cb.webCacheEnabled() === false);
-    check(label + ": readWebIndexCache on broken storage returns null", cb.readWebIndexCache(ORIGIN_A) === null);
+    check(
+      label + ": webCacheEnabled on broken storage returns false",
+      cb.webCacheEnabled() === false,
+    );
+    check(
+      label + ": readWebIndexCache on broken storage returns null",
+      cb.readWebIndexCache(ORIGIN_A) === null,
+    );
     cb.writeWebIndexCache(ORIGIN_A, HTML_OK);
     cb.writeWebConfigCache(ORIGIN_A, CONFIG_OK);
   } catch (e) {
@@ -352,11 +364,15 @@ for (const [label, src] of SRC_SHELLS) {
 //     (Promise.resolve(cachedIndex.body)) rather than awaiting the network.
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "cache hit resolves index from memory (Promise.resolve(cachedIndex.body)) in " + label,
-    /indexCacheHit\s*\?\s*Promise\.resolve\(\s*cachedIndex\.body\s*\)/.test(src),
+    "cache hit resolves index from memory (Promise.resolve(cachedIndex.body)) in " +
+      label,
+    /indexCacheHit\s*\?\s*Promise\.resolve\(\s*cachedIndex\.body\s*\)/.test(
+      src,
+    ),
   );
   check(
-    "cache hit resolves config from pre-parsed cache (cachedConfig.parsed) in " + label,
+    "cache hit resolves config from pre-parsed cache (cachedConfig.parsed) in " +
+      label,
     /Promise\.resolve\(\s*cachedConfig\.parsed\s*\)/.test(src),
   );
 }
@@ -370,13 +386,18 @@ for (const [label, src] of SRC_SHELLS) {
 //     call inside the helper body.
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "on hit, index fetch revalidates LS in background (drain -> writeWebIndexCache) in " + label,
-    /drain\(\s*mkIdxF\s*,\s*cachedIndex\s*,\s*writeWebIndexCache\s*\)/.test(src) &&
-      /\bw\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
+    "on hit, index fetch revalidates LS in background (drain -> writeWebIndexCache) in " +
+      label,
+    /drain\(\s*mkIdxF\s*,\s*cachedIndex\s*,\s*writeWebIndexCache\s*\)/.test(
+      src,
+    ) && /\bw\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
   );
   check(
-    "on hit, config fetch revalidates LS in background (drain -> writeWebConfigCache) in " + label,
-    /drain\(\s*mkCfgF\s*,\s*cachedConfig\s*,\s*writeWebConfigCache\s*\)/.test(src),
+    "on hit, config fetch revalidates LS in background (drain -> writeWebConfigCache) in " +
+      label,
+    /drain\(\s*mkCfgF\s*,\s*cachedConfig\s*,\s*writeWebConfigCache\s*\)/.test(
+      src,
+    ),
   );
 }
 
@@ -385,7 +406,8 @@ for (const [label, src] of SRC_SHELLS) {
 //     global so on-device QA can read the actual delta.
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "cached-vs-uncached delta is timed into a diag global (__shellIndexCacheSavedMs) in " + label,
+    "cached-vs-uncached delta is timed into a diag global (__shellIndexCacheSavedMs) in " +
+      label,
     src.includes("__shellIndexCacheSavedMs"),
   );
   check(
@@ -397,9 +419,14 @@ for (const [label, src] of SRC_SHELLS) {
 // B4. Invariant 1 — uncached (miss) boot records the body for the next boot.
 for (const [label, src] of SRC_SHELLS) {
   check(
-    "miss path records body for next boot (writeWebIndexCache on fetched txt, gated) in " + label,
-    /cacheGateOn\s*&&?\s*\(?\s*writeWebIndexCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(src) ||
-      /if\s*\(\s*cacheGateOn\s*\)\s*\{?\s*writeWebIndexCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(src),
+    "miss path records body for next boot (writeWebIndexCache on fetched txt, gated) in " +
+      label,
+    /cacheGateOn\s*&&?\s*\(?\s*writeWebIndexCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(
+      src,
+    ) ||
+      /if\s*\(\s*cacheGateOn\s*\)\s*\{?\s*writeWebIndexCache\(\s*serverUrl\s*,\s*txt\s*\)/.test(
+        src,
+      ),
   );
 }
 
@@ -430,12 +457,112 @@ for (const [label, src] of ALL_SHELLS) {
     src.includes('"' + GATE_KEY + '"'),
   );
   check(
-    "deployed " + label + " references index cache key " + JSON.stringify(INDEX_KEY),
+    "deployed " +
+      label +
+      " references index cache key " +
+      JSON.stringify(INDEX_KEY),
     src.includes('"' + INDEX_KEY + '"'),
   );
   check(
     "deployed " + label + " carries the 256 KB cap (" + CACHE_MAX + ")",
     src.includes(String(CACHE_MAX)),
+  );
+}
+
+// ============================================================================
+// PART BX — JELA-856: publish the resolved index body for in-document readers
+// ============================================================================
+// The JELA-110/542 media-bar "0 ms probe" XHRs the whole server
+// /web/index.html on every steady-state boot just to test for hero assets.
+// That document is served `no-cache, no-store, must-revalidate`, so no HTTP
+// cache can ever coalesce it — 20,406 B pre-first-card for a body the shell
+// already resolved (from LS or the network) and is about to document.write.
+//
+// The shell half is publish-only: it exposes the RAW resolved body plus the
+// origin it belongs to on `window` (which survives the document.write
+// handoff), so an in-document consumer can read it instead of re-fetching.
+// Nothing in the shell reads these globals — a consumer that does not find
+// them keeps today's XHR path, so the change is fail-open by construction.
+//
+// What must hold, and what would break the consumer if it did not:
+//   1. The body published is `results[0]` (RAW upstream), not the rewritten
+//      `html` — the rewrites (font CSS, JE-defer strip, media-bar CDN strip)
+//      would make a consumer's scan see a different document than the XHR.
+//   2. The publish happens BEFORE both document.write paths (the JEL-1832
+//      string fast path and the DOMParser path), or the consumer running in
+//      the written document finds nothing.
+//   3. The origin is published alongside, so a consumer can reject a body
+//      left over from a different server URL.
+//   4. It is wrapped so a throw cannot break boot.
+console.log("");
+console.log("=== PART BX: JELA-856 index-body publish (shell half) ===");
+
+const PUB_HTML = "__shellWebIndexHtml";
+const PUB_ORIGIN = "__shellWebIndexOrigin";
+
+for (const [label, src] of SRC_SHELLS) {
+  const body = extractFn(src, "loadRemoteWebClient", label);
+  const pubAt = body.indexOf(PUB_HTML);
+
+  check(
+    "publishes the RAW resolved body on window." + PUB_HTML + " in " + label,
+    new RegExp("window\\." + PUB_HTML + "\\s*=\\s*results\\[0\\]").test(body),
+  );
+  check(
+    "publishes the server origin on window." + PUB_ORIGIN + " in " + label,
+    new RegExp("window\\." + PUB_ORIGIN + "\\s*=\\s*serverUrl").test(body),
+  );
+  // The rewritten `html` must never be what is published — a consumer
+  // scanning it would see the shell's rewrites, not the server's document.
+  check(
+    "does NOT publish the rewritten html in " + label,
+    !new RegExp("window\\." + PUB_HTML + "\\s*=\\s*html\\b").test(body),
+  );
+  // Ordering: the publish must precede BOTH document.write call sites.
+  const writes = [];
+  for (let i = body.indexOf("document.write("); i >= 0; ) {
+    writes.push(i);
+    i = body.indexOf("document.write(", i + 1);
+  }
+  check(
+    "publish precedes both document.write paths in " + label,
+    pubAt >= 0 && writes.length >= 2 && writes.every((i) => i > pubAt),
+    "publishAt=" + pubAt + " writes=" + JSON.stringify(writes),
+  );
+  // Guarded: a throw here (a frozen window, a hostile consumer having
+  // redefined the property) must not take the boot down with it.
+  check(
+    "publish is wrapped in try/catch in " + label,
+    /try\s*\{[\s\S]{0,400}?window\.__shellWebIndexHtml[\s\S]{0,400}?\}\s*catch/.test(
+      body,
+    ),
+  );
+  // Only publish a usable body — never `undefined`/empty from a degraded
+  // resolve, which a consumer could mistake for "server has no hero assets".
+  check(
+    "publish is guarded on a non-empty string body in " + label,
+    /typeof\s+results\[0\]\s*===?\s*"string"\s*&&\s*results\[0\]\.length/.test(
+      body,
+    ),
+  );
+  // Publish-only: the shell must not grow a reader, or the fail-open
+  // guarantee (absent global == today's behaviour) stops being trivial.
+  check(
+    "shell never READS the published globals (publish-only) in " + label,
+    !new RegExp(
+      "(?:if|return|=|\\()\\s*window\\." +
+        PUB_HTML +
+        "\\s*(?:\\)|\\|\\||&&|;|\\.)",
+    ).test(src.replace(new RegExp("window\\." + PUB_HTML + "\\s*=", "g"), "")),
+  );
+}
+
+// The deployed blobs must carry both globals, or the fielded shell publishes
+// nothing and every consumer silently stays on the XHR path.
+for (const [label, src] of ALL_SHELLS) {
+  check(
+    "deployed " + label + " carries " + PUB_HTML + " + " + PUB_ORIGIN,
+    src.includes(PUB_HTML) && src.includes(PUB_ORIGIN),
   );
 }
 
@@ -482,14 +609,23 @@ for (const [label, src] of PREFETCH_SITES) {
   // BW1. Skip is behind the opt-in flag, checked for EXACTLY "1" (default off:
   //      an unset / "0" / anything-else flag keeps the current prefetch).
   check(
-    "prefetch-skip is behind flag " + JSON.stringify(WPS_FLAG) + ' (=== "1") in ' + label,
-    new RegExp("getItem\\(\\s*['\"]" + WPS_FLAG.replace(/\./g, "\\.") + "['\"]\\s*\\)\\s*===\\s*['\"]1['\"]").test(src),
+    "prefetch-skip is behind flag " +
+      JSON.stringify(WPS_FLAG) +
+      ' (=== "1") in ' +
+      label,
+    new RegExp(
+      "getItem\\(\\s*['\"]" +
+        WPS_FLAG.replace(/\./g, "\\.") +
+        "['\"]\\s*\\)\\s*===\\s*['\"]1['\"]",
+    ).test(src),
   );
   // BW2. Skip also requires the indexCache gate ON (!== "0") — never skip when
   //      the SWR body cache the shell would adopt is disabled.
   check(
     "prefetch-skip requires indexCache gate on (!== '0') in " + label,
-    /getItem\(\s*['"]jellyfin\.shell\.indexCache['"]\s*\)\s*!==\s*['"]0['"]/.test(src),
+    /getItem\(\s*['"]jellyfin\.shell\.indexCache['"]\s*\)\s*!==\s*['"]0['"]/.test(
+      src,
+    ),
   );
   // BW3. Presence check covers BOTH bodies for the current origin: it reads the
   //      webIndexHtml + webConfig records and matches p.origin against the
@@ -500,7 +636,8 @@ for (const [label, src] of PREFETCH_SITES) {
       src.includes("jellyfin.shell.webConfig"),
   );
   check(
-    "presence check origin-gates the cached record (p.origin === serverUrl) in " + label,
+    "presence check origin-gates the cached record (p.origin === serverUrl) in " +
+      label,
     /p\.origin\s*===\s*(?:u|server)\b/.test(src),
   );
   // BW4. FAIL-SAFE: the prefetch fetches are still issued on the non-skip path,
@@ -521,7 +658,9 @@ for (const [label, src] of PREFETCH_SITES) {
 check(
   "webPrefetchSkip flag string present at BOTH prefetch sites (retail + bootstrap)",
   PREFETCH_SITES.every(function (s) {
-    return s[1].includes('"' + WPS_FLAG + '"') || s[1].includes("'" + WPS_FLAG + "'");
+    return (
+      s[1].includes('"' + WPS_FLAG + '"') || s[1].includes("'" + WPS_FLAG + "'")
+    );
   }),
 );
 

@@ -10594,6 +10594,34 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
+        // JELA-856: publish the upstream /web/index.html body this boot just
+        // resolved — from the JEL-1977 LS cache or the network — on `window`,
+        // which survives the document.write handoff below. The JELA-110/542
+        // media-bar "0 ms probe" re-downloads this exact document over XHR on
+        // every steady-state boot purely to test whether hero assets exist,
+        // and /web/index.html is served `no-cache, no-store,
+        // must-revalidate` + `expires: -1`, so no HTTP cache can ever
+        // coalesce that second copy (20,406 B, pre-first-card, on a real
+        // panel — not a rig artifact).
+        //
+        // Publish the RAW body (`results[0]`), NOT the rewritten `html`
+        // below: the raw string is byte-identical to what that XHR would have
+        // returned, so a consumer scanning it cannot see a different document
+        // because of the shell's font / JE-defer / media-bar rewrites.
+        // `__shellWebIndexOrigin` is published alongside so a consumer can
+        // prove the body belongs to the server it is about to query rather
+        // than a stale one from a previous server URL.
+        //
+        // Fail-open by construction and dark on its own: this only PUBLISHES.
+        // Nothing in the shell reads it, and any client where the global is
+        // absent (non-Tizen, an older shell, the JELA-67 Lite path that
+        // returns before this point) behaves exactly as today.
+        try {
+          if (typeof results[0] === "string" && results[0].length) {
+            window.__shellWebIndexHtml = results[0];
+            window.__shellWebIndexOrigin = serverUrl;
+          }
+        } catch (_) {}
         // JELA-707: JE-defer strip runs after the font rewrite, same
         // string-level contract (both write paths covered, cache pristine).
         // JELA-716: then drop the parse-dead CDN media-bar tag.

@@ -8411,6 +8411,19 @@
     var credsRestorePromise = restoreCredsVault();
     return Promise.all([indexPromise, configPromise, credsRestorePromise]).then(
       function (results) {
+        // JELA-856: publish the raw upstream /web/index.html body on `window`
+        // (survives the document.write handoff) so the JELA-110/542 media-bar
+        // "0 ms probe" can test for hero assets without re-downloading a
+        // `no-store` 20,406 B document the shell already holds. RAW, not the
+        // rewritten `html` below, so it stays byte-identical to what the XHR
+        // would have returned. Publish-only and fail-open: nothing here reads
+        // it, and a client without the global keeps today's behaviour.
+        try {
+          if (typeof results[0] === "string" && results[0].length) {
+            ((window.__shellWebIndexHtml = results[0]),
+              (window.__shellWebIndexOrigin = serverUrl));
+          }
+        } catch (_) {}
         // JELA-707: JE-defer strip after the font rewrite (same contract).
         // JELA-716: then drop the parse-dead CDN media-bar tag.
         var html = stripDeadMediaBarJs(
