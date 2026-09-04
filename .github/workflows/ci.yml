@@ -64,6 +64,26 @@ jobs:
         # tooling/ci/ (the build/release glue).
         run: tooling/ci/check-no-debug-evidence.sh
 
+  verify-bootstrap-vehicle:
+    name: verify bootstrap changes carry a version bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The guard diffs against the merge base, so it needs real history.
+          fetch-depth: 0
+      - name: Bootstrap .wgt payload change must bump the widget version (JELA-880 guard)
+        # The bootstrap is the only vehicle that is NOT auto-updatable — there
+        # is no OTA path, only a hand sideload of a signed .wgt built on
+        # RumbleCrumbleRS/JellyPlug-Tizen-internal. Before this guard that was
+        # silent: 255aa34 changed index.html under an already-released 2.0.25,
+        # so JELA-853 later approved a fleet flag flip against a read site no TV
+        # had. Fail on WGT-only files without a bump; warn on baked fallbacks.
+        # On a pull_request, diff against the target branch. On a push to main
+        # github.base_ref is empty, so fall back to HEAD^ — for a merge commit
+        # that is the previous main tip, i.e. exactly the merged PR's contents.
+        run: tooling/ci/check-bootstrap-version-bump.sh "${{ github.base_ref && format('origin/{0}', github.base_ref) || 'HEAD^' }}"
+
   verify-artifacts:
     name: verify committed .wgt are signed
     runs-on: ubuntu-latest
