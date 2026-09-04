@@ -9,6 +9,14 @@
     "imageUrl": null,
     "versions": [
       {
+        "version": "1.0.52.0",
+        "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.52.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/download/server-plugin-v1.0.52.0/jellyplug-shell_1.0.52.0.zip",
+        "checksum": "5b826f4b16e77339709bb217442fca24",
+        "timestamp": "2026-09-04T16:01:52Z"
+      },
+      {
         "version": "1.0.51.0",
         "changelog": "See https://github.com/RumbleCrumbleRS/JellyPlug-Tizen/releases/tag/server-plugin-v1.0.51.0",
         "targetAbi": "10.11.0.0",
