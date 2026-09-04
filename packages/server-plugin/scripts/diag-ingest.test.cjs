@@ -79,6 +79,34 @@ assert.ok(
   "leading-version match regex missing/changed",
 );
 
+// JELA-879: `hsb` (the INSTALLED BOOTSTRAP version, read by the shell out of
+// window.__hsbState.version) is the second whitelisted string. It MUST go
+// through the same SanitizeVer extractor as `ver` — a plain copy would open a
+// free-form string channel straight into the store, and the shell's value comes
+// from the widget document, which is exactly the code we cannot update.
+assert.ok(
+  /root\.TryGetProperty\("hsb", out var hsbEl\)[\s\S]{0,160}SanitizeVer\(hsbEl\.GetString\(\)\)/.test(
+    svc,
+  ),
+  "hsb must be extracted with SanitizeVer, not copied",
+);
+// Absent/unusable -> the key is not written (AC2: not null, not "").
+assert.ok(
+  /if \(topHsb\.Length > 0\)\s*\{\s*line\["hsb"\] = topHsb;/.test(svc),
+  "hsb must only be stored when it sanitizes to something",
+);
+// Surfaced on the read side, and omitted from the JSON when null.
+assert.ok(
+  /\[JsonIgnore\(Condition = JsonIgnoreCondition\.WhenWritingNull\)\]\s*public string\? Hsb \{ get; set; \}/.test(
+    svc,
+  ),
+  "DiagDeviceEntry.Hsb missing or not null-omitting",
+);
+assert.ok(
+  /Hsb = line\.TryGetProperty\("hsb", out var hb\)/.test(svc),
+  "BuildReport does not read hsb onto the device entry",
+);
+
 // Ring records with no timestamp are dropped; free-form spreads never happen.
 assert.ok(
   svc.includes("return null; // a ring record with no boot timestamp"),
@@ -187,6 +215,9 @@ function ingest(root) {
   const id = sanitizeId(root.id);
   if (!id) return null;
   const ver = sanitizeVer(root.ver);
+  // JELA-879: the installed bootstrap version goes through the SAME extractor
+  // as ver — same shape (dotted numeric widget version), same egress guard.
+  const hsb = sanitizeVer(root.hsb);
   const tx = cleanTx(root.tx);
   if (!Array.isArray(root.ring)) return null;
   const rings = [];
@@ -198,6 +229,10 @@ function ingest(root) {
   return rings.map((ring) => {
     const line = { id, rcv: 0, ring };
     if (ver) line.ver = ver;
+    // AC2: absent/unusable -> the key is not written at all, so a device on a
+    // bootstrap that does not expose __hsbState never reads back as one that
+    // reported an empty version.
+    if (hsb) line.hsb = hsb;
     if (tx) line.tx = tx;
     return line;
   });
@@ -211,6 +246,7 @@ const DUID = "AAABBBCCCDDDEEE1234567890";
 const hostile = {
   id: DUID + " http://x", // longest [0-9a-z] run = the digit tail
   ver: SERVER_URL, // no leading digit -> extracts to nothing, dropped
+  hsb: EMAIL, // JELA-879: same treatment as ver -> extracts to nothing
   serverUrl: SERVER_URL, // non-whitelisted -> dropped entirely
   url: SERVER_URL,
   token: TOKEN,
@@ -281,6 +317,9 @@ const line = out[0];
 assert.strictEqual(line.id, "1234567890", "id not reduced to longest run");
 // top-level ver was a URL -> extracts to nothing -> field entirely absent.
 assert.ok(!("ver" in line), "URL-shaped top-level ver must be dropped");
+// JELA-879: an email-shaped hsb has no leading digit -> nothing extracted ->
+// the key is absent, NOT null and NOT "".
+assert.ok(!("hsb" in line), "email-shaped hsb must be dropped, not emptied");
 // Ring keeps ONLY whitelisted numeric fields + a cleaned ver.
 const allowedRingKeys = new Set([...RING_NUM_FIELDS, "ver"]);
 for (const k of Object.keys(line.ring)) {
@@ -327,5 +366,112 @@ assert.strictEqual(
   null,
   "id that sanitizes to empty must be rejected",
 );
+
+// ---- 3. JELA-879: the bootstrap-version field ------------------------------
+// AC1: a well-formed bootstrap version survives onto the stored line, so
+// GET /shell/diag/report can report a per-device bootstrap version.
+// AC2: a device whose bootstrap does not expose __hsbState carries NO hsb key.
+// AC3: a hostile / overlong hsb is rejected exactly the way SanitizeVer rejects
+// a hostile ver — proven here, by running the sanitizer, not by inspection.
+{
+  const base = { id: "abc123xyz", ring: [{ ts: 1720000000000 }] };
+  const hsbOf = (v) => ingest(Object.assign({}, base, { hsb: v }))[0];
+
+  // AC1: the two versions actually installed on hardware today.
+  assert.strictEqual(hsbOf("2.0.19").hsb, "2.0.19", "clean hsb must survive");
+  assert.strictEqual(hsbOf("2.0.20").hsb, "2.0.20");
+  // Pre-release suffix, same grammar the shell version uses.
+  assert.strictEqual(hsbOf("2.0.26-rc1").hsb, "2.0.26-rc1");
+
+  // AC2: absent / non-string / empty -> the KEY IS ABSENT. An old bootstrap
+  // that never sets window.__hsbState must not poison the ring with a
+  // sentinel that a later reader mistakes for a real version.
+  for (const [label, payload] of [
+    ["absent", base],
+    ["undefined", Object.assign({}, base, { hsb: undefined })],
+    ["null", Object.assign({}, base, { hsb: null })],
+    ["empty string", Object.assign({}, base, { hsb: "" })],
+    ["number", Object.assign({}, base, { hsb: 2.02 })],
+    ["object", Object.assign({}, base, { hsb: { version: "2.0.19" } })],
+    ["array", Object.assign({}, base, { hsb: ["2.0.19"] })],
+    ["boolean", Object.assign({}, base, { hsb: true })],
+  ]) {
+    const l = ingest(payload)[0];
+    assert.ok(
+      !("hsb" in l),
+      "AC2: hsb key must be ABSENT for " + label + ": " + JSON.stringify(l),
+    );
+  }
+
+  // AC3: hostile strings. Anything without a leading dotted-numeric run
+  // extracts to nothing; anything with one keeps ONLY that run.
+  for (const hostileHsb of [
+    SERVER_URL,
+    EMAIL,
+    TOKEN, // hex token starting with a letter
+    "javascript:alert(1)",
+    "<img src=x onerror=alert(1)>",
+    "'; DROP TABLE rings;--",
+    "../../../../etc/passwd",
+    " ",
+    "  2.0.19", // leading whitespace defeats the ^ anchor -> nothing
+    "v2.0.19", // a "v" prefix is not a version by this grammar
+    "\n2.0.19",
+    "-1",
+    "NaN",
+    "Infinity",
+  ]) {
+    const l = ingest(Object.assign({}, base, { hsb: hostileHsb }));
+    assert.ok(
+      !("hsb" in l[0]),
+      "AC3: hostile hsb survived: " +
+        JSON.stringify(hostileHsb) +
+        " -> " +
+        JSON.stringify(l[0]),
+    );
+  }
+
+  // Junk APPENDED to a real version: the leading version is kept, the tail is
+  // gone. This is the extraction-not-stripping property that makes a dotted
+  // hostname unable to ride along.
+  assert.strictEqual(hsbOf("2.0.19" + SERVER_URL).hsb, "2.0.19");
+  assert.strictEqual(hsbOf("2.0.19 " + EMAIL).hsb, "2.0.19");
+  assert.strictEqual(hsbOf("2.0.19<script>alert(1)").hsb, "2.0.19");
+  assert.ok(
+    !JSON.stringify(hsbOf("2.0.19" + SERVER_URL)).includes("example"),
+    "REDACTION LEAK: hsb tail survived",
+  );
+
+  // Overlong: capped at MaxVerLen (24), the same cap ver gets. A digit run
+  // long enough to be a payload cannot become one.
+  const giant = "1." + "2".repeat(5000);
+  assert.strictEqual(hsbOf(giant).hsb.length, 24, "overlong hsb not capped");
+  assert.strictEqual(hsbOf(giant).hsb, giant.slice(0, 24));
+  assert.strictEqual(
+    hsbOf("9".repeat(10000)).hsb.length,
+    24,
+    "overlong all-digit hsb not capped",
+  );
+
+  // hsb must not leak into the ring record — the ring whitelist is unchanged.
+  const withRingHsb = ingest(
+    Object.assign({}, base, {
+      hsb: "2.0.19",
+      ring: [{ ts: 1720000000000, hsb: "2.0.19" }],
+    }),
+  )[0];
+  assert.ok(
+    !("hsb" in withRingHsb.ring),
+    "hsb must not become a ring field: " + JSON.stringify(withRingHsb.ring),
+  );
+  assert.strictEqual(withRingHsb.hsb, "2.0.19", "top-level hsb still stored");
+
+  // An hsb alone cannot buy attribution: the id/ring guards still rule.
+  assert.strictEqual(
+    ingest({ hsb: "2.0.19", ring: [{ ts: 1 }] }),
+    null,
+    "hsb must not substitute for the opaque id",
+  );
+}
 
 console.log("diag-ingest.test.cjs OK");
