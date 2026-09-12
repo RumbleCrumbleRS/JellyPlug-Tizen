@@ -267,10 +267,50 @@ header directive would still have been applied. So it is Jellyfin or one of its
 plugins, it runs after routing, and it is measured on the server side of the
 connection — which is all gate B actually needs from it.
 
+JELA-903 identified it exactly: `Jellyfin.Api/Middleware/ResponseTimeMiddleware.cs`,
+registered in `Jellyfin.Server/Startup.cs` immediately after `ExceptionMiddleware`
+and **before** authentication. So the number includes the whole authenticated
+pipeline, which is what makes the next section measurable at all.
+
 Every gate B run now appends to `$JELA692_LOG` (default
 `~/.cache/jela692/gate-b.tsv`), pass or fail. The question you ask when the
 gate blocks is "when did this start, and did it ramp or step?", and that file
 is the only thing that can answer it.
+
+## Gate B reads a credential, not just a box (JELA-903)
+
+**Put an API key in `JELLYFIN_API_KEY`. A user session token in that variable
+makes gate B report BLOCKED on a completely quiet server.**
+
+Both credentials are accepted by every endpoint the gate probes, and both
+produce a plausible-looking number, so the mistake is silent. It is not: on
+Jellyfin 12.0 the two credentials take measurably different code paths through
+`AuthorizationContext`, and only the user-token path calls
+`UserManager.GetUserById` — an uncached, synchronous, four-`Include`
+`AsSingleQuery` that costs **~6 ms per call** on production. `/System/Info` is
+`[Authorize]`d, so it pays that twice (once in `AuthorizationContext`, once in
+`DefaultAuthorizationHandler`) and reads ~14 ms — nearly triple the 5 ms
+ceiling, on an idle box.
+
+The layer table in `preflight.sh`'s header was measured with an API key and is
+still correct as far as it goes. It simply never covered the credential the TV
+actually uses. Measured 2026-09-12 on production, `/Branding/Configuration`,
+medians over n=25 interleaved:
+
+| layer                                   | median  |
+| --------------------------------------- | ------- |
+| no credential                           | 0.27 ms |
+| API key                                 | 0.94 ms |
+| invalid token (401 path)                | 1.44 ms |
+| **valid user session token**            | 7.62 ms |
+| valid user session token, `[Authorize]` | ~14 ms  |
+
+So a raised floor on the **authenticated** probe alone is now three
+possibilities, not two: the auth pipeline, the endpoint, **or the credential
+you handed the gate**. Check the credential first — it is free.
+
+Do not "fix" this by raising `JELA692_MAX_SERVER_MS`; see above. The gate is
+reading a real cost, just not one that belongs to the box.
 
 ## Gate D — is anybody else driving the box? (JELA-793)
 
