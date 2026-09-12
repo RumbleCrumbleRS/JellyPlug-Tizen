@@ -281,8 +281,15 @@ const INTENTIONAL_DIVERGENCES = [
     // JELA-867 diag: re-pinned — __shellTxYield gained `inl` counter for
     // inline (pre-paint) calls; queued path now writes on=1 so the tri-state
     // reflects the actual mode boundary crossing. Both seeds identical change.
-    retail: "47b1b81a8f7034fb",
-    boot: "4a513eda50244187",
+    // JELA-901: re-pinned — the bitrate-ladder hold gained a transport arm.
+    // Jellyfin 12.0 web runs its own sdk-based ladder from
+    // onLocalUserSignedIn that never touches ApiClient, so both seeds now
+    // queue a /Playback/BitrateTest XHR's send() while held, flush it D ms
+    // after release, and stand the legacy re-arm down when the client already
+    // ran a ladder itself (__shellBT.seen/q/fl/skipArm). Byte-identical block
+    // in both shells; the divergence reasons above are unchanged.
+    retail: "6fcce861c9305e9f",
+    boot: "bca40847645bb36b",
   },
   {
     name: "buildDiagSeedScript",
