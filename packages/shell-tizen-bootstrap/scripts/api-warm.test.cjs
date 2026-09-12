@@ -237,7 +237,8 @@ function makeEnv(opts) {
       "jellyfin.shell.serverUrl":
         opts.srv !== undefined ? opts.srv : "http://srv",
       // JELA-839 made queryAuth opt-OUT, so an empty store now arms the
-      // JELA-740 shim, which rewrites every prefetch URL to carry api_key
+      // JELA-740 shim, which rewrites every prefetch URL to carry ApiKey
+      // (JELA-896: the legacy lowercase api_key 401s on Jellyfin 12.0)
       // and swallows X-Emby-Token. This suite pins apiWarm's own ordering,
       // bounding and auth contract, so it stands that layer down by default
       // (same isolation move as fetchCoalesceDisabled in query-auth.test).
@@ -759,8 +760,8 @@ function makeEnv(opts) {
       "11: Sections is still SECOND, got " + env.xcalls[1].url,
     );
     assert(
-      env.xcalls.every((x) => x.url.indexOf("api_key=tok") !== -1),
-      "11: every prefetch carries api_key",
+      env.xcalls.every((x) => x.url.indexOf("ApiKey=tok") !== -1),
+      "11: every prefetch carries ApiKey (JELA-896: 12.0 rejects api_key)",
     );
     assert(
       env.xcalls.every(

@@ -16,7 +16,7 @@
  *     untouched; queryAuthDisabled beats an armed flag
  *   - ON, fetch + plain-object headers: an absolute GET carrying
  *     Authorization (MediaBrowser ... Token="...") loses the header and
- *     gains api_key=<token>; other headers survive; the CALLER's opts and
+ *     gains ApiKey=<token>; other headers survive; the CALLER's opts and
  *     headers objects are never mutated
  *   - ON, fetch + Headers instance: same via get/delete on a copy
  *   - X-Emby-Token raw value is accepted as the token source
@@ -32,7 +32,7 @@
  *     double-wraps fetch or the XHR prototype
  *   - Referer mitigation: a no-referrer meta lands once per document
  *   - composition with JELA-703 hssPin: a pinned Sections GET carries
- *     BOTH PageHash pagination and api_key, header stripped
+ *     BOTH PageHash pagination and ApiKey, header stripped
  */
 "use strict";
 const fs = require("fs");
@@ -361,8 +361,8 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   env.window.fetch(API, { headers: { Authorization: AUTH } });
   assert.strictEqual(
     env.netCalls[0].url,
-    API + "&api_key=" + TOK,
-    "1b: cold-boot GET is rewritten to api_key (no preflight)",
+    API + "&ApiKey=" + TOK,
+    "1b: cold-boot GET is rewritten to ApiKey (no preflight)",
   );
   assert.strictEqual(
     env.netCalls[0].opts.headers.Authorization,
@@ -379,7 +379,7 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   env.window.fetch(API, { headers: { Authorization: AUTH } });
   assert.strictEqual(
     env.netCalls[0].url,
-    API + "&api_key=" + TOK,
+    API + "&ApiKey=" + TOK,
     '1c: stored "1" rewrites exactly as the absent key does',
   );
 }
@@ -448,8 +448,8 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   const c = env.netCalls[0];
   assert.strictEqual(
     c.url,
-    API + "&api_key=" + TOK,
-    "token moved to api_key: " + c.url,
+    API + "&ApiKey=" + TOK,
+    "token moved to ApiKey: " + c.url,
   );
   assert(!("Authorization" in c.opts.headers), "Authorization stripped");
   assert.strictEqual(
@@ -468,8 +468,8 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   });
   assert.strictEqual(
     env.netCalls[1].url,
-    "http://srv/System/Info?api_key=" + TOK,
-    "bare path gains ?api_key",
+    "http://srv/System/Info?ApiKey=" + TOK,
+    "bare path gains ?ApiKey",
   );
 }
 
@@ -480,7 +480,7 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   const h = new env.FakeHeaders({ Authorization: AUTH, Accept: "text/html" });
   env.window.fetch(API, { headers: h });
   const c = env.netCalls[0];
-  assert.strictEqual(c.url, API + "&api_key=" + TOK, "Headers path rewrites");
+  assert.strictEqual(c.url, API + "&ApiKey=" + TOK, "Headers path rewrites");
   assert(c.opts.headers instanceof env.FakeHeaders, "still a Headers copy");
   assert.strictEqual(
     c.opts.headers.get("Authorization"),
@@ -502,7 +502,7 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   env.window.fetch(API, { headers: { "X-Emby-Token": "raw99" } });
   assert.strictEqual(
     env.netCalls[0].url,
-    API + "&api_key=raw99",
+    API + "&ApiKey=raw99",
     "X-Emby-Token value used directly",
   );
 }
@@ -569,7 +569,7 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
     "headers buffered, none applied before send",
   );
   x.send();
-  assert.strictEqual(x.url, API + "&api_key=" + TOK, "re-opened rewritten");
+  assert.strictEqual(x.url, API + "&ApiKey=" + TOK, "re-opened rewritten");
   assert.strictEqual(x.async, true, "async preserved");
   assert.strictEqual(x.opens.length, 2, "exactly one re-open");
   assert.deepStrictEqual(
@@ -653,10 +653,10 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   env.window.fetch(su, { headers: { Authorization: AUTH } });
   const u = env.netCalls[0].url;
   assert(
-    /[?&]PageHash=[0-9a-f-]+&Page=1&NumResultsPerPage=1000&api_key=tok740$/.test(
+    /[?&]PageHash=[0-9a-f-]+&Page=1&NumResultsPerPage=1000&ApiKey=tok740$/.test(
       u,
     ),
-    "pinned AND query-authed, api_key outermost: " + u,
+    "pinned AND query-authed, ApiKey outermost: " + u,
   );
   assert(
     !("Authorization" in env.netCalls[0].opts.headers),
@@ -667,7 +667,7 @@ const API = "http://srv/Users/" + UID + "/Items/Latest?Limit=20";
   x.setRequestHeader("Authorization", AUTH);
   x.send();
   assert(
-    /[?&]PageHash=[0-9a-f-]+&Page=1&NumResultsPerPage=1000&api_key=tok740$/.test(
+    /[?&]PageHash=[0-9a-f-]+&Page=1&NumResultsPerPage=1000&ApiKey=tok740$/.test(
       x.url,
     ),
     "XHR pinned AND query-authed: " + x.url,

@@ -1277,6 +1277,47 @@ async function I() {
     "OK: I4: api_key is dropped from the key only after a token check",
   );
 
+  // I4b (JELA-896) — the SHIPPED spelling is now `ApiKey`: Jellyfin 12.0
+  // dropped `api_key=` as an auth transport (401 on every API endpoint), so
+  // qaAdd emits `ApiKey=`. The cache key must collapse that against
+  // header-auth exactly as it did for the legacy spelling, and must still
+  // reject a foreign token. Without this the query-auth and header-auth
+  // readers each cut their own request and the JELA-703/740 coalescing
+  // prize silently halves.
+  e = cfgEnv();
+  e.run();
+  p = get(e, "/JellyfinEnhanced/version?ApiKey=tok");
+  e.netCalls[0].resolve(200, CFG);
+  await bodyOf(p);
+  await e.drainMicro();
+  p = get(e, "/JellyfinEnhanced/version");
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/version").length,
+    1,
+    "I4b: ApiKey and header-auth readers share one request",
+  );
+  assert.strictEqual(
+    await bodyOf(p),
+    CFG,
+    "I4b: body served across auth styles (ApiKey)",
+  );
+
+  const foreignPascal = get(e, "/JellyfinEnhanced/version?ApiKey=someoneelse");
+  assert.strictEqual(
+    e.net("/JellyfinEnhanced/version").length,
+    2,
+    "I4b: a foreign ApiKey never reads this store",
+  );
+  e.netCalls[e.netCalls.length - 1].resolve(200, CFG2);
+  assert.strictEqual(
+    await bodyOf(foreignPascal),
+    CFG2,
+    "I4b: it gets its own answer",
+  );
+  console.log(
+    "OK: I4b: ApiKey is dropped from the key only after a token check",
+  );
+
   // I5 — safety: a foreign userId, an unlisted path, and a non-GET are all
   // untouched. /Plugins and /System/Configuration are admin-mutable from
   // another client and are deliberately NOT in the set.
