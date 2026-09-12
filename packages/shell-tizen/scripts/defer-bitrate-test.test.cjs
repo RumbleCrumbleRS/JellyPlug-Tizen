@@ -58,6 +58,8 @@
  *         the opt-OUT flip the 686 half was inert here, so a first boot
  *         spent the 5.77 MB ladder AND seeded nothing for boot 2.
  *   PART D — JELA-737 SETTLE GATE (the shipped default).
+ *   PART E — JELA-901 TRANSPORT ARM (the 12.0 ladder the instance hold
+ *            cannot see).
  *
  * JELA-737. First paint is the wrong release gate. JELA-730 showed firstCard
  * is not when the home is done, and JELA-736 measured the ladder landing at
@@ -914,6 +916,13 @@ function runSettle(store, opts) {
     this.readyState = 0;
     this.listeners = [];
   }
+  // JELA-901 reads the URL off open() to recognise a ladder rung, so the fake
+  // has to have one — without it the transport arm is silently never armed and
+  // PART E would pass against a shim that does nothing.
+  XHR.prototype.open = function (m, u) {
+    this.method = m;
+    this.url = u;
+  };
   XHR.prototype.addEventListener = function (n, f) {
     if (n === "loadend") this.listeners.push(f);
   };
@@ -1207,6 +1216,188 @@ if (!shim) {
       "D11: both transports were wrapped exactly once",
       r.win.fetch.__shellBTNet === 1 && r.XHR.prototype.__shellBTNet === 1,
     );
+  }
+}
+
+
+// ===========================================================================
+// PART E — JELA-901 TRANSPORT ARM
+// ===========================================================================
+//
+// Jellyfin 12.0's web client ships its OWN bitrate ladder, unrelated to
+// jellyfin-apiclient: web's ConnectionManager subclass schedules
+//   setTimeout(() => detectBitrate(this.getApi(u.ServerId), !0), 6e3)
+// from onLocalUserSignedIn, and that detectBitrate is an @jellyfin/sdk-based
+// webpack-module util that builds a bare XMLHttpRequest against
+// `api.basePath + "/Playback/BitrateTest"`. It never touches ApiClient — no
+// property to hold, no detectTimeout to clear, no prototype to wrap — and it
+// is called FORCED, so it bypasses its own module's 1 h cache too. Measured
+// on the JELA-112 rig: the JELA-686 prototype detectBitrate wrap was armed and
+// never entered on a boot that still spent a full ladder.
+//
+// Left alone, PART D's hold therefore stopped MOVING the escalation and
+// started ADDING one — 12.0's ladder ran unheld AND our release re-armed the
+// legacy one: 6 GET 200 bodies / 11.54 MB per cold boot.
+//
+// The transport is the only seam the two clients share, so the hold now sits
+// there. E1-E3 pin the 12.0 shape, E4 pins that 10.x is untouched, E5 pins the
+// fuse, E6 pins that ordinary traffic is not disturbed.
+const LADDER = "https://example.invalid/Playback/BitrateTest?Size=500000";
+
+// E0 — CONTRACT: the diag counters and the transport arm ship in both blobs.
+for (const [label, text] of [
+  [srcLabel, src],
+  [minLabel, min],
+]) {
+  check(
+    "E0: " + label + " exposes the JELA-901 counters on __shellBT",
+    /seen:0/.test(text) && /q:0/.test(text) && /fl:0/.test(text) && /skipArm:0/.test(text),
+  );
+  check(
+    // src escapes the regex for its string literal, min emits it raw — compare
+    // with backslashes stripped so one check covers both blobs.
+    "E0: " + label + " recognises a ladder rung by URL at the transport",
+    text.replace(/\\/g, "").indexOf("Playback/BitrateTest") >= 0 && /__shellBTu/.test(text),
+  );
+  check(
+    "E0: " + label + " stands the legacy re-arm down once the client ran one",
+    /if\(S\.seen\)\{S\.skipArm=1;return;\}/.test(text),
+  );
+}
+
+if (!shim) {
+  console.error("FAIL: shim not extractable — skipping PART E");
+  failures++;
+} else {
+  // Bring a settle-gated boot to the point where the client fires its ladder.
+  function bootTo12(store) {
+    const r = runSettle(store || {});
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    r.clock.advance(500); // first authenticated tick
+    fillHome(r, 3); // cards on screen, one request that resolves
+    r.fetches[0].resolve();
+    r.clock.advance(500);
+    return { r, api };
+  }
+  // 12.0's probe: an XHR from code that never touches ApiClient.
+  function clientLadder(r) {
+    const x = new r.XHR();
+    x.open("GET", LADDER);
+    x.send();
+    return x;
+  }
+
+  // --- E1: a ladder rung sent while held is queued, not forwarded. ---------
+  {
+    const { r } = bootTo12();
+    const before = r.state().inflight;
+    const x = clientLadder(r);
+    check(
+      "E1: the rung is NOT forwarded to the real send while held",
+      x.sent === undefined,
+      JSON.stringify({ sent: x.sent }),
+    );
+    check("E1: it is counted as seen and queued", r.state().seen === 1 && r.state().q === 1, JSON.stringify(r.state()));
+    check(
+      "E1: a QUEUED rung is not counted in-flight — counting it would deadlock " +
+        "the settle gate against the request it is holding",
+      r.state().inflight === before,
+      JSON.stringify({ before, now: r.state().inflight }),
+    );
+  }
+
+  // --- E2: the queue is flushed D ms after release, exactly once. ----------
+  {
+    const { r } = bootTo12();
+    const x = clientLadder(r);
+    r.clock.advance(3000); // quiet window elapses -> settle
+    check("E2: released on settle", r.state().why === "settle", JSON.stringify(r.state().why));
+    check("E2: still not forwarded at the instant of release", x.sent === undefined);
+    r.clock.advance(4000); // the configured post-release delay
+    check("E2: forwarded exactly once after the delay", x.sent === 1, JSON.stringify({ sent: x.sent }));
+    check("E2: the flush is recorded", r.state().fl === 1, JSON.stringify(r.state()));
+    r.clock.advance(60000);
+    check("E2: and never re-sent", x.sent === 1, JSON.stringify({ sent: x.sent }));
+  }
+
+  // --- E3: our legacy re-arm stands down when the client ran its own. ------
+  {
+    const { r, api } = bootTo12();
+    clientLadder(r);
+    r.clock.advance(3000 + 4000 + 60000);
+    check("E3: the legacy re-arm stood down", r.state().skipArm === 1, JSON.stringify(r.state()));
+    check(
+      "E3: so detectBitrate was never called — one ladder, not two",
+      api.calls === 0 && r.state().fired === 0,
+      JSON.stringify({ calls: api.calls, s: r.state() }),
+    );
+  }
+
+  // --- E4: 10.x is untouched. ---------------------------------------------
+  // There the legacy probe never reaches the transport (the instance hold
+  // stops it at enableAutomaticBitrateDetection), so nothing is queued and the
+  // re-arm fires exactly as it did before JELA-901.
+  {
+    const r = runSettle({});
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    vendorSchedule(api, r.clock); // the 10.x boot probe, scheduled pre-hold
+    r.fireApi();
+    r.clock.advance(500);
+    fillHome(r, 3);
+    r.fetches[0].resolve();
+    r.clock.advance(500);
+    check(
+      "E4: the 10.x probe was caught by the instance hold, as before",
+      r.state().cleared === 1,
+      JSON.stringify(r.state()),
+    );
+    r.clock.advance(20000); // past 6 s (vendor) and past settle + delay
+    check("E4: nothing was ever queued at the transport", r.state().q === 0, JSON.stringify(r.state()));
+    check(
+      "E4: our re-arm still fires exactly once",
+      r.state().armed === 1 && r.state().fired === 1 && r.state().skipArm === 0 && api.calls === 1,
+      JSON.stringify({ calls: api.calls, s: r.state() }),
+    );
+  }
+
+  // --- E5: a queued ladder can never be stranded. --------------------------
+  // No access token means tAuth never sets, so neither the settle arm nor the
+  // ceiling can release. The fuse the first queued rung arms is the only thing
+  // standing between the client and a promise that never settles.
+  {
+    const r = runSettle({ [MAX_FLAG]: "9000" });
+    const api = makeApi(r.clock);
+    api.token = ""; // never authenticated
+    r.win.ApiClient = api;
+    r.fireApi();
+    r.clock.advance(1000);
+    const x = clientLadder(r);
+    check("E5: queued with no gate in sight", r.state().q === 1 && x.sent === undefined, JSON.stringify(r.state()));
+    r.clock.advance(8000);
+    check("E5: still held before the fuse", x.sent === undefined);
+    r.clock.advance(1000 + 4000 + 500); // fuse at MaxMs, then the flush delay
+    check("E5: the fuse released it", r.state().why === "fuse", JSON.stringify(r.state().why));
+    check("E5: and the rung was forwarded", x.sent === 1 && r.state().fl === 1, JSON.stringify({ sent: x.sent }));
+  }
+
+  // --- E6: ordinary traffic is not disturbed. ------------------------------
+  {
+    const { r } = bootTo12();
+    const before = r.state().inflight;
+    const x = new r.XHR();
+    x.open("GET", "https://example.invalid/Users/u/Items?Limit=20");
+    x.send();
+    check("E6: a non-ladder request is forwarded immediately", x.sent === 1, JSON.stringify({ sent: x.sent }));
+    check(
+      "E6: and still counted in-flight, so the settle gate still sees it",
+      r.state().inflight === before + 1 && r.state().q === 0,
+      JSON.stringify(r.state()),
+    );
+    r.finishXhr(x);
+    check("E6: and released on loadend", r.state().inflight === before, JSON.stringify(r.state()));
   }
 }
 
