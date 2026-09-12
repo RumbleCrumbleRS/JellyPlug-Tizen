@@ -44,8 +44,19 @@
        TrueType (771 KiB/boot vs ~150 KiB of WOFF2) and puts two Google hosts
        serially on the boot path, so the WOFF2 bodies plus the two replacement
        stylesheets are embedded and served under /shell/fonts/. Regenerate the
-       whole directory with scripts/fetch-webfonts.py (upstream provenance is
-       pinned in fonts-manifest.json, which is docs, not served). -->
+       Inter/Sora/Archivo Narrow set with scripts/fetch-webfonts.py (upstream
+       provenance is pinned in fonts-manifest.json, which is docs, not served).
+
+       JELA-902: the same treatment for the NetFin skin, which the server's
+       Branding.CustomCss @imports. That one field was the parent of 5.28 MB
+       across 7 third-party requests per cold boot — 26% of the boot — most of
+       it a single UNSUBSETTED 4-axis VARIABLE Material Symbols face (4,969,868
+       B; M63 cannot drive the axes at all, so the whole gvar table was dead
+       weight). netfin.css is vendored here with its css2 @import inlined and
+       its icon src repointed at a static subset (-> 12,924 B), so the fielded
+       skin makes zero third-party requests. Regenerate that set with
+       scripts/build-netfin-fonts.mjs. Both globs below already cover the new
+       files; guards live in scripts/netfin-fonts.test.cjs. -->
   <ItemGroup>
     <EmbeddedResource Include="Resources/fonts/*.woff2" LogicalName="JellyPlugShell.Resources.fonts.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/fonts/*.css" LogicalName="JellyPlugShell.Resources.fonts.%(Filename)%(Extension)" />

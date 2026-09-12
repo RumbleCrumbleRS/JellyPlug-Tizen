@@ -254,5 +254,163 @@
   "mediabar": {
     "source": "https://cdn.jsdelivr.net/gh/IAmParadox27/jellyfin-plugin-media-bar@ae878fd763c1d2065db4dcbc7d15a90539a0f813/slideshowpure.css",
     "upstreamSha256": "be62059923192c3249eed18b59e931a9bd014e30586b0086f3595426b20cac51"
+  },
+  "netfin": {
+    "_comment": "JELA-902 — the NetFin skin and the fonts it pulls, vendored so a cold boot makes zero third-party requests. Regenerate with scripts/build-netfin-fonts.mjs. The Branding.CustomCss field must @import /shell/fonts/netfin.css for any of this to be on the wire.",
+    "upstream": {
+      "repo": "ya0903/NetFin",
+      "commit": "ba7ff8ad627e7d8c5611cb6e53625cc53381f9d3",
+      "url": "https://cdn.jsdelivr.net/gh/ya0903/NetFin@ba7ff8ad627e7d8c5611cb6e53625cc53381f9d3/netfin.css",
+      "sha256": "3a6105f50b93d4b1a6f96739ec17e30b8f4af3d17c2019f9092b7cbacde052cc",
+      "bytes": 128156
+    },
+    "stylesheet": {
+      "file": "netfin.css",
+      "bytes": 131374
+    },
+    "icons": {
+      "file": "material-symbols-rounded-v267-400.woff2",
+      "bytes": 12924,
+      "sha256": "e4093f4274376286cb5f6d0296cdadcc39806969f7da056c8dfb6a160d9f44e0",
+      "source": "https://fonts.gstatic.com/s/materialsymbolsrounded/v267/sykg-zNym6YjUruM-QrEh7-nyTnjDwKNJ_190Fjzag.woff2",
+      "sourceBytes": 4969868,
+      "sourceSha256": "84c2298291cb0cc57d2cef859ddd21b58802c603acc88f9f6acff973ec2bdb63",
+      "instancedAxes": {
+        "wght": 400,
+        "FILL": 0,
+        "GRAD": 0,
+        "opsz": 24
+      },
+      "glyphs": 194,
+      "codepointsRequested": 210,
+      "codepointsPresent": 209,
+      "codepointsAbsentUpstream": ["U+E88F"]
+    },
+    "text": {
+      "userAgent": "Mozilla/5.0 (SMART-TV; LINUX; Tizen 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/5.0 TV Safari/537.36",
+      "css2": "https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap",
+      "faces": [
+        {
+          "file": "orbitron-v35-400.woff2",
+          "family": "Orbitron",
+          "weight": "400",
+          "style": "normal",
+          "bytes": 6116,
+          "sha256": "e7ffa5384c74f4283bd367e4f27974c91a124356fa1cd925dd800faa31e15f07",
+          "source": "https://fonts.gstatic.com/s/orbitron/v35/yMJMMIlzdpvBhQQL_SC3X9yhF25-T1nyGy6xpg.ttf",
+          "sourceBytes": 17752,
+          "sourceSha256": "59c2bc6487139f1b8c5754e0cc98ea431ab4c1c1ee142d9d2433ecabe444b59a",
+          "codepoints": 186
+        },
+        {
+          "file": "orbitron-v35-500.woff2",
+          "family": "Orbitron",
+          "weight": "500",
+          "style": "normal",
+          "bytes": 6380,
+          "sha256": "edcddd6c5e1e38830eab2635e8068affd9a38b123e9b03979863b468745acfa9",
+          "source": "https://fonts.gstatic.com/s/orbitron/v35/yMJMMIlzdpvBhQQL_SC3X9yhF25-T1nyKS6xpg.ttf",
+          "sourceBytes": 17800,
+          "sourceSha256": "e1dd2875a4cf1711615b7bc7eb2ae8d05bef3861f87a7fdd847a78199169b458",
+          "codepoints": 186
+        },
+        {
+          "file": "orbitron-v35-700.woff2",
+          "family": "Orbitron",
+          "weight": "700",
+          "style": "normal",
+          "bytes": 6344,
+          "sha256": "d9dc3362003e10f192022459f967b7a395b2a7ec4ba68f1b8179d02de0e7454f",
+          "source": "https://fonts.gstatic.com/s/orbitron/v35/yMJMMIlzdpvBhQQL_SC3X9yhF25-T1ny_Cmxpg.ttf",
+          "sourceBytes": 17708,
+          "sourceSha256": "a24fe8031eefd8451d40e31882868d768ce6bed7c3659293281b3c5c7732a952",
+          "codepoints": 186
+        },
+        {
+          "file": "orbitron-v35-900.woff2",
+          "family": "Orbitron",
+          "weight": "900",
+          "style": "normal",
+          "bytes": 6168,
+          "sha256": "71c2849f5af18090b38629668634659c07125c19116c4369d4c01e3f25458315",
+          "source": "https://fonts.gstatic.com/s/orbitron/v35/yMJMMIlzdpvBhQQL_SC3X9yhF25-T1nysimxpg.ttf",
+          "sourceBytes": 16884,
+          "sourceSha256": "27cd313045d12280384256b4fba922366a4883e32ffb866b9acd62c5a859de61",
+          "codepoints": 186
+        },
+        {
+          "file": "rajdhani-v17-300.woff2",
+          "family": "Rajdhani",
+          "weight": "300",
+          "style": "normal",
+          "bytes": 10552,
+          "sha256": "3cff529bf2743f963d204cfd25320f25603107c1b2091bc68b21c9c34c000687",
+          "source": "https://fonts.gstatic.com/s/rajdhani/v17/LDI2apCSOBg7S-QT7pasEcOs.ttf",
+          "sourceBytes": 356844,
+          "sourceSha256": "b6b2b19ad724f2d88330cfe83bbe7a2c88f81f9d937dd94ec5c9942c87b96fd6",
+          "codepoints": 348
+        },
+        {
+          "file": "rajdhani-v17-400.woff2",
+          "family": "Rajdhani",
+          "weight": "400",
+          "style": "normal",
+          "bytes": 12464,
+          "sha256": "8ae868d8d165214c784a1bf7c79a209cfc838da6c0c9e9be15ea9ab2745e435c",
+          "source": "https://fonts.gstatic.com/s/rajdhani/v17/LDIxapCSOBg7S-QT7q4A.ttf",
+          "sourceBytes": 351464,
+          "sourceSha256": "fd30002d951c14f9ca6322601720b73ef4a9877167a241ab9498cc9039c596e9",
+          "codepoints": 348
+        },
+        {
+          "file": "rajdhani-v17-500.woff2",
+          "family": "Rajdhani",
+          "weight": "500",
+          "style": "normal",
+          "bytes": 12432,
+          "sha256": "7b5d62801bd0614a374a742c5c2f805c8b5a4ede121d4bdc7f1513ae6dc47d50",
+          "source": "https://fonts.gstatic.com/s/rajdhani/v17/LDI2apCSOBg7S-QT7pb0EMOs.ttf",
+          "sourceBytes": 357212,
+          "sourceSha256": "7377b0a3421b01dae185fc1262ea34a45f6ba226155f531e9e72f5262b56d802",
+          "codepoints": 348
+        },
+        {
+          "file": "rajdhani-v17-600.woff2",
+          "family": "Rajdhani",
+          "weight": "600",
+          "style": "normal",
+          "bytes": 13104,
+          "sha256": "30b9452fd4a5bd1d06c3f0eb4ca20d0cedaa000f5c3f1133683b9d7d99d2b34d",
+          "source": "https://fonts.gstatic.com/s/rajdhani/v17/LDI2apCSOBg7S-QT7pbYF8Os.ttf",
+          "sourceBytes": 362824,
+          "sourceSha256": "bcffd70c330f38f97f49fbb41cad34a1628a7852c0e6d1d1418ebc162add3144",
+          "codepoints": 348
+        },
+        {
+          "file": "rajdhani-v17-700.woff2",
+          "family": "Rajdhani",
+          "weight": "700",
+          "style": "normal",
+          "bytes": 12732,
+          "sha256": "be8f60a9f23d33fd87c50865ee7d3292564e4369a872409ba1a5ed7730623ccb",
+          "source": "https://fonts.gstatic.com/s/rajdhani/v17/LDI2apCSOBg7S-QT7pa8FsOs.ttf",
+          "sourceBytes": 372568,
+          "sourceSha256": "8b2fbb04ed3af38ea941d7351fc5bcf917d239d0bfb64c9bb8916510d8774495",
+          "codepoints": 348
+        },
+        {
+          "file": "share-tech-mono-v16-400.woff2",
+          "family": "Share Tech Mono",
+          "weight": "400",
+          "style": "normal",
+          "bytes": 7352,
+          "sha256": "9af546ea161091badfa8aa641c843c042ee1d341515b6b8aff623e57e4100da3",
+          "source": "https://fonts.gstatic.com/s/sharetechmono/v16/J7aHnp1uDWRBEqV98dVQztYldFc7pA.ttf",
+          "sourceBytes": 41912,
+          "sourceSha256": "5f6b57538a1a35469a038dc3073003cebc4c101ad7b3c219e9555a3b3c0a81d2",
+          "codepoints": 230
+        }
+      ]
+    }
   }
 }
