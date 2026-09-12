@@ -4157,7 +4157,18 @@
       'var qaHdr=function(n){n=String(n||"").toLowerCase();return n==="authorization"||n==="x-emby-authorization"||n==="x-emby-token"};' +
       'var qaTok=function(n,v){n=String(n||"").toLowerCase();v=String(v||"");if(n==="x-emby-token")return v;var qm=/Token="([^"]*)"/.exec(v);return qm&&qm[1]?qm[1]:""};' +
       "var qaUrl=function(u){return/^https?:\\/\\//.test(u)&&!/[?&]api_?key=/i.test(u)};" +
-      'var qaAdd=function(u,t){return u+(u.indexOf("?")<0?"?":"&")+"api_key="+encodeURIComponent(t)};' +
+      // JELA-896: the param is `ApiKey`, NOT the legacy lowercase `api_key`.
+      // Jellyfin 12.0 dropped `api_key=` (and the X-Emby-Token header) as an
+      // auth transport — verified against the live 12.0 server: `?api_key=`
+      // returns 401 and `?ApiKey=` returns 200 on every API endpoint probed
+      // (/System/Endpoint, /Users/{id}, /Items, /UserViews, /Shows/NextUp,
+      // /DisplayPreferences, /Sessions, /Playback/BitrateTest). Because this
+      // rewrite STRIPS the Authorization header, a stale `api_key` spelling
+      // 401s every API GET the shell makes and the TV boots to a blank home.
+      // `ApiKey` is also accepted by 10.x, so this is not a 12.0-only path.
+      // (/Videos/*/stream* still honours `api_key=`, which is why direct-play
+      // URLs built elsewhere were unaffected — do not "unify" them onto this.)
+      'var qaAdd=function(u,t){return u+(u.indexOf("?")<0?"?":"&")+"ApiKey="+encodeURIComponent(t)};' +
       'if(typeof W.fetch==="function"){try{var qF=W.fetch;W.fetch=function(qu,qo){try{' +
       'var qMm=qo&&qo.method?String(qo.method).toUpperCase():"GET";' +
       'if(qMm==="GET"&&typeof qu==="string"&&qo&&qo.headers&&qaUrl(qu)){' +
@@ -5353,7 +5364,7 @@
       // as the item shapes above do.
       "if(cCO){" +
       'var sq=[],sj,sa=null;for(sj=0;sj<res.length;sj++){var sn2=res[sj].split("=")[0];' +
-      'if(sn2.toLowerCase()==="api_key"){try{sa=decodeURIComponent(res[sj].slice(res[sj].indexOf("=")+1)||"")}catch(_){sa="?"}continue}' +
+      'if(sn2.toLowerCase()==="api_key"||sn2.toLowerCase()==="apikey"){try{sa=decodeURIComponent(res[sj].slice(res[sj].indexOf("=")+1)||"")}catch(_){sa="?"}continue}' +
       "sq.push(res[sj])}" +
       'if(sa!==null&&sa!==cC.t)return"";' +
       'if(uid&&uid!==cC.u)return"";' +
