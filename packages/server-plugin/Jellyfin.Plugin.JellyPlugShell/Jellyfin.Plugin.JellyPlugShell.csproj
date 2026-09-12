@@ -5,7 +5,7 @@
     <RootNamespace>Jellyfin.Plugin.JellyPlugShell</RootNamespace>
     <!-- Release source of truth; AssemblyVersion/FileVersion derive from it
          (JELA-64: pinning them made the dashboard report a stale version). -->
-    <Version>1.0.55.0</Version>
+    <Version>1.0.56.0</Version>
     <!-- Minimum Jellyfin server ABI this build loads on. package-plugin.sh
          stamps it into the plugin's meta.json and the plugin-repo manifest
          entry (JELA-896: it used to be hardcoded to 10.11.0.0 in the script,

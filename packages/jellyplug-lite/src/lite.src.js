@@ -350,6 +350,28 @@
     return null;
   };
 
+  // The one auth-header factory for every lite request. JELA-899:
+  // `Authorization: MediaBrowser Token="<tok>"`, NOT the
+  // legacy `X-Emby-Token` header — Jellyfin 12.0 dropped it as an auth
+  // transport and answers it 401 (probed against the live server alongside
+  // the JELA-896 matrix; ?ApiKey= and this header both 200).
+  //
+  // With queryAuth ARMED (the fleet default since JELA-839) this header
+  // never reaches the wire: the JELA-740 shim swallows it and re-adds
+  // `?ApiKey=`, keeping every request CORS-simple. But the two documented
+  // per-TV kill switches ('jellyfin.shell.queryAuth'='0',
+  // 'jellyfin.shell.queryAuthDisabled'='1') disarm that shim, and then
+  // whatever we set here IS the wire auth. The shim's qaTok already parses
+  // Token="..." out of an Authorization header, so this is correct on both
+  // sides of the switch.
+  //
+  // NOT for /Videos/*/stream* direct-play URLs: those are handed to the
+  // native AVPlay pipeline, which cannot set request headers, and the
+  // server still honours their `api_key=` query auth (JELA-896).
+  Lite.authHeaders = function (token) {
+    return { Authorization: 'MediaBrowser Token="' + token + '"' };
+  };
+
   // fetchJson(url, headers, cb(err, obj)) is injected; the default XHR
   // implementation lives in boot() so this stays node-testable.
   Lite.createApi = function (opts) {
@@ -361,7 +383,7 @@
     var rowLimit = opts.rowLimit || 20;
 
     function headers() {
-      return { "X-Emby-Token": token };
+      return Lite.authHeaders(token);
     }
 
     function get(path, cb) {
@@ -1305,7 +1327,7 @@
         }, timeoutMs);
         postJson(
           base + "/Items/" + item.id + "/PlaybackInfo?userId=" + userId,
-          { "X-Emby-Token": token },
+          Lite.authHeaders(token),
           { DeviceProfile: Lite.deviceProfile(), AutoOpenLiveStream: false },
           function (err, body) {
             if (done) {
@@ -1493,7 +1515,7 @@
     function post(path, b) {
       // fire-and-forget: a lost beacon must never disturb playback
       try {
-        postJson(base + path, { "X-Emby-Token": token }, b, null);
+        postJson(base + path, Lite.authHeaders(token), b, null);
       } catch (_) {}
     }
 
@@ -2486,7 +2508,7 @@
           d.st = "sub";
           xhrFetchText(
             info.subUrl,
-            { "X-Emby-Token": creds.token },
+            Lite.authHeaders(creds.token),
             function (serr, text) {
               var cues = serr ? null : Lite.parseSrt(text);
               if (!cues || !cues.length) {
@@ -2560,7 +2582,7 @@
                   (info.playSessionId
                     ? "&playSessionId=" + encodeURIComponent(info.playSessionId)
                     : ""),
-                { "X-Emby-Token": creds.token },
+                Lite.authHeaders(creds.token),
               );
             } catch (_k) {}
           }

@@ -52,7 +52,10 @@ function harness(opts) {
     posts[0].url,
     "http://srv/Items/m1/PlaybackInfo?userId=u1",
   );
-  assert.deepStrictEqual(j(posts[0].headers), { "X-Emby-Token": "tok" });
+  // JELA-899: MediaBrowser Authorization, not the legacy X-Emby-Token header
+  assert.deepStrictEqual(j(posts[0].headers), {
+    Authorization: 'MediaBrowser Token="tok"',
+  });
   assert.strictEqual(posts[0].body.AutoOpenLiveStream, false);
   const prof = posts[0].body.DeviceProfile;
   assert.ok(prof, "M63 profile attached");
