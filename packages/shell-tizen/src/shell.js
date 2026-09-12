@@ -1660,8 +1660,54 @@
       // Post-release delay is tunable via "jellyfin.shell.deferBitrateTestMs"
       // (default 4000), the quiet window via "...QuietMs" (default 3000) and
       // the ceiling via "...MaxMs" (default 45000).
+      //
+      // JELA-901: on Jellyfin 12.0 the hold above is no longer sufficient, and
+      // on its own it turns this deferral into an AMPLIFIER — 6 GET 200 bodies
+      // (11.54 MB) per cold boot instead of 3. 12.0 ships a SECOND bitrate
+      // ladder that has nothing to do with jellyfin-apiclient: web's own
+      // ConnectionManager subclass does
+      //   onLocalUserSignedIn(u){ ... setTimeout(()=>detectBitrate(this.getApi(u.ServerId), !0), 6e3) ... }
+      // and that detectBitrate is an @jellyfin/sdk-based util living in a
+      // webpack module of main.jellyfin.bundle.js. It builds its own
+      // XMLHttpRequest against `api.basePath + "/Playback/BitrateTest"` and
+      // never touches ApiClient. So:
+      //   - it is NOT reachable from window.ApiClient, its prototype, or any
+      //     ApiClient instance — there is no property to hold and no timer to
+      //     clear (which is exactly why __shellBT.cleared reads 0);
+      //   - it is called FORCED (`!0`), so it also bypasses its own module's
+      //     1 h in-memory cache — every boot runs the full escalation;
+      //   - the legacy hold still works (sets>0, enableAutomaticBitrateDetection
+      //     reads false), so the ONLY legacy ladder left is the one we re-arm
+      //     ourselves at release. Ladder A is 12.0's, ladder B is ours, and
+      //     on 12.0 ours is pure duplication of a measurement already taken.
+      // Ruled out by measurement, not by reading: a prototype-wide
+      // detectBitrate wrap IS installed and armed (__shellBitrate.armed=1) and
+      // was never entered (hits+miss+saves all 0) on a boot that still spent
+      // the ladder. Re-pointing the hold at the ApiClient prototype — the
+      // direction this ticket was filed with — would therefore have changed
+      // nothing.
+      //
+      // The only seam both clients share is the TRANSPORT, so that is where
+      // the hold now sits: while held, an XHR whose URL is a
+      // /Playback/BitrateTest rung is QUEUED rather than sent (queueing send()
+      // defers the whole escalation, because rungs 2 and 3 are only issued
+      // from rung 1's onload), and the queue is flushed D ms after release.
+      // Deferred, never dropped: the caller's promise still settles, just
+      // later, so a play started mid-hold waits instead of failing. Queued
+      // rungs are deliberately NOT counted as in-flight — counting them would
+      // deadlock the settle gate against the very request it is holding — and
+      // the first queued rung arms a hard fuse at MaxMs so a queued ladder can
+      // never be stranded by a gate that never opens.
+      // Our own legacy re-arm then stands down if the client has already run a
+      // ladder itself (S.seen), which is what collapses 12.0 back to one
+      // escalation. On 10.x nothing is ever queued (the legacy hold stops the
+      // probe before it reaches the transport), seen stays 0, and the re-arm
+      // fires exactly as before — so this is a no-op on the old server.
       // Diag: window.__shellBT = {on,gate,inst,cleared,sets,armed,fired,tHold,
-      // tArm,why,polls,cards,cardsLoose,stable,tAuth,net,inflight,tBusy}.
+      // tArm,why,polls,cards,cardsLoose,stable,tAuth,net,inflight,tBusy,
+      // seen,q,fl,skipArm}. On 12.0 the tell is q>=1 and fl>=1 (the transport
+      // caught the ladder) with skipArm=1; `cleared` cannot rise on 12.0
+      // because there is no vendor timer on any object we can reach.
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")==="0")return;',
       "    var D=4000;",
@@ -1672,7 +1718,8 @@
       '    try{var qv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestQuietMs")||"",10);if(qv>=250&&qv<=120000)Q=qv;}catch(_){}',
       "    var M=45000;",
       '    try{var mv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMaxMs")||"",10);if(mv>=1000&&mv<=600000)M=mv;}catch(_){}',
-      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0};',
+      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0,seen:0,q:0,fl:0,skipArm:0};',
+      "    var LAD=/\\/Playback\\/BitrateTest/i,BQ=[],fuse=0;",
       "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
       "    function hold(){",
       "      var a=cur();",
@@ -1688,16 +1735,31 @@
       "      if(S.tArm)return;",
       "      if(iv){try{clearInterval(iv);}catch(_){}iv=null;}",
       '      S.tArm=Date.now();S.why=w||"paint";',
+      "      try{setTimeout(flush,D);}catch(_){flush();}",
       "      var a=cur();if(!a)return;",
       "      try{delete a.enableAutomaticBitrateDetection;}catch(_){}",
       "      try{a.__shellBTHeld=0;a.enableAutomaticBitrateDetection=true;}catch(_){}",
-      "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
+      "      try{a.detectTimeout=setTimeout(function(){try{a.detectTimeout=null;",
+      "        if(S.seen){S.skipArm=1;return;}",
+      "        if(a.accessToken&&a.accessToken()){S.fired=1;a.detectBitrate();}}catch(_){}},D);S.armed=1;}catch(_){}",
+      "    }",
+      "    function flush(){",
+      "      var n=BQ.length;S.fl+=n;",
+      "      for(var i=0;i<n;i++){try{BQ[i]();}catch(_){}}",
+      "      BQ.length=0;",
       "    }",
       "    function busy(){S.tBusy=Date.now();}",
       "    function net(){",
       "      try{var XP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype;",
+      "      if(XP&&XP.open&&!XP.__shellBTUrl){XP.__shellBTUrl=1;var oo=XP.open;",
+      '        XP.open=function(m,u){try{this.__shellBTu=String(u||"");}catch(_){}return oo.apply(this,arguments);};}',
       "      if(XP&&XP.send&&!XP.__shellBTNet){XP.__shellBTNet=1;var os=XP.send;",
-      "        XP.send=function(){var x=this,d=0;function fin(){if(d)return;d=1;S.inflight--;busy();}",
+      "        XP.send=function(){var x=this,d=0,ag=arguments;function fin(){if(d)return;d=1;S.inflight--;busy();}",
+      '          try{if(!x.__shellBTq&&LAD.test(x.__shellBTu||"")){S.seen++;',
+      "            if(!S.tArm){x.__shellBTq=1;S.q++;",
+      "              BQ.push(function(){try{XP.send.apply(x,ag);}catch(_){}});",
+      '              if(!fuse){fuse=1;try{setTimeout(function(){release("fuse");},M);}catch(_){}}',
+      "              return;}}}catch(_){}",
       "          S.inflight++;S.net++;busy();",
       '          try{x.addEventListener("loadend",fin,false);}catch(_){}',
       "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
@@ -1732,7 +1794,11 @@
       '    function tick(){hold();if(G==="settle")poll();}',
       "    function arm(){hold();try{iv=setInterval(tick,500);}catch(_){}}",
       "    var pg=window.__shellPaintGate;",
-      '    if(G==="settle"){busy();net();if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}}',
+      // net() is installed on EVERY gate path, not just "settle": the JELA-901
+      // transport queue is what actually holds 12.0's ladder, and the paint
+      // gate has to hold it too.
+      "    busy();net();",
+      '    if(G==="settle"){if(pg&&pg.onApi){pg.onApi(arm);}else{arm();}}',
       "    else if(pg&&pg.onApi&&pg.onPaint){pg.onApi(arm);pg.onPaint(release);}",
       "    else{arm();setTimeout(release,20000);}",
       "  })();}catch(_){}",
