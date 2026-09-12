@@ -46,8 +46,9 @@ const css = files.filter((f) => f.endsWith(".css"));
 assert.ok(woff2.length >= 20, `only ${woff2.length} woff2 bodies committed`);
 assert.deepStrictEqual(
   css.sort(),
-  ["inter-sora.css", "mediabar-slideshowpure.css"],
-  "the two served stylesheets must exist (theme fonts + patched media-bar)",
+  ["inter-sora.css", "mediabar-slideshowpure.css", "netfin.css"],
+  "the served stylesheets must exist (theme fonts + patched media-bar + " +
+    "JELA-902's vendored NetFin skin)",
 );
 
 for (const sheet of css) {
@@ -60,11 +61,27 @@ for (const sheet of css) {
     !/fonts\.googleapis|fonts\.gstatic|cdn\.jsdelivr|@import/.test(body),
     `${sheet} still reaches a remote origin (or kept an @import)`,
   );
-  const urls = [...body.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1]);
+  const urls = [...body.matchAll(/url\(([^)]+)\)/g)].map((m) =>
+    // A vendored real-world skin quotes its url()s; the generated sheets do not.
+    m[1].trim().replace(/^(['"])([\s\S]*)\1$/, "$2"),
+  );
   assert.ok(urls.length > 0, `${sheet} has no url() at all`);
+  let fontRefs = 0;
   for (const url of urls) {
+    // JELA-902: netfin.css is vendored upstream CSS, not a generated font
+    // sheet, so it legitimately carries inline SVG and an empty placeholder
+    // token (--loginPageBgUrl). Neither fetches anything, so neither is in
+    // scope here — but anything that DOES fetch still has to be a local,
+    // content-addressed woff2. The two generated sheets contain no such forms,
+    // so nothing is relaxed for them.
+    if (url === "" || /^data:/i.test(url)) continue;
     const m = /^([a-z0-9.-]+\.woff2)\?v=([0-9a-f]{64})$/.exec(url);
-    assert.ok(m, `${sheet}: url(${url}) is not a local ?v=sha256 woff2 ref`);
+    assert.ok(
+      m,
+      `${sheet}: url(${url.slice(0, 80)}) is neither inert (data:/empty) nor a ` +
+        "local ?v=sha256 woff2 ref",
+    );
+    fontRefs++;
     const file = path.join(FONTS, m[1]);
     assert.ok(fs.existsSync(file), `${sheet} references missing ${m[1]}`);
     const sha = crypto
@@ -75,9 +92,13 @@ for (const sheet of css) {
       sha,
       m[2],
       `${sheet}: ?v= for ${m[1]} does not match the committed bytes — ` +
-        "half-landed regen; re-run scripts/fetch-webfonts.py",
+        "half-landed regen; re-run the generator for this sheet",
     );
   }
+  assert.ok(
+    fontRefs > 0,
+    `${sheet} has url()s but not one font reference among them`,
+  );
 }
 
 // Every committed body is referenced (orphans mean the css and the dir have
