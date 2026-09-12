@@ -6,6 +6,12 @@
     <!-- Release source of truth; AssemblyVersion/FileVersion derive from it
          (JELA-64: pinning them made the dashboard report a stale version). -->
     <Version>1.0.53.0</Version>
+    <!-- Minimum Jellyfin server ABI this build loads on. package-plugin.sh
+         stamps it into the plugin's meta.json and the plugin-repo manifest
+         entry (JELA-896: it used to be hardcoded to 10.11.0.0 in the script,
+         so bumping Jellyfin.Controller here still shipped a zip that 12.0
+         refused to load). Keep in lockstep with the PackageReference below. -->
+    <JellyfinTargetAbi>12.0.0.0</JellyfinTargetAbi>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>

@@ -8,8 +8,17 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ="$HERE/../Jellyfin.Plugin.JellyPlugShell"
 OUT="${1:-$HERE/../dist}"
-VERSION="$(grep -oE '<Version>[0-9.]+</Version>' "$PROJ/Jellyfin.Plugin.JellyPlugShell.csproj" | grep -oE '[0-9.]+')"
-TARGET_ABI="10.11.0.0"
+CSPROJ="$PROJ/Jellyfin.Plugin.JellyPlugShell.csproj"
+VERSION="$(grep -oE '<Version>[0-9.]+</Version>' "$CSPROJ" | grep -oE '[0-9.]+')"
+# JELA-896: the ABI used to be hardcoded here, so bumping Jellyfin.Controller in
+# the csproj still stamped meta.json with the old ABI and shipped a zip the new
+# server refused to load. The csproj is now the single source of truth for both
+# the version and the ABI; fail fast rather than fall back to a stale default.
+TARGET_ABI="$(grep -oE '<JellyfinTargetAbi>[0-9.]+</JellyfinTargetAbi>' "$CSPROJ" | grep -oE '[0-9.]+')"
+if [[ -z "$TARGET_ABI" ]]; then
+  echo "error: no <JellyfinTargetAbi> in $CSPROJ — refusing to guess the plugin ABI." >&2
+  exit 1
+fi
 GUID="6f97e5aa-cf2f-4b48-8b73-6be92f4b7d31"
 
 mkdir -p "$OUT"
