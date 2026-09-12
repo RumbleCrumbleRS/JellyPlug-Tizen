@@ -5072,7 +5072,17 @@
       "var issue=function(p,e0){pnd++;aw.started=1;try{" +
       'var x=new W.XMLHttpRequest();x.__awI=1;x.open("GET",aB+p,!0);' +
       "try{x.timeout=30000}catch(_){}" +
-      'try{x.setRequestHeader("X-Emby-Token",aC.t);x.setRequestHeader("Accept","application/json")}catch(_){}' +
+      // JELA-897: authenticate with `Authorization: MediaBrowser Token="..."`,
+      // NOT the legacy `X-Emby-Token` header. Jellyfin 12.0 dropped
+      // X-Emby-Token as an auth transport and answers it 401 (probed against
+      // the live server alongside the JELA-896 matrix). With queryAuth ARMED
+      // this header never reaches the wire — the JELA-740 shim swallows it
+      // and re-adds `?ApiKey=` — but the two documented per-TV kill switches
+      // ('jellyfin.shell.queryAuth'='0', 'jellyfin.shell.queryAuthDisabled'
+      // ='1') disarm that shim, and then whatever we set here IS the wire
+      // auth. qaTok already parses Token="..." out of an Authorization
+      // header, so this stays correct on both sides of the switch.
+      'try{x.setRequestHeader("Authorization","MediaBrowser Token=\\""+aC.t+"\\"");x.setRequestHeader("Accept","application/json")}catch(_){}' +
       "x.onreadystatechange=function(){try{if(x.readyState!==4)return;" +
       "var ok=x.status>=200&&x.status<300;" +
       'if(ok){aw.f++;if(e0.st===0){e0.st=1;e0.s=x.status;e0.t=String(x.responseText||"");e0.x=+new Date()+60000}}else{aw.e++;if(e0.st===0)e0.st=2}' +

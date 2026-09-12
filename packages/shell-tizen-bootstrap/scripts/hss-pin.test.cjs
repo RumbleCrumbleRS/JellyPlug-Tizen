@@ -481,8 +481,8 @@ function pinnedParams(url) {
   const kW = pinnedParams(warmX.url);
   assert(kW, "warm Sections XHR goes out PINNED: " + warmX.url);
   assert.strictEqual(
-    warmX.headers["X-Emby-Token"],
-    "tok",
+    warmX.headers["Authorization"],
+    'MediaBrowser Token="tok"',
     "warm request still authenticated",
   );
 

@@ -15,7 +15,8 @@
  *   - default OFF: no flag => no fetch, no overlay, no timers, no state
  *   - static contract: ES5 (no arrow/template), no </script literal, overlay
  *     pointer-events:none + aria-hidden, divs only (no tabbables), opt-in key
- *   - happy path: X-Emby-Token auth header, the four home endpoints requested,
+ *   - happy path: MediaBrowser Authorization header (JELA-897), the four home
+ *     endpoints requested,
  *     movies/tvshows view preferred for Latest, rows painted from real items,
  *     window.__shellDH.firstCardMs + "dhcard" boot-phase recorded once
  *   - gating: missing creds / missing server => why "nocreds", no fetch
@@ -91,7 +92,17 @@ assert(
   body.indexOf("tabindex") === -1 && body.indexOf("<a") === -1,
   "overlay must not create tabbables",
 );
-assert(body.indexOf("X-Emby-Token") !== -1, "auth header present");
+assert(
+  body.indexOf('setRequestHeader("Authorization","MediaBrowser Token=') !== -1,
+  "auth header present",
+);
+// JELA-897: Jellyfin 12.0 answers the legacy X-Emby-Token header 401, and
+// directHome runs BEFORE the SPA with queryAuth possibly killed per-TV, so
+// this call site must carry an Authorization header of its own.
+assert(
+  body.indexOf("X-Emby-Token") === -1,
+  "no raw X-Emby-Token header (12.0 answers it 401)",
+);
 assert(
   body.indexOf("#/details?id=") !== -1,
   "JELA-33 A2: open-item wired to the SPA details route",
@@ -492,9 +503,18 @@ function authedStore() {
     ),
     "Latest requested for the movies view (not music)",
   );
-  env.requests.forEach((r) =>
-    assert.strictEqual(r.headers["X-Emby-Token"], "tok", "token header sent"),
-  );
+  env.requests.forEach((r) => {
+    assert.strictEqual(
+      r.headers["Authorization"],
+      'MediaBrowser Token="tok"',
+      "token header sent",
+    );
+    assert.strictEqual(
+      r.headers["X-Emby-Token"],
+      undefined,
+      "no legacy X-Emby-Token header (JELA-897)",
+    );
+  });
 
   const overlay = overlayOf(env);
   assert(overlay, "overlay painted from fetched rows");
