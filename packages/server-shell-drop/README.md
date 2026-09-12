@@ -121,6 +121,126 @@ MAILTO=ops@example.com
   every still-served body each run (mtime refreshes), so only entries
   whose source stopped being served keep aging and get reaped.
 
+## JavaScript Injector config backup (JELA-898)
+
+The JSI plugin config is not a cache — it **is** the JellyPlug product layer.
+110 `CustomJavaScripts` entries, ~905 KB of minified ES5, built up over ~50
+incremental `jsi-jpNNN-patch.mjs` runs that were each applied **once** against
+live state. Those patchers take the live body as their base, so there is no
+way to replay them from an empty config. The server is the source of truth and
+the repo cannot regenerate it.
+
+JELA-896 proved that is a single point of failure: the Jellyfin 12.0 upgrade
+emptied the plugin config (`/JavaScriptInjector/public.js` went 924,481 B → 0)
+and the layer survived only because a scratch artifact from JELA-886 happened
+to still be sitting on an agent box.
+
+```
+scripts/jsi-backup.mjs        GET  the live config -> a validated snapshot file
+scripts/jsi-restore.mjs       POST a snapshot back, with a pre-write backup
+scripts/jsi-backup-cron.sh    unattended scheduled capture (single-flight)
+snapshots/jsi-config-<stamp>.json   the committed known-good snapshot
+```
+
+Both tools read `JELLYFIN_URL` and `JELLYFIN_API_KEY` (or `--url` / `--api-key`)
+and discover the plugin id by name, so no GUID is hard-coded. Auth is the
+`MediaBrowser Token="…"` header — Jellyfin 12.0 rejects the legacy `?api_key=`
+and `X-Emby-Token` forms with a 401 (JELA-896).
+
+### Taking a backup
+
+```bash
+# refresh the committed snapshot (compares against the newest one already there)
+node scripts/jsi-backup.mjs --dir snapshots
+
+# scheduled/local capture with retention
+node scripts/jsi-backup.mjs --dir /var/backups/jsi --if-changed --prune-keep 60
+```
+
+A backup tool that faithfully mirrors whatever the server returns is worse than
+none, because it will overwrite the last good snapshot with the wiped one and
+report success. So the write is **fail-closed** on three floors, each
+overridable with `--force`:
+
+| floor                              | default | catches                                     |
+| ---------------------------------- | ------- | ------------------------------------------- |
+| `--min-entries`                    | 50      | the JELA-896 wipe signature outright        |
+| `--max-shrink-pct` vs the baseline | 10      | a partial loss that still clears the floor  |
+| JEL-139 personal-endpoint scan     | on      | a dynamic-DNS hostname reaching git history |
+
+The baseline is `--baseline <file>`, or the newest snapshot already in `--dir`.
+Exit codes: `0` written, `3` unchanged (with `--if-changed`), `1` a floor
+tripped or the fetch failed.
+
+### Restoring
+
+`jsi-restore.mjs` is a **dry run until you pass `--yes`**, and always writes a
+pre-restore backup of current live state first — including on a dry run.
+
+```bash
+# see what it would do
+node scripts/jsi-restore.mjs --snapshot snapshots/jsi-config-<stamp>.json
+
+# apply it
+node scripts/jsi-restore.mjs --snapshot snapshots/jsi-config-<stamp>.json \
+  --backup-dir /var/backups/jsi --yes
+```
+
+It respects the three ways this endpoint has bitten us before:
+
+- **The save is off-by-one.** `POST /Plugins/{jsi}/Configuration` persists, and
+  the config re-GET round-trips byte-clean, but the served `public.js` does not
+  rebuild until the _next_ save or a server restart — JELA-762 shipped a patch
+  that was dark for six minutes behind a green config check, and JELA-815 then
+  showed the count is not fixed at two (a bundle can rebuild carrying a
+  _sibling's_ pending change and still not have yours). So the tool **POSTs
+  until the served artifact byte-contains every enabled entry**, re-verifying
+  each pass, rather than counting saves. `--max-attempts` bounds it.
+- **The write is a whole-config read-modify-write.** There is no version check;
+  JELA-764 silently reverted three entries from a three-minute-stale base. The
+  live config is re-fetched immediately before the POST and the restore aborts
+  if it moved (`--force` overrides).
+- **A stale snapshot deletes live work.** A restore that would remove entries
+  is refused unless you pass `--allow-removals`, after printing each one by
+  name. The disaster case this exists for — a wiped config — is pure additions,
+  so the common path is unaffected.
+
+Restoring is not the same as the TVs picking it up: the shell caches the
+channel in `localStorage` under `jellyfin.shell.jsiChannel.*`, so purge that
+prefix (or re-prime) on any rig you are using to verify.
+
+### Scheduled capture
+
+`jsi-backup-cron.sh` is the unattended entrypoint — same shape as
+`regen-tx-drop.sh`, single-flight locked, non-zero exit is the operator alert:
+
+```
+MAILTO=ops@example.com
+0 */4 * * * JELLYFIN_URL=https://your-server JELLYFIN_API_KEY=... \
+  /opt/JellyPlug-Tizen/packages/server-shell-drop/scripts/jsi-backup-cron.sh \
+  /var/backups/jsi
+```
+
+A non-zero exit is not just "the backup did not run" — because the floors are
+fail-closed, it most likely means **the live config just lost most of its
+entries and the last good snapshot was protected**. Compare live against the
+newest snapshot before re-running with `--force`.
+
+The committed snapshot under `snapshots/` is deliberately _not_ on that
+schedule: it is the disaster floor and is refreshed through a PR so a human is
+always attached to it. The cron bounds how much drift accumulates in between.
+
+### Refreshing the committed snapshot
+
+```bash
+node scripts/jsi-backup.mjs --dir snapshots   # writes a new stamped file
+pnpm --filter @jellyfin-tv/server-shell-drop test
+```
+
+Snapshots are versioned artifacts and are prettier-ignored, so the review
+surface is the per-entry line diff: each `CustomJavaScripts` body is one line,
+so a changed snippet shows up as exactly one changed line.
+
 ## manifest.json schema
 
 ```json
