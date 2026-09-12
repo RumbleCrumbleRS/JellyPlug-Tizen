@@ -63,7 +63,10 @@ function harness(opts) {
   reporter.start();
   assert.strictEqual(posts.length, 1);
   assert.strictEqual(posts[0].url, "http://srv/Sessions/Playing");
-  assert.deepStrictEqual(j(posts[0].headers), { "X-Emby-Token": "tok" });
+  // JELA-899: MediaBrowser Authorization, not the legacy X-Emby-Token header
+  assert.deepStrictEqual(j(posts[0].headers), {
+    Authorization: 'MediaBrowser Token="tok"',
+  });
   assert.deepStrictEqual(j(posts[0].body), {
     ItemId: "m1",
     MediaSourceId: "ms1",

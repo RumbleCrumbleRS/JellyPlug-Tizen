@@ -67,7 +67,11 @@ function fakeServer(routes) {
     hits,
     fetchJson: (url, headers, cb) => {
       hits.push(url);
-      assert.strictEqual(headers["X-Emby-Token"], "tok");
+      // JELA-899: Authorization, never the legacy X-Emby-Token header —
+      // Jellyfin 12.0 answers that one 401 whenever the queryAuth shim is
+      // disarmed by a per-TV kill switch.
+      assert.strictEqual(headers["Authorization"], 'MediaBrowser Token="tok"');
+      assert.strictEqual(headers["X-Emby-Token"], undefined);
       const path = url.slice(BASE.length);
       const match = Object.keys(routes).find((r) => path.indexOf(r) === 0);
       if (!match) return cb(new Error("404 " + path), null);

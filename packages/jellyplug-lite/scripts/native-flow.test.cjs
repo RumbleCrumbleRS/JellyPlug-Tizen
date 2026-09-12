@@ -270,7 +270,9 @@ const movie = () => ({
   const pb = h.pbXhr()[0];
   assert.strictEqual(pb.method, "POST");
   assert.strictEqual(pb.url, "http://srv/Items/m1/PlaybackInfo?userId=u1");
-  assert.strictEqual(pb.headers["X-Emby-Token"], "tok");
+  // JELA-899: the wire auth is Authorization, not the legacy header
+  assert.strictEqual(pb.headers["Authorization"], 'MediaBrowser Token="tok"');
+  assert.strictEqual(pb.headers["X-Emby-Token"], undefined);
   assert.strictEqual(pb.headers["Content-Type"], "application/json");
   assert.ok(pb.body.DeviceProfile, "M63 profile in the body");
   assert.strictEqual(h.win.__shellLite.player.st, "info", "diag surface live");
@@ -411,7 +413,11 @@ const movie = () => ({
     dels[0].url,
     "http://srv/Videos/ActiveEncodings?deviceId=dev1&playSessionId=ps9",
   );
-  assert.strictEqual(dels[0].headers["X-Emby-Token"], "tok");
+  assert.strictEqual(
+    dels[0].headers["Authorization"],
+    'MediaBrowser Token="tok"',
+  );
+  assert.strictEqual(dels[0].headers["X-Emby-Token"], undefined);
   const opens = h.av.calls.filter((c) => c[0] === "open");
   assert.strictEqual(opens.length, 2);
   assert.strictEqual(
@@ -636,10 +642,11 @@ const movie = () => ({
     "http://srv/Videos/m1/ms1/Subtitles/2/0/Stream.srt",
   );
   assert.strictEqual(
-    subXhr[0].headers["X-Emby-Token"],
-    "tok",
+    subXhr[0].headers["Authorization"],
+    'MediaBrowser Token="tok"',
     "header-authenticated — no api_key in the sub URL",
   );
+  assert.strictEqual(subXhr[0].headers["X-Emby-Token"], undefined);
   assert.strictEqual(
     h.av.calls.length,
     0,
