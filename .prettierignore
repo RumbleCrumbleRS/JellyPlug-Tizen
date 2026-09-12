@@ -12,3 +12,8 @@ release-artifacts/
 # shell.js) so the diff stays reviewable; prettier would flatten it to
 # top-level indent. esbuild re-minifies it anyway, so formatting is moot.
 packages/shell-core/src/shell-core.src.js
+
+# JELA-898: JSI config snapshots — byte-faithful captures of live plugin state,
+# not source. Reformatting them would break the per-entry line diff that makes
+# them reviewable (and they are integrity-hashed on their own serialization).
+packages/server-shell-drop/snapshots/
