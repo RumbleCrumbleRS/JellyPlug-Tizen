@@ -5983,7 +5983,17 @@
       "var issue=function(p,e0){pnd++;aw.started=1;try{" +
       'var x=new W.XMLHttpRequest();x.__awI=1;x.open("GET",aB+p,!0);' +
       "try{x.timeout=30000}catch(_){}" +
-      'try{x.setRequestHeader("X-Emby-Token",aC.t);x.setRequestHeader("Accept","application/json")}catch(_){}' +
+      // JELA-897: authenticate with `Authorization: MediaBrowser Token="..."`,
+      // NOT the legacy `X-Emby-Token` header. Jellyfin 12.0 dropped
+      // X-Emby-Token as an auth transport and answers it 401 (probed against
+      // the live server alongside the JELA-896 matrix). With queryAuth ARMED
+      // this header never reaches the wire — the JELA-740 shim swallows it
+      // and re-adds `?ApiKey=` — but the two documented per-TV kill switches
+      // ('jellyfin.shell.queryAuth'='0', 'jellyfin.shell.queryAuthDisabled'
+      // ='1') disarm that shim, and then whatever we set here IS the wire
+      // auth. qaTok already parses Token="..." out of an Authorization
+      // header, so this stays correct on both sides of the switch.
+      'try{x.setRequestHeader("Authorization","MediaBrowser Token=\\""+aC.t+"\\"");x.setRequestHeader("Accept","application/json")}catch(_){}' +
       "x.onreadystatechange=function(){try{if(x.readyState!==4)return;" +
       "var ok=x.status>=200&&x.status<300;" +
       'if(ok){aw.f++;if(e0.st===0){e0.st=1;e0.s=x.status;e0.t=String(x.responseText||"");e0.x=+new Date()+60000}}else{aw.e++;if(e0.st===0)e0.st=2}' +
@@ -6491,7 +6501,8 @@
   // A0 spike (verified 2026-07-07 against the live 10.11.11 server): the
   // standalone handoff is serverUrl=localStorage['jellyfin.shell.serverUrl'],
   // token+userId=jellyfin_credentials.Servers[0].{AccessToken,UserId}, auth
-  // header X-Emby-Token; GET /Users/{u}/Items/Resume, /Shows/NextUp,
+  // header X-Emby-Token (JELA-897: now Authorization: MediaBrowser Token="..",
+  // which 10.x and 12.0 both accept); GET /Users/{u}/Items/Resume, /Shows/NextUp,
   // /UserViews (+ /Users/{u}/Items/Latest?ParentId=) all 401 without the token
   // and 200 with it; /Items/{id}/Images/Primary is public (no token) so card
   // art paints directly. No ApiClient dependency — the bundle need not run.
@@ -6563,7 +6574,10 @@
       'if(painted){G.cards=painted;if(!G.painted){G.painted=1;G.firstCardMs=+new Date()-T0;G.navReadyMs=G.firstCardMs;try{W.__shellPhase&&W.__shellPhase("dhcard")}catch(_){}}}' +
       "}catch(_){G.err++}}" +
       'function addRow(title,items){try{if(G.dismissed||!items||!items.length)return;var os=[],i;for(i=0;i<items.length&&os.length<12;i++){var u=imgUrl(items[i]);if(u)os.push({u:u,id:String(items[i].Id||"")})}if(!os.length)return;G.rows.push({title:title,items:os});G.sections++;repaint()}catch(_){G.err++}}' +
-      'function get(path,cb){try{var x=new XMLHttpRequest();x.open("GET",base+path,!0);x.setRequestHeader("X-Emby-Token",cr.t);x.setRequestHeader("Accept","application/json");x.onreadystatechange=function(){if(x.readyState===4){try{G.http[path]=x.status}catch(_){}if(x.status>=200&&x.status<300){var d=null;try{d=JSON.parse(x.responseText)}catch(_){}cb(d)}else{cb(null)}}};x.send()}catch(_){G.err++;try{cb(null)}catch(__){}}}' +
+      // JELA-897: Authorization, not the legacy X-Emby-Token header — 12.0
+      // answers that one 401, and directHome is exactly the pre-SPA path a
+      // TV with the queryAuth kill switch set has no other auth for.
+      'function get(path,cb){try{var x=new XMLHttpRequest();x.open("GET",base+path,!0);x.setRequestHeader("Authorization","MediaBrowser Token=\\""+cr.t+"\\"");x.setRequestHeader("Accept","application/json");x.onreadystatechange=function(){if(x.readyState===4){try{G.http[path]=x.status}catch(_){}if(x.status>=200&&x.status<300){var d=null;try{d=JSON.parse(x.responseText)}catch(_){}cb(d)}else{cb(null)}}};x.send()}catch(_){G.err++;try{cb(null)}catch(__){}}}' +
       // JELA-33 A2: D-pad navigation + open/play. Handled keys are eaten so
       // the SPA booting underneath never double-acts; anything unhandled keeps
       // the A1 dismiss-and-pass-through escape hatch.

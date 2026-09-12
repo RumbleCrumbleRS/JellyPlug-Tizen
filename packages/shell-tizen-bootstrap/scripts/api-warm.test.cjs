@@ -11,7 +11,9 @@
  *     falls back to the stored ManualAddress (JELA-47 origin rule: the
  *     SERVER origin keys everything, the page origin is never consulted)
  *   - prefetch: tag-cache FIRST, Sections SECOND, WS-4 deterministic list,
- *     X-Emby-Token auth, bounded 8-wide, one request per canonical URL
+ *     Authorization: MediaBrowser Token="..." auth (JELA-897: Jellyfin 12.0
+ *     answers the legacy X-Emby-Token header 401), bounded 8-wide, one
+ *     request per canonical URL
  *   - chained fan-out: Section/* URLs built from the Sections RESPONSE
  *     (AdditionalData preserved, NextUp gets NextUpDateCutoff +
  *     EnableRewatching=false, hostile section names dropped)
@@ -67,7 +69,17 @@ assert(
   body.indexOf("jellyfin.shell.apiWarmDisabled") !== -1,
   "reserved kill-switch honored",
 );
-assert(body.indexOf("X-Emby-Token") !== -1, "prefetch authenticates");
+assert(
+  body.indexOf('setRequestHeader("Authorization","MediaBrowser Token=') !== -1,
+  "prefetch authenticates with a MediaBrowser Authorization header",
+);
+// JELA-897: the raw X-Emby-Token header is 401 on Jellyfin 12.0. queryAuth
+// still READS it (it stays in qaHN so the SPA's own header is recognised),
+// but no shell call site may SET it.
+assert(
+  body.indexOf('setRequestHeader("X-Emby-Token"') === -1,
+  "no call site sets the raw X-Emby-Token header (12.0 answers it 401)",
+);
 assert(body.indexOf("</script") === -1, "no </script literal");
 assert(body.indexOf("=>") === -1, "body must be ES5 (no arrow functions)");
 assert(body.indexOf("`") === -1, "body must be ES5 (no template literals)");
@@ -239,7 +251,8 @@ function makeEnv(opts) {
       // JELA-839 made queryAuth opt-OUT, so an empty store now arms the
       // JELA-740 shim, which rewrites every prefetch URL to carry ApiKey
       // (JELA-896: the legacy lowercase api_key 401s on Jellyfin 12.0)
-      // and swallows X-Emby-Token. This suite pins apiWarm's own ordering,
+      // and swallows the Authorization header. This suite pins apiWarm's
+      // own ordering,
       // bounding and auth contract, so it stands that layer down by default
       // (same isolation move as fetchCoalesceDisabled in query-auth.test).
       // Section 11 below covers the composition with queryAuth ARMED.
@@ -429,7 +442,8 @@ function makeEnv(opts) {
     assert(
       env.xcalls.every(
         (x) =>
-          x.headers["X-Emby-Token"] === "tok" &&
+          x.headers["Authorization"] === 'MediaBrowser Token="tok"' &&
+          x.headers["X-Emby-Token"] === undefined &&
           x.method === "GET" &&
           x.timeout === 30000,
       ),
@@ -766,6 +780,7 @@ function makeEnv(opts) {
     assert(
       env.xcalls.every(
         (x) =>
+          x.headers["Authorization"] === undefined &&
           x.headers["X-Emby-Token"] === undefined &&
           x.method === "GET" &&
           x.timeout === 30000,
