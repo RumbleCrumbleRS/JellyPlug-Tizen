@@ -60,6 +60,30 @@
  *   PART D — JELA-737 SETTLE GATE (the shipped default).
  *   PART E — JELA-901 TRANSPORT ARM (the 12.0 ladder the instance hold
  *            cannot see).
+ *   PART F — JELA-905 ANSWER FROM CACHE at that same transport, so a warm
+ *            boot spends ZERO bytes on the ladder instead of deferring
+ *            5,770,50x B. The consumer PART F drives is a faithful
+ *            re-implementation of the SERVED main.jellyfin.bundle.js module
+ *            2211, so the checks run the vendor's own arithmetic — discount,
+ *            downlinkMax cap, escalation thresholds and the IsInNetwork
+ *            clamp — over a synthesised response.
+ *     F0. contract: the raw store, both kill switches, the counters.
+ *     F1. cold -> deferred, measured on the wire, persisted.
+ *     F2. warm -> every rung answered, nothing sent, and 12.0's own 0.7
+ *         discount still applied to the replayed raw observation.
+ *     F3. the replayed escalation stops at the rung the real ladder does.
+ *     F4. the >= 140 Mbps IsInNetwork clamp is NOT defeated by a cache hit.
+ *     F5. after release every rung is real again — which is what keeps a
+ *         user-forced measurement honest, since 12.0's BOOT probe is itself
+ *         forced and the flag cannot be the boundary.
+ *     F6. either kill switch stands the answer AND the persist down.
+ *     F7. stale / foreign / corrupt entries miss instead of answering wrong.
+ *     F8. an XHR whose response cannot be shadowed is queued, never
+ *         half-answered — the module must never wait on an unsent request.
+ *     F9. each handler fires exactly once (dispatch, do not also poke onload).
+ *     F10. no document.createEvent -> the direct on-handler fallback answers.
+ *     F11. 10.x untouched, and its re-armed ladder still warms the store.
+ *     F12. a throwing localStorage never breaks the ladder.
  *
  * JELA-737. First paint is the wrong release gate. JELA-730 showed firstCard
  * is not when the home is done, and JELA-736 measured the ladder landing at
@@ -316,6 +340,15 @@ function makeApi(clock) {
     calls: 0,
     accessToken() {
       return this.token;
+    },
+    // JELA-905 keys its store on serverId()+serverAddress(), the same shape
+    // JELA-817 uses. Without these the id is "|" for every server and F7's
+    // foreign-server miss would pass vacuously.
+    serverId() {
+      return "srv1";
+    },
+    serverAddress() {
+      return "https://example.invalid";
     },
     detectBitrate() {
       this.calls++;
@@ -915,7 +948,10 @@ function runSettle(store, opts) {
   function XHR() {
     this.readyState = 0;
     this.listeners = [];
+    this.all = [];
   }
+  XHR.HEADERS_RECEIVED = 2;
+  XHR.DONE = 4;
   // JELA-901 reads the URL off open() to recognise a ladder rung, so the fake
   // has to have one — without it the transport arm is silently never armed and
   // PART E would pass against a shim that does nothing.
@@ -925,25 +961,69 @@ function runSettle(store, opts) {
   };
   XHR.prototype.addEventListener = function (n, f) {
     if (n === "loadend") this.listeners.push(f);
+    this.all.push([n, f]);
+  };
+  // JELA-905 answers a rung by dispatching real events rather than by poking
+  // x.onload, because other shell XHR wraps listen via addEventListener and
+  // calling BOTH would double-fire. Dispatch here the way the DOM does: the
+  // on<type> handler is itself a listener, invoked once.
+  XHR.prototype.dispatchEvent = function (e) {
+    const h = this["on" + e.type];
+    if (typeof h === "function") h.call(this, e);
+    this.all.slice().forEach((p) => {
+      if (p[0] === e.type) p[1].call(this, e);
+    });
+    return true;
   };
   XHR.prototype.send = function () {
     this.sent = (this.sent || 0) + 1;
   };
   win.XMLHttpRequest = XHR;
+  // JELA-905 persists its transport observation, so the fake store has to be
+  // writable — a getItem-only stub would make every warm-boot check vacuous.
+  const ls = {
+    getItem(k) {
+      return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+    },
+    setItem(k, v) {
+      if (opts.lsThrows) throw new Error("QuotaExceededError");
+      store[k] = String(v);
+    },
+  };
+  // A constructible Date: the JELA-905 store stamps with `(new Date).getTime()`
+  // the way JELA-817's does, and a {now} stub alone would make every read throw
+  // into its catch and silently report a permanent cache miss.
+  function FakeDate() {
+    this.t = clock.now() + 1;
+  }
+  FakeDate.prototype.getTime = function () {
+    return this.t;
+  };
+  FakeDate.now = () => clock.now() + 1;
   const sandbox = {
     window: win,
-    document: doc,
-    localStorage: {
-      getItem(k) {
-        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
-      },
-    },
+    document: opts.noCreateEvent
+      ? doc
+      : Object.assign({}, doc, {
+          createEvent() {
+            return {
+              type: "",
+              initEvent(t) {
+                this.type = t;
+              },
+            };
+          },
+        }),
+    localStorage: ls,
+    performance: { now: () => clock.now() },
     setTimeout: clock.setTimeout,
     setInterval: clock.setInterval,
     clearTimeout: clock.clear,
     clearInterval: clock.clear,
-    Date: { now: () => clock.now() + 1 },
+    Date: FakeDate,
     Object,
+    JSON,
+    Math,
     parseInt,
   };
   vm.createContext(sandbox);
@@ -954,8 +1034,24 @@ function runSettle(store, opts) {
     dom,
     fetches,
     XHR,
+    store,
     finishXhr(x) {
       x.readyState = 4;
+      x.listeners.slice().forEach((f) => f());
+    },
+    // Finish a rung the way a real one finishes: headers, then a body of `size`
+    // bytes `ms` later. JELA-905's transport observer takes its stamps off the
+    // same readyState transitions the vendor module does, so a finisher that
+    // skipped HEADERS_RECEIVED would measure nothing.
+    finishRung(x, size, ms) {
+      x.readyState = 2;
+      if (typeof x.onreadystatechange === "function") x.onreadystatechange();
+      clock.advance(ms);
+      x.status = 200;
+      x.response = { size };
+      x.readyState = 4;
+      if (typeof x.onreadystatechange === "function") x.onreadystatechange();
+      x.dispatchEvent({ type: "load" });
       x.listeners.slice().forEach((f) => f());
     },
     fireApi: () => gateCbs.api.forEach((c) => c()),
@@ -1398,6 +1494,438 @@ if (!shim) {
     );
     r.finishXhr(x);
     check("E6: and released on loadend", r.state().inflight === before, JSON.stringify(r.state()));
+  }
+}
+
+// ===========================================================================
+// PART F — JELA-905 ANSWER-FROM-CACHE AT THE TRANSPORT
+// ===========================================================================
+//
+// PART E moves 12.0's ladder past the settle gate. It still SPENDS it:
+// 5,770,50x B per cold boot, 28% of a 20.44 MB boot, rendering nothing.
+// JELA-817's localStorage cache cannot reach it (that wrap is on
+// ApiClient.prototype and 12.0's probe never touches ApiClient) and 12.0's own
+// module cache cannot either (the boot probe is FORCED, and the cache is
+// module-scope so it dies with the document).
+//
+// So the transport answers the rung. The consumer below is a faithful
+// re-implementation of the SERVED main.jellyfin.bundle.js module 2211 — the
+// control flow and every arithmetic step, transcribed from the minified text
+// quoted in shell.js. That is the point of PART F: these checks run the
+// VENDOR's code path over a synthesised response, so a wrong fake surface does
+// not quietly pass — it comes out NaN.
+const RUNGS12 = [
+  { bytes: 5e5, threshold: 5e5 },
+  { bytes: 1e6, threshold: 2e7 },
+  { bytes: 3e6, threshold: 5e7 },
+];
+
+// Module 2211, minus the Promises (a virtual clock does not own the microtask
+// queue, so the continuations are explicit). `cached`/`cachedAt` are the
+// module-scope `r`/`i` the ticket found — page-scoped, which is exactly why
+// they cannot survive a cold boot.
+function makeModule12(r, endpointInfo) {
+  const st = { cached: 0, cachedAt: 0, rungs: [], measured: [], result: null };
+  const now = () => r.clock.now();
+  // s(e): if(!e&&r)return r; t=Math.min(Math.round(.7*e),2147483647); r=t;...
+  function settle(e) {
+    if (!e && st.cached) return st.cached;
+    const t = Math.min(Math.round(0.7 * e), 2147483647);
+    st.cached = t;
+    st.cachedAt = now();
+    return t;
+  }
+  function rung(api, bytes, ok, bad) {
+    const x = new r.XHR();
+    x.open("GET", api.basePath + "/Playback/BitrateTest?Size=" + bytes);
+    x.responseType = "blob";
+    x.timeout = 5e3;
+    let a;
+    x.onreadystatechange = function () {
+      if (x.readyState === r.XHR.HEADERS_RECEIVED) a = r.win.__perf();
+    };
+    x.onload = function () {
+      if (x.status < 400) {
+        const e = 0.001 * (r.win.__perf() - a);
+        const i = x.response.size;
+        ok(Math.round(8 * (i / e)));
+      } else bad();
+    };
+    x.onerror = bad;
+    x.ontimeout = bad;
+    st.rungs.push(x);
+    x.send(null);
+    return x;
+  }
+  function ladder(api, n, prev, done) {
+    if (n >= RUNGS12.length) return done(settle(prev || 0));
+    const cfg = RUNGS12[n];
+    rung(
+      api,
+      cfg.bytes,
+      function (bps) {
+        st.measured.push(bps);
+        return bps < cfg.threshold ? done(settle(bps)) : ladder(api, n + 1, bps, done);
+      },
+      function () {
+        return done(settle(prev || 0));
+      },
+    );
+  }
+  // detectBitrate(api, force) — the exported `c`, plus u()'s IsInNetwork clamp.
+  return {
+    st,
+    detect(api, force, done) {
+      done = done || function () {};
+      if (!force && st.cached && now() - (st.cachedAt || 0) <= 36e5) {
+        st.result = st.cached;
+        return done(st.cached);
+      }
+      ladder(api, 0, undefined, function (e) {
+        if (endpointInfo && endpointInfo.IsInNetwork) {
+          e = Math.max(e || 0, 14e7);
+          st.cached = e;
+          st.cachedAt = now();
+        }
+        st.result = e;
+        done(e);
+      });
+    },
+  };
+}
+
+const TXK = "jellyfin.shell.bitrateTx";
+const ANS_FLAG = "jellyfin.shell.bitrateAnswer";
+const TTL_FLAG = "jellyfin.shell.bitrateTtlMs";
+const API12 = { basePath: "https://example.invalid" };
+// makeApi()'s serverId/serverAddress are what the store is keyed on.
+const TX_ID = "srv1|https://example.invalid"; // makeApi()'s serverId + serverAddress
+function txEntry(bps, t, id) {
+  return JSON.stringify({ bps, t: t === undefined ? 1 : t, id: id === undefined ? TX_ID : id });
+}
+
+// F0 — CONTRACT: the store, the switches and the counters ship in both blobs.
+for (const [label, text] of [
+  [srcLabel, src],
+  [minLabel, min],
+]) {
+  check(
+    "F0: " + label + " carries the JELA-905 transport store and switch",
+    text.includes(TXK) && text.includes(ANS_FLAG),
+  );
+  check(
+    "F0: " + label + " exposes the JELA-905 counters on __shellBT",
+    /ans:0/.test(text) && /txSave:0/.test(text) && /txMiss:0/.test(text),
+  );
+  check(
+    // The raw observation and JELA-817's DECIDED bitrate differ by the 0.7
+    // discount. Sharing one key would be wrong by that factor in whichever
+    // direction the last writer won, so the keys must stay distinct.
+    "F0: " + label + " keeps the raw store distinct from JELA-817's decided one",
+    text.includes(TXK) && text.includes('"jellyfin.shell.bitrate"'),
+  );
+  check(
+    "F0: " + label + " lets one kill switch stand down every persisted-bitrate path",
+    text.includes(CACHE_FLAG),
+  );
+}
+
+if (!shim) {
+  console.error("FAIL: shim not extractable — skipping PART F");
+  failures++;
+} else {
+  function boot905(store, opts) {
+    const r = runSettle(store || {}, opts);
+    r.win.__perf = () => r.clock.now();
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    r.fireApi();
+    r.clock.advance(500);
+    fillHome(r, 3);
+    r.fetches[0].resolve();
+    r.clock.advance(500);
+    return { r, api };
+  }
+  // Release the hold and let the queue flush, so a deferred ladder actually
+  // reaches the wire (settle quiet window + the post-release delay).
+  function releaseAndFlush(r) {
+    r.clock.advance(3000);
+    r.clock.advance(4000);
+  }
+  // An answered rung completes one replay window (120 ms) later, and a full
+  // replayed escalation is at most three of them. 1000 ms drains the ladder
+  // and still leaves the 3000 ms quiet window intact, so the hold is untouched.
+  function drainAnswers(r) {
+    r.clock.advance(1000);
+  }
+
+  // --- F1 COLD: nothing stored -> defer, measure on the wire, persist. ------
+  {
+    const { r } = boot905({});
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    check(
+      "F1: with an empty store the rung is deferred, not answered",
+      r.state().ans === 0 && r.state().q === 1 && r.state().txMiss === 1,
+      JSON.stringify(r.state()),
+    );
+    releaseAndFlush(r);
+    check("F1: and it goes to the wire after release", r.state().fl === 1 && m.st.rungs[0].sent === 1);
+    // 500,000 requested; the server rounds up to 524,643. 250 ms => 16,788,576 bps.
+    r.finishRung(m.st.rungs[0], 524643, 250);
+    check(
+      "F1: the transport measured the rung the way the vendor module does",
+      r.state().txSave === 1 && r.state().txBps === Math.round((8e3 * 524643) / 250),
+      JSON.stringify({ txBps: r.state().txBps, want: Math.round((8e3 * 524643) / 250) }),
+    );
+    check(
+      "F1: and persisted it under the raw-observation key, keyed to the server",
+      typeof r.store[TXK] === "string" && JSON.parse(r.store[TXK]).bps === r.state().txBps,
+      JSON.stringify(r.store[TXK]),
+    );
+    check(
+      "F1: the vendor module got the same measurement it would have got unheld",
+      m.st.measured[0] === Math.round((8e3 * 524643) / 250),
+      JSON.stringify(m.st.measured),
+    );
+    // 16.8 Mbps >= rung 0's 5e5 threshold, so the real ladder escalates once
+    // more and then stops below rung 1's 2e7 — the shape F2 must reproduce.
+    check("F1: and escalated to rung 2 exactly as the real ladder does", m.st.rungs.length === 2, String(m.st.rungs.length));
+  }
+
+  // --- F2 WARM: the whole ladder is answered, at zero bytes. ---------------
+  {
+    const BPS = 16788576; // what F1 persisted
+    const { r } = boot905({ [TXK]: txEntry(BPS) });
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    drainAnswers(r);
+    check(
+      "F2: every rung is answered from the store — none is queued",
+      r.state().ans === 2 && r.state().q === 0,
+      JSON.stringify(r.state()),
+    );
+    check(
+      "F2: and none is ever forwarded to the real send — zero bytes",
+      m.st.rungs.every((x) => x.sent === undefined),
+      JSON.stringify(m.st.rungs.map((x) => x.sent)),
+    );
+    check(
+      "F2: the vendor module computed a real number, not NaN — the answer " +
+        "drove readyState 2 so its first performance.now() stamp was taken",
+      m.st.measured.length === 2 && m.st.measured.every((v) => isFinite(v) && v > 0),
+      JSON.stringify(m.st.measured),
+    );
+    check(
+      "F2: the replayed measurement is the stored one, never above it",
+      m.st.measured.every((v) => v <= BPS && v >= BPS * 0.99),
+      JSON.stringify(m.st.measured),
+    );
+    check(
+      "F2: and 12.0's OWN 0.7 discount still ran on it — we replay the raw " +
+        "observation, we do not inject a decided bitrate",
+      m.st.result === Math.round(0.7 * m.st.measured[m.st.measured.length - 1]),
+      JSON.stringify({ result: m.st.result, measured: m.st.measured }),
+    );
+    releaseAndFlush(r);
+    check(
+      "F2: nothing was queued, so nothing flushes, and our legacy re-arm " +
+        "stands down — zero ladders on the whole boot",
+      r.state().fl === 0 && r.state().skipArm === 1 && r.state().fired === 0,
+      JSON.stringify(r.state()),
+    );
+  }
+
+  // --- F3: the replayed escalation terminates where the real one does. -----
+  // Thresholds ascend (5e5, 2e7, 5e7) and the replayed measurement is
+  // constant, so it stops at the first rung whose threshold exceeds it.
+  for (const [bps, want] of [
+    [4e5, 1],
+    [3e6, 2],
+    [1e8, 3],
+  ]) {
+    const { r } = boot905({ [TXK]: txEntry(bps) });
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    drainAnswers(r);
+    check(
+      "F3: a stored " + bps + " bps replays exactly " + want + " rung(s)",
+      m.st.rungs.length === want && r.state().ans === want,
+      JSON.stringify({ rungs: m.st.rungs.length, ans: r.state().ans }),
+    );
+  }
+
+  // --- F4: the IsInNetwork clamp is NOT defeated by a cached value. --------
+  // The ticket's explicit constraint. It survives because we answer the rung
+  // and let u() run verbatim — suppressing the probe instead would skip the
+  // clamp entirely, which is the strongest argument against that design.
+  {
+    const { r } = boot905({ [TXK]: txEntry(3e6) });
+    const m = makeModule12(r, { IsInNetwork: true });
+    m.detect(API12, true);
+    drainAnswers(r);
+    check(
+      "F4: an in-network result is still clamped to >= 140 Mbps",
+      m.st.result === 14e7,
+      JSON.stringify({ result: m.st.result }),
+    );
+  }
+
+  // --- F5: a post-release (user-forced) measurement is always real. --------
+  // 12.0's BOOT probe is forced too, so the forced flag cannot be the
+  // boundary. The HOLD WINDOW is: once released, every rung goes to the wire.
+  {
+    const { r } = boot905({ [TXK]: txEntry(3e6) });
+    releaseAndFlush(r);
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    check(
+      "F5: after release a rung is never answered from the store",
+      r.state().ans === 0 && m.st.rungs[0].sent === 1,
+      JSON.stringify({ ans: r.state().ans, sent: m.st.rungs[0].sent }),
+    );
+  }
+
+  // --- F6: both kill switches stand the answer down. -----------------------
+  for (const [name, store] of [
+    ["bitrateAnswer=0", { [TXK]: txEntry(3e6), [ANS_FLAG]: "0" }],
+    ["bitrateCache=0", { [TXK]: txEntry(3e6), [CACHE_FLAG]: "0" }],
+  ]) {
+    const { r } = boot905(store);
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    check(
+      "F6: " + name + " answers nothing and falls back to the JELA-901 deferral",
+      r.state().ans === 0 && r.state().q === 1,
+      JSON.stringify(r.state()),
+    );
+    releaseAndFlush(r);
+    r.finishRung(m.st.rungs[0], 524643, 250);
+    check("F6: " + name + " also stops the transport persisting", r.state().txSave === 0, JSON.stringify(r.state()));
+  }
+
+  // --- F7: a stale or foreign entry is a miss, not a wrong answer. ---------
+  for (const [name, store] of [
+    ["a different server", { [TXK]: txEntry(3e6, 1, "other|https://elsewhere.test") }],
+    ["an expired entry", { [TXK]: txEntry(3e6, 1), [TTL_FLAG]: "1" }],
+    ["a corrupt entry", { [TXK]: "{not json" }],
+    ["a non-positive bps", { [TXK]: txEntry(0) }],
+  ]) {
+    const { r } = boot905(store);
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    check(
+      "F7: " + name + " misses and defers to a real measurement",
+      r.state().ans === 0 && r.state().q === 1 && r.state().txMiss === 1,
+      JSON.stringify(r.state()),
+    );
+  }
+
+  // --- F8 FAIL-SAFE: if the response cannot be faked, queue instead. -------
+  // The shadow is an own data property over a prototype accessor. If that
+  // cannot be installed we must NOT commit to answering, or the module is
+  // left waiting on an XHR nobody will ever send. The read-back in pdef() is
+  // what makes this a fallback rather than a hang.
+  {
+    const { r } = boot905({ [TXK]: txEntry(3e6) });
+    const m = makeModule12(r, {});
+    const x = new r.XHR();
+    x.open("GET", API12.basePath + "/Playback/BitrateTest?Size=500000");
+    Object.defineProperty(x, "readyState", { value: 0, configurable: false, writable: false });
+    x.send(null);
+    check(
+      "F8: an un-shadowable XHR is queued, never half-answered",
+      r.state().ans === 0 && r.state().q === 1,
+      JSON.stringify(r.state()),
+    );
+    releaseAndFlush(r);
+    check("F8: and it still reaches the wire", x.sent === 1, JSON.stringify({ sent: x.sent }));
+  }
+
+  // --- F9: the answer fires each handler exactly once. ---------------------
+  // dispatchEvent invokes the on<type> handler AND addEventListener listeners.
+  // Calling both paths would deliver load twice and run the vendor's onload
+  // (and its promise resolve) twice.
+  {
+    const { r } = boot905({ [TXK]: txEntry(3e6) });
+    const m = makeModule12(r, {});
+    let loads = 0;
+    const x = new r.XHR();
+    x.open("GET", API12.basePath + "/Playback/BitrateTest?Size=500000");
+    x.onload = function () {
+      loads++;
+    };
+    let viaListener = 0;
+    x.addEventListener("load", function () {
+      viaListener++;
+    });
+    x.send(null);
+    r.clock.advance(500);
+    check(
+      "F9: load is delivered exactly once to the on-handler and once to a listener",
+      loads === 1 && viaListener === 1,
+      JSON.stringify({ loads, viaListener }),
+    );
+  }
+
+  // --- F10: no createEvent -> the direct on-handler fallback still answers. -
+  {
+    const { r } = boot905({ [TXK]: txEntry(3e6) }, { noCreateEvent: true });
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    drainAnswers(r);
+    check(
+      "F10: without document.createEvent the answer still lands",
+      r.state().ans >= 1 && m.st.result > 0 && isFinite(m.st.result),
+      JSON.stringify({ ans: r.state().ans, result: m.st.result }),
+    );
+  }
+
+  // --- F11: 10.x is still untouched, and warms the store for the upgrade. --
+  // There the legacy probe never reaches the transport while held, so nothing
+  // is answered; the ladder our release re-arms does reach it, and is
+  // measured — so a TV that later moves to 12.0 boots warm on day one.
+  {
+    const r = runSettle({});
+    r.win.__perf = () => r.clock.now();
+    const api = makeApi(r.clock);
+    r.win.ApiClient = api;
+    vendorSchedule(api, r.clock);
+    r.fireApi();
+    r.clock.advance(500);
+    fillHome(r, 3);
+    r.fetches[0].resolve();
+    r.clock.advance(500);
+    r.clock.advance(20000);
+    check(
+      "F11: nothing answered on 10.x, and the legacy re-arm still fires",
+      r.state().ans === 0 && r.state().q === 0 && r.state().fired === 1 && api.calls === 1,
+      JSON.stringify(r.state()),
+    );
+    const x = new r.XHR();
+    x.open("GET", API12.basePath + "/Playback/BitrateTest?Size=3000000");
+    x.send(null);
+    check("F11: the re-armed ladder goes straight to the wire", x.sent === 1);
+    r.finishRung(x, 4196651, 500);
+    check(
+      "F11: and the transport measured and persisted it",
+      r.state().txSave === 1 && r.state().txBps === Math.round((8e3 * 4196651) / 500),
+      JSON.stringify(r.state()),
+    );
+  }
+
+  // --- F12: a store that cannot be written never breaks the boot. ----------
+  {
+    const { r } = boot905({}, { lsThrows: true });
+    const m = makeModule12(r, {});
+    m.detect(API12, true);
+    releaseAndFlush(r);
+    r.finishRung(m.st.rungs[0], 524643, 250);
+    check(
+      "F12: a throwing localStorage is swallowed — the ladder still completes",
+      r.state().txSave === 0 && m.st.measured.length === 1,
+      JSON.stringify(r.state()),
+    );
   }
 }
 

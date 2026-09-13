@@ -1435,7 +1435,11 @@
       // counted in-flight or they would deadlock the settle gate, and the
       // first queued rung arms a MaxMs fuse). Our legacy re-arm stands down
       // if the client already ran a ladder itself (S.seen). No-op on 10.x.
-      // Diag: window.__shellBT (seen,q,fl,skipArm added).
+      // JELA-905: while held, a rung is ANSWERED from the persisted raw
+      // transport observation (jellyfin.shell.bitrateTx) instead of deferred —
+      // zero bytes, and 12.0's own discount/cap/IsInNetwork-clamp arithmetic
+      // still runs verbatim on it. See shell.js for the full contract.
+      // Diag: window.__shellBT (seen,q,fl,skipArm,ans,txSave added).
       "  try{(function(){",
       '    if(localStorage.getItem("jellyfin.shell.deferBitrateTest")==="0")return;',
       "    var D=4000;",
@@ -1446,9 +1450,84 @@
       '    try{var qv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestQuietMs")||"",10);if(qv>=250&&qv<=120000)Q=qv;}catch(_){}',
       "    var M=45000;",
       '    try{var mv=parseInt(localStorage.getItem("jellyfin.shell.deferBitrateTestMaxMs")||"",10);if(mv>=1000&&mv<=600000)M=mv;}catch(_){}',
-      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0,seen:0,q:0,fl:0,skipArm:0};',
+      '    var S=window.__shellBT={on:1,gate:G,inst:0,cleared:0,sets:0,armed:0,fired:0,tHold:0,tArm:0,why:"",polls:0,cards:0,cardsLoose:0,stable:0,tAuth:0,net:0,inflight:0,tBusy:0,seen:0,q:0,fl:0,skipArm:0,ans:0,ansBps:0,txSave:0,txBps:0,txAge:-1,txMiss:0};',
       "    var LAD=/\\/Playback\\/BitrateTest/i,BQ=[],fuse=0;",
+      // JELA-905 transport bitrate store. Separate key from JELA-817's
+      // "jellyfin.shell.bitrate" on purpose — see the header: that one holds a
+      // DECIDED bitrate, this one a RAW wire observation.
+      '    var TXK="jellyfin.shell.bitrateTx",AMAX=3,ANS=1;',
+      '    try{if(localStorage.getItem("jellyfin.shell.bitrateAnswer")==="0")ANS=0;',
+      '    if(localStorage.getItem("jellyfin.shell.bitrateCache")==="0")ANS=0;}catch(_){ANS=0;}',
+      "    var AD=120;",
+      '    try{var av=parseInt(localStorage.getItem("jellyfin.shell.bitrateAnswerMs")||"",10);if(av>=10&&av<=2000)AD=av;}catch(_){}',
       "    function cur(){try{return window.ApiClient||null;}catch(_){return null;}}",
+      // Same TTL key and same id shape as JELA-817, so the two stores expire
+      // together and both miss when the TV is pointed at a different server.
+      '    function txTtl(){var v;try{v=parseInt(localStorage.getItem("jellyfin.shell.bitrateTtlMs")||"",10);}catch(_){}return v>0?v:864e5;}',
+      '    function txId(){var s="",u="",a=cur();if(a){try{s=String(a.serverId()||"");}catch(_){}try{u=String(a.serverAddress()||"");}catch(_){}}return s+"|"+u;}',
+      "    function txRd(){",
+      '      try{var j=JSON.parse(localStorage.getItem(TXK)||"null");',
+      '      if(!j||typeof j.bps!=="number"||!(j.bps>0)||j.id!==txId())return 0;',
+      "      var g=(new Date).getTime()-(j.t||0);",
+      "      if(g<0||g>txTtl())return 0;",
+      "      S.txAge=g;return j.bps;}catch(_){return 0;}",
+      "    }",
+      "    function txWr(b){",
+      "      try{if(!(b>0))return;",
+      "      localStorage.setItem(TXK,JSON.stringify({bps:b,t:(new Date).getTime(),id:txId()}));",
+      "      S.txSave++;S.txBps=b;}catch(_){}",
+      "    }",
+      "    function pnow(){try{return performance.now();}catch(_){return (new Date).getTime();}}",
+      // XHR attributes are prototype accessors with no setter, so a plain
+      // write throws/no-ops — shadow them with an own data property instead,
+      // and READ IT BACK. The read-back is the fail-safe: if the shadow does
+      // not take we must never commit to answering, or the module is left
+      // waiting on an XHR nobody will ever send.
+      "    function pdef(x,k,v){try{Object.defineProperty(x,k,{configurable:true,enumerable:false,writable:true,value:v});return x[k]===v;}catch(_){return false;}}",
+      // dispatchEvent invokes the on* handler AND any addEventListener
+      // listeners (other shell XHR wraps use the latter), so dispatching is
+      // strictly better than poking x.onload — and calling both would
+      // double-fire. The direct call is only the no-dispatchEvent fallback.
+      "    function pfire(x,t){",
+      "      var ok=0;",
+      '      try{if(x.dispatchEvent&&document.createEvent){var e=document.createEvent("Event");e.initEvent(t,false,false);x.dispatchEvent(e);ok=1;}}catch(_){ok=0;}',
+      '      if(!ok){try{var h=x["on"+t];if(typeof h==="function")h.call(x,{type:t});}catch(_){}}',
+      "    }",
+      // Answer one rung with a synthesised (size, elapsed) pair whose ratio IS
+      // the stored raw observation. We choose the elapsed window (AD) and then
+      // derive the size from the elapsed we ACTUALLY measured, so timer jitter
+      // cannot distort the replayed bitrate. t0 is stamped AFTER the
+      // readystatechange fire so the module's own stamp is never later than
+      // ours, i.e. the bps it computes can only be <= the stored one.
+      "    function ansXhr(x,b){",
+      '      if(!pdef(x,"status",200)||!pdef(x,"readyState",2))return 0;',
+      '      pdef(x,"statusText","OK");',
+      "      var t0;",
+      "      function done(){try{var dt=pnow()-t0;if(!(dt>0))dt=1;",
+      '        pdef(x,"response",{size:Math.floor(b*dt/8000)});',
+      '        pdef(x,"readyState",4);',
+      '        pfire(x,"readystatechange");pfire(x,"load");pfire(x,"loadend");}catch(_){}}',
+      '      pfire(x,"readystatechange");',
+      "      t0=pnow();",
+      "      try{setTimeout(done,AD);}catch(_){done();}",
+      "      return 1;",
+      "    }",
+      // Measure a rung that DID go to the wire, with the module's own
+      // arithmetic on the module's own stamps (readyState 2 -> done), and
+      // persist it. Last rung wins, which is the rung the ladder's result
+      // comes from. Blob size is what the module reads; the requested Size
+      // param is the fallback and under-reports (the server rounds up), i.e.
+      // it errs conservative.
+      "    function txObs(x){",
+      "      try{if(!ANS||x.__shellBTobs)return;x.__shellBTobs=1;",
+      "      if(!(x.status>=200&&x.status<400))return;",
+      "      var t0=x.__shellBTt0||0;if(!t0)return;",
+      "      var dt=pnow()-t0;if(!(dt>0))return;",
+      '      var sz=0;try{var rr=x.response;if(rr&&typeof rr.size==="number")sz=rr.size;}catch(_){}',
+      '      if(!sz){try{var m=/[?&]size=(\\d+)/i.exec(x.__shellBTu||"");if(m)sz=parseInt(m[1],10);}catch(_){}}',
+      "      if(!(sz>0))return;",
+      "      txWr(Math.round(8e3*sz/dt));}catch(_){}",
+      "    }",
       "    function hold(){",
       "      var a=cur();",
       "      if(!a||a.__shellBTHeld)return;",
@@ -1482,15 +1561,25 @@
       "      if(XP&&XP.open&&!XP.__shellBTUrl){XP.__shellBTUrl=1;var oo=XP.open;",
       '        XP.open=function(m,u){try{this.__shellBTu=String(u||"");}catch(_){}return oo.apply(this,arguments);};}',
       "      if(XP&&XP.send&&!XP.__shellBTNet){XP.__shellBTNet=1;var os=XP.send;",
-      "        XP.send=function(){var x=this,d=0,ag=arguments;function fin(){if(d)return;d=1;S.inflight--;busy();}",
-      '          try{if(!x.__shellBTq&&LAD.test(x.__shellBTu||"")){S.seen++;',
-      "            if(!S.tArm){x.__shellBTq=1;S.q++;",
+      "        XP.send=function(){var x=this,d=0,ag=arguments,L=0;",
+      '          try{L=LAD.test(x.__shellBTu||"")?1:0;}catch(_){L=0;}',
+      "          function fin(){if(d)return;d=1;S.inflight--;busy();if(L)txObs(x);}",
+      "          try{if(L&&!x.__shellBTq){S.seen++;",
+      "            if(!S.tArm){",
+      // JELA-905: answer from the persisted raw observation instead of
+      // deferring it. Only while held, and only for one ladder's worth of
+      // rungs — see the header for why the hold window is the boundary that
+      // keeps a user-forced measurement real.
+      "              if(ANS&&S.ans<AMAX){var cb=txRd();",
+      "                if(cb){if(ansXhr(x,cb)){x.__shellBTq=1;S.ans++;S.ansBps=cb;return;}}",
+      "                else S.txMiss++;}",
+      "              x.__shellBTq=1;S.q++;",
       "              BQ.push(function(){try{XP.send.apply(x,ag);}catch(_){}});",
       '              if(!fuse){fuse=1;try{setTimeout(function(){release("fuse");},M);}catch(_){}}',
       "              return;}}}catch(_){}",
       "          S.inflight++;S.net++;busy();",
       '          try{x.addEventListener("loadend",fin,false);}catch(_){}',
-      "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
+      "          try{var pr=x.onreadystatechange;x.onreadystatechange=function(){try{if(L&&x.readyState===2&&!x.__shellBTt0)x.__shellBTt0=pnow();if(x.readyState===4)fin();}catch(__){}if(pr)return pr.apply(this,arguments);};}catch(_){}",
       "          try{return os.apply(this,arguments);}catch(e){fin();throw e;}};}}catch(_){}",
       "      try{if(window.fetch&&!window.fetch.__shellBTNet){var of=window.fetch;",
       "        var nf=function(){var p;S.inflight++;S.net++;busy();",
