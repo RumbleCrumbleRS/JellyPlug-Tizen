@@ -241,6 +241,39 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h2 class="sectionTitle">User lookup cache (JELA-904)</h2>
+                        <div class="inputContainer">
+                            <input is="emby-input" type="number" id="UserCacheTtlSeconds" label="Remember a user account for (seconds)" min="0" max="60" />
+                            <div class="fieldDescription">
+                                Jellyfin looks the signed-in user's account up from the database on every single
+                                request — twice for most of them, before the request does any work of its own —
+                                and that lookup costs about 6.6 ms here. A TV boot makes around 348 requests, so
+                                it runs roughly 700 times per boot. This remembers the answer for a few seconds,
+                                which turns those ~700 lookups into about 2.
+                                <br /><br />
+                                Keep this small. The remembered account carries the permissions the server checks
+                                to decide who is an administrator, so this number is also how long a permission
+                                change can take to be enforced — and Jellyfin updates a few account fields without
+                                announcing it, which is why there is a time limit at all rather than only a
+                                refresh-when-changed rule. 5 is the tested setting and anything above 60 is
+                                treated as 60. 0 turns the cache off.
+                            </div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input is="emby-checkbox" type="checkbox" id="DisableUserCache" />
+                                <span>Disable the user lookup cache</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Full kill switch: every lookup goes to the database, exactly as stock Jellyfin does,
+                                and everything already remembered is dropped. Read per request, so it takes effect
+                                without a server restart. Admins can check what the cache is doing at
+                                <code>GET /shell/diag/usercache</code>.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h2 class="sectionTitle">CORS preflight cache (JELA-709)</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
@@ -330,6 +363,8 @@
                     { id: 'SectionWarmIntervalSeconds', type: 'number' },
                     { id: 'SectionWarmMovieRow', type: 'bool' },
 
+                    { id: 'UserCacheTtlSeconds', type: 'number' },
+                    { id: 'DisableUserCache', type: 'bool' },
                     { id: 'DisableCorsPreflightMaxAge', type: 'bool' },
                     { id: 'DisablePluginScriptCacheHeaders', type: 'bool' },
                     { id: 'DisableDiagIngest', type: 'bool' },
