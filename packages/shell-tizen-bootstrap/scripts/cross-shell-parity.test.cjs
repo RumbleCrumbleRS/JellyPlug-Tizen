@@ -288,8 +288,8 @@ const INTENTIONAL_DIVERGENCES = [
     // after release, and stand the legacy re-arm down when the client already
     // ran a ladder itself (__shellBT.seen/q/fl/skipArm). Byte-identical block
     // in both shells; the divergence reasons above are unchanged.
-    retail: "6fcce861c9305e9f",
-    boot: "bca40847645bb36b",
+    retail: "8804afbaf2d8d370",
+    boot: "e47d57edaed5c7e1",
   },
   {
     name: "buildDiagSeedScript",
