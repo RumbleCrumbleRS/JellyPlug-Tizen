@@ -260,6 +260,37 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool SectionWarmMovieRow { get; set; }
 
     /// <summary>
+    /// JELA-904: lifetime, in seconds, of a cached <c>User</c> entity in the
+    /// memo over <c>IUserManager.GetUserById</c>. Clamped to
+    /// <see cref="CachingUserManager.MaxTtlSeconds"/>; 0 disables the cache
+    /// entirely, same as <see cref="DisableUserCache"/>. Read per call, so a
+    /// change takes effect without a server restart.
+    ///
+    /// Upstream's <c>GetUserById</c> is uncached, synchronous, and issues one
+    /// four-way cartesian JOIN per call (~6.6 ms on production). Every
+    /// user-token request runs it in <c>AuthorizationContext</c>, and every
+    /// <c>[Authorize]</c> endpoint runs it AGAIN in
+    /// <c>DefaultAuthorizationHandler</c> — so a ~348-request TV boot pays it
+    /// ~700 times. See JELA-903 for the measurement.
+    ///
+    /// Short on purpose, and it is the safety argument rather than a tuning
+    /// knob: the cached entity carries the <c>Permissions</c> set that decides
+    /// whether the caller is an administrator, and upstream writes some user
+    /// columns without raising any event this plugin can hook. Five seconds
+    /// already collapses that ~700 to ~2; a longer window buys ~nothing
+    /// measurable and widens an authorization-staleness hole.
+    /// </summary>
+    public int UserCacheTtlSeconds { get; set; } = CachingUserManager.DefaultTtlSeconds;
+
+    /// <summary>
+    /// JELA-904 kill switch: pass every <c>GetUserById</c> straight through to
+    /// the real user manager and store nothing. Read per call, so flipping it
+    /// takes effect without a restart, and the store is dropped on the next
+    /// call so re-enabling cannot serve a pre-flip entity.
+    /// </summary>
+    public bool DisableUserCache { get; set; }
+
+    /// <summary>
     /// JELA-723 kill switch: stop stamping Cache-Control/Vary on the three
     /// third-party plugin client scripts (/NotifySync/client.js,
     /// /GetAvatar/ClientScript, /PluginPages/inject.js). Read per-response, so

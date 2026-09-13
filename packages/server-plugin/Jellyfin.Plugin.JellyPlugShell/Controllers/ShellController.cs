@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -43,17 +44,20 @@ public class ShellController : ControllerBase
     private readonly DiagIngestService _diag;
     private readonly ConfigFingerprintService _fingerprint;
     private readonly PatchedBundleService _patched;
+    private readonly IUserManager _users;
 
     public ShellController(
         ShellDropService drop,
         DiagIngestService diag,
         ConfigFingerprintService fingerprint,
-        PatchedBundleService patched)
+        PatchedBundleService patched,
+        IUserManager users)
     {
         _drop = drop;
         _diag = diag;
         _fingerprint = fingerprint;
         _patched = patched;
+        _users = users;
     }
 
     /// <summary>
@@ -640,5 +644,37 @@ public class ShellController : ControllerBase
     {
         Response.Headers.CacheControl = "no-store";
         return new JsonResult(_diag.BuildReport());
+    }
+
+    /// <summary>
+    /// JELA-904 AC1: proof, from a served request, that the user-manager
+    /// decorator is in the container's resolution path AND that it is being
+    /// consulted.
+    ///
+    /// The <see cref="IUserManager"/> reported here is resolved by DI exactly
+    /// like every other consumer's — <c>AuthorizationContext</c>,
+    /// <c>DefaultAuthorizationHandler</c>, every controller — so
+    /// <c>decorated: true</c> is a statement about the live container and not
+    /// about our own registration code. The counters then say whether it is
+    /// doing anything: this endpoint is itself <c>[Authorize]</c>d, so calling
+    /// it twice inside the TTL must show <c>hits</c> rising. That is the AC,
+    /// and it is a one-curl check on any running server.
+    ///
+    /// Admin-only, like the sibling diag view, and never cached.
+    /// </summary>
+    [HttpGet("diag/usercache")]
+    [Authorize(Policy = "RequiresElevation")]
+    public IActionResult GetUserCacheDiag()
+    {
+        Response.Headers.CacheControl = "no-store";
+        var caching = _users as CachingUserManager;
+        return new JsonResult(new
+        {
+            decorated = caching != null,
+            resolvedType = _users.GetType().FullName,
+            enabled = CachingUserManager.TtlSeconds() > 0,
+            maxTtlSeconds = CachingUserManager.MaxTtlSeconds,
+            stats = caching?.Stats,
+        });
     }
 }

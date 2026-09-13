@@ -1,4 +1,5 @@
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +10,12 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        // JELA-904: wrap the core IUserManager in a short-TTL memo over
+        // GetUserById. First, because it rewrites an EXISTING descriptor
+        // rather than adding one, and every addition below should be able to
+        // assume the collection it sees is the one it will run against.
+        TryDecorateUserManager(serviceCollection);
+
         serviceCollection.AddSingleton<ShellDropService>();
         serviceCollection.AddSingleton<TxDropBuilder>();
         serviceCollection.AddSingleton<DiagIngestService>();
@@ -73,5 +80,65 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // registration runs — so unlike a service substitution this survives
         // registering BEFORE Jellyfin's own web wiring. See the filter's docs.
         serviceCollection.AddTransient<IStartupFilter, CorsPreflightMaxAgeStartupFilter>();
+    }
+
+    /// <summary>
+    /// JELA-904: replace the container's <see cref="IUserManager"/> with
+    /// <see cref="CachingUserManager"/> wrapped around the original
+    /// implementation.
+    ///
+    /// This works because of the call order in
+    /// <c>Emby.Server.Implementations/ApplicationHost.cs</c>: <c>:490</c> runs
+    /// core <c>RegisterServices</c> (where
+    /// <c>Jellyfin.Server/CoreAppHost.cs:83</c> does
+    /// <c>AddSingleton&lt;IUserManager, UserManager&gt;()</c>) and <c>:492</c>
+    /// runs <c>_pluginManager.RegisterServices</c> — this method — on the same
+    /// <see cref="IServiceCollection"/>. Nothing registers
+    /// <see cref="IUserManager"/> after us, so the last registration wins and
+    /// the decorated instance is what every consumer resolves.
+    ///
+    /// The original descriptor is re-registered under its own implementation
+    /// type rather than merely left in place, for two reasons: the decorator
+    /// needs a way to resolve the real manager, and leaving a dormant
+    /// <c>IUserManager -&gt; UserManager</c> descriptor behind would hand a
+    /// SECOND, undecorated manager to anything resolving
+    /// <c>IEnumerable&lt;IUserManager&gt;</c>. Registering it as a service in
+    /// its own right also keeps the container the owner of its lifetime, which
+    /// matters because <c>UserManager</c> is <see cref="IDisposable"/>.
+    ///
+    /// Every unexpected shape FAILS OPEN and leaves the collection untouched,
+    /// so a future Jellyfin that registers its user manager differently gets
+    /// stock behavior rather than a broken server.
+    /// </summary>
+    private static void TryDecorateUserManager(IServiceCollection serviceCollection)
+    {
+        ServiceDescriptor? existing = null;
+        for (var i = serviceCollection.Count - 1; i >= 0; i--)
+        {
+            var candidate = serviceCollection[i];
+            if (candidate.ServiceType == typeof(IUserManager))
+            {
+                existing = candidate;
+                break;
+            }
+        }
+
+        // Not registered yet (we ran too early), keyed, non-singleton, already
+        // ours, or supplied by a factory/instance we cannot name a type for:
+        // leave it alone.
+        if (existing is null
+            || existing.IsKeyedService
+            || existing.Lifetime != ServiceLifetime.Singleton
+            || existing.ImplementationType is null
+            || existing.ImplementationType == typeof(CachingUserManager))
+        {
+            return;
+        }
+
+        var implementationType = existing.ImplementationType;
+        serviceCollection.Remove(existing);
+        serviceCollection.AddSingleton(implementationType);
+        serviceCollection.AddSingleton<IUserManager>(
+            sp => new CachingUserManager((IUserManager)sp.GetRequiredService(implementationType)));
     }
 }
