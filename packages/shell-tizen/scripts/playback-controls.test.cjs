@@ -25,7 +25,7 @@
 //   browser uses for a USB media keyboard — only the key SOURCE differs.
 //   Pointer (seek bar drag/click, OSD play/pause button): plain DOM pointer
 //   events straight into jellyfin-web. The shell adds no pointer/mouse/touch
-//   listener, so there is nothing to diverge.
+//   interception; Instant-Home only observes input to disable pristine capture.
 //   Progress: jellyfin-web's playbackManager POSTs /Sessions/Playing* via the
 //   SDK ApiClient. The shell's only network shim rewrites config.json; it never
 //   touches the progress endpoints.
@@ -187,12 +187,22 @@ check(
 // Controls (1 UI button) and (3 seek bar) are pointer-driven. If the shell
 // registered any pointer/mouse/touch listener it could diverge from the
 // browser. Its only click listener must be diagnostic (no default-suppression).
+// The pristine-capture observer records input without receiving or cancelling
+// the event. Permit only its exact registrations and pin the harmless body.
+check(
+  "Instant-Home input observer cannot cancel playback input",
+  tvSrc.includes("function touched(){if(G.gen===gen)G.captureInput=1}"),
+);
+const pointerSource = tvSrc.replace(
+  /W\.addEventListener\("(?:mousedown|pointerdown|touchstart)",touched,!0\)/g,
+  "",
+);
 const pointerListeners = (
-  tvSrc.match(/addEventListener\(\s*["'](pointer\w+|mouse\w+|touch\w+)["']/g) ||
+  pointerSource.match(/addEventListener\(\s*["'](pointer\w+|mouse\w+|touch\w+)["']/g) ||
   []
 ).filter(Boolean);
 check(
-  "shell installs no pointer/mouse/touch listeners (seek + OSD buttons pass through)",
+  "shell installs no pointer interception beyond capture observer",
   pointerListeners.length === 0,
   "found=[" + pointerListeners + "]",
 );
