@@ -1120,7 +1120,7 @@ for (const unsafe of ["", "input", "wheel", "pointerdown", "touchstart", "fixed"
 }
 
 // Physical Q60R hero layout: two visible images, ten text cards, native rows below fold.
-for (const mode of ["hero", "scaled", "scaled-ancestor", "rotated", "nonuniform", "identity3d", "undecoded", "faded", "contain", "clipped", "translated", "below-fold", "rounding"]) {
+for (const mode of ["hero", "scaled", "pixel-position", "scaled-ancestor", "rotated", "nonuniform", "identity3d", "undecoded", "faded", "contain", "clipped", "translated", "below-fold", "rounding"]) {
   const env = makeEnv({ store: { jellyfin_credentials: CREDS,
     "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
   env.run();
@@ -1140,6 +1140,7 @@ for (const mode of ["hero", "scaled", "scaled-ancestor", "rotated", "nonuniform"
     hero.rect={left:-95.5,top:-121.5-447,bottom:1066.5-447,width:2101,height:1188};
     if(mode === "scaled") hero.style.transform="matrix(1.1, 0, 0, 1.1, 0, 0)";
   }
+  if(mode === "pixel-position") {hero.style.transform="matrix(1.1, 0, 0, 1.1, 0, 0)";hero.style.objectPosition="100px 50%";}
   if(mode === "rotated") hero.style.transform="matrix(0, 1, -1, 0, 0, 0)";
   if(mode === "nonuniform") hero.style.transform="matrix(1.1, 0, 0, 1.2, 0, 0)";
   if (mode === "faded") hero.style.opacity = "0.5";
@@ -1160,6 +1161,7 @@ for (const mode of ["hero", "scaled", "scaled-ancestor", "rotated", "nonuniform"
     assert.equal(env.window.__shellIH.captured,1,"decoded visible hero is sufficient real content");
     const items=JSON.parse(env.store[MK+".0"]).items;
     assert.deepEqual(items.filter(n=>n.u).map(n=>n.u).sort(),["http://srv/hero","http://srv/logo"]);
+    if(mode === "scaled") assert.equal(items.find(n=>n.u==="http://srv/hero").r,6*1.1,"scale border radius with leaf image");
     const next=makeEnv({store:env.store,now:31000});next.run();
     assert.equal(next.window.__shellIH.skeleton,0);
   } else assert.equal(env.window.__shellIH.captured,0,mode+" is insufficient content");
