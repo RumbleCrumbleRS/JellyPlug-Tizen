@@ -1119,6 +1119,147 @@ for (const unsafe of ["", "input", "wheel", "pointerdown", "touchstart", "fixed"
   }
 }
 
+// Physical Q60R hero layout: two visible images, ten text cards, native rows below fold.
+for (const mode of [
+  "hero",
+  "identity3d",
+  "undecoded",
+  "faded",
+  "contain",
+  "clipped",
+  "translated",
+  "below-fold",
+  "rounding",
+]) {
+  const env = makeEnv({
+    store: {
+      jellyfin_credentials: CREDS,
+      "jellyfin.shell.serverUrl": "http://srv",
+    },
+    hash: "#/home.html",
+  });
+  env.run();
+  const page = env.makeNode("DIV");
+  env.documentElement.appendChild(page);
+  const cards = Array.from({ length: 10 }, (_, i) => {
+    const n = env.makeNode("A");
+    page.appendChild(n);
+    n.rect = {
+      left: i * 268.78,
+      top: 939.75 - 447,
+      bottom: 1033.97 - 447,
+      width: 268.78,
+      height: 94.22,
+    };
+    return n;
+  });
+  env.setCards(cards);
+  const hero = env.makeNode("IMG");
+  hero.src = "http://srv/hero";
+  hero.complete = mode !== "undecoded";
+  hero.naturalWidth = 3840;
+  hero.naturalHeight = 2160;
+  hero.rect = {
+    left: 0,
+    top: -67.5 - 447,
+    bottom: 1012.5 - 447,
+    width: 1910,
+    height: 1080,
+  };
+  if (mode === "rounding")
+    hero.rect = {
+      left: 0,
+      top: -447,
+      bottom: 691.1 - 447,
+      width: 1500.4,
+      height: 691.1,
+    };
+  hero.style.objectFit = mode === "contain" ? "contain" : "cover";
+  hero.style.transform =
+    mode === "identity3d"
+      ? "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)"
+      : mode === "translated"
+        ? "matrix(1, 0, 0, 1, 0, -1)"
+        : "matrix(1, 0, 0, 1, 0, 0)";
+  if (mode === "faded") hero.style.opacity = "0.5";
+  if (mode === "below-fold")
+    hero.rect = { ...hero.rect, top: 1157.5 - 447, bottom: 2237.5 - 447 };
+  const frame = env.makeNode("DIV");
+  page.appendChild(frame);
+  frame.appendChild(hero);
+  frame.rect = {
+    left: 0,
+    top: -447,
+    bottom: 1080 - 447,
+    width: 1920,
+    height: 1080,
+  };
+  if (mode === "clipped") {
+    frame.style.overflow = "hidden";
+    frame.rect.height = 100;
+    frame.rect.bottom = 100 - 447;
+  }
+  const logo = env.makeNode("IMG");
+  logo.src = "http://srv/logo";
+  logo.style.objectFit = "contain";
+  logo.rect = {
+    left: 96,
+    top: -67.5 - 447,
+    bottom: 199.5 - 447,
+    width: 1276,
+    height: 267,
+  };
+  page.appendChild(logo);
+  const hidden = env.makeNode("DIV");
+  hidden.style.opacity = "0";
+  page.appendChild(hidden);
+  const oldHero = env.makeNode("IMG");
+  oldHero.src = "http://srv/oldhero";
+  oldHero.rect = hero.rect;
+  hidden.appendChild(oldHero);
+  const lower = env.makeNode("IMG");
+  lower.src = "http://srv/lower";
+  lower.rect = {
+    left: 0,
+    top: 1157.5 - 447,
+    bottom: 1414.5 - 447,
+    width: 439,
+    height: 257,
+  };
+  page.appendChild(lower);
+  env.setMedia([oldHero, hero, logo, lower]);
+  env.setScroll(447);
+  env.advance(30000);
+  assert.equal(
+    env.window.pageYOffset,
+    447,
+    "hero capture does not move viewport",
+  );
+  if (mode === "hero" || mode === "identity3d") {
+    assert.equal(
+      env.window.__shellIH.captured,
+      1,
+      "decoded visible hero is sufficient real content",
+    );
+    const items = JSON.parse(env.store[MK + ".0"]).items;
+    assert.deepEqual(
+      items
+        .filter((n) => n.u)
+        .map((n) => n.u)
+        .sort(),
+      ["http://srv/hero", "http://srv/logo"],
+    );
+    const next = makeEnv({ store: env.store, now: 31000 });
+    next.run();
+    assert.equal(next.window.__shellIH.skeleton, 0);
+  } else
+    assert.equal(
+      env.window.__shellIH.captured,
+      0,
+      mode + " is insufficient content",
+    );
+}
+
 // ---- 13. quota abort leaves no torn snapshot ----------------------------------------
 {
   const env = makeEnv({

@@ -4834,7 +4834,8 @@
       'var s="",i;' +
       'for(i=0;i<m.n;i++){var c=localStorage.getItem(MK+"."+i);if(c==null)return null;s+=c}' +
       "var d=JSON.parse(s);" +
-      "if(!d||!d.items||d.items.length<4)return null;" +
+      "if(!d||!d.items||!d.items.length)return null;" +
+      'if(d.items.length<4){var big=0,vw=m.w||1920,vh=m.h||1080;if(d.hero===1)for(var j=0;j<d.items.length;j++){var it=d.items[j];if(it.u&&/^https?:/.test(it.u)&&it.f==="cover"&&it.o>=0.99&&capArea({left:it.x,top:it.y,width:it.w,height:it.h},it.c,vw,vh)>=vw*vh*0.5){big=1;break}}if(!big)return null;}' +
       "d.w=m.w||1920;d.h=m.h||1080;d.age=age;" +
       "return d}catch(_){return null}}" +
       "function dismiss(why){" +
@@ -4897,7 +4898,9 @@
       "function touched(){if(G.gen===gen)G.captureInput=1}" +
       'try{W.addEventListener("keydown",touched,!0);W.addEventListener("mousedown",touched,!0);W.addEventListener("pointerdown",touched,!0);W.addEventListener("touchstart",touched,!0);W.addEventListener("wheel",touched,!0)}catch(_){}' +
       "function docCap(){return scy()>8&&G.pristineStart&&!G.captureInput&&!(Math.abs(W.pageXOffset||0)>8)}" +
-      'function capRect(e,dc){try{var r=e.getBoundingClientRect();if(!dc)return r;var y=scy();if(r.width<=0||r.height<=0||r.bottom+y<=0||r.top+y>=(W.innerHeight||1080)*1.05)return null;var p=e,de=document.documentElement;while(p){var cs=getComputedStyle(p);if(!cs||cs.position==="fixed"||cs.position==="sticky"||(cs.transform&&cs.transform!=="none"))return null;if(p!==(document.scrollingElement||de)&&((p.scrollTop||0)!==0||(p.scrollLeft||0)!==0))return null;if(p===de)break;p=p.parentNode}if(p!==de)return null;return{left:r.left,top:r.top+y,bottom:r.bottom+y,width:r.width,height:r.height}}catch(_){return null}}' +
+      // Identity transforms preserve document geometry; moving/scaling transforms do not.
+      'function capIdentity(t){t=String(t||"none").replace(/\\s/g,"");return t==="none"||t==="matrix(1,0,0,1,0,0)"||t==="matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)"}' +
+      'function capRect(e,dc){try{var r=e.getBoundingClientRect();if(!dc)return r;var y=scy();if(r.width<=0||r.height<=0||r.bottom+y<=0||r.top+y>=(W.innerHeight||1080)*1.05)return null;var p=e,de=document.documentElement;while(p){var cs=getComputedStyle(p);if(!cs||cs.position==="fixed"||cs.position==="sticky"||!capIdentity(cs.transform))return null;if(p!==(document.scrollingElement||de)&&((p.scrollTop||0)!==0||(p.scrollLeft||0)!==0))return null;if(p===de)break;p=p.parentNode}if(p!==de)return null;return{left:r.left,top:r.top+y,bottom:r.bottom+y,width:r.width,height:r.height}}catch(_){return null}}' +
       'function capFolds(dc){if(!dc)return folds();var n=0,cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=capRect(cs[i],dc);if(r&&r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}return n}' +
       // JELA-37: document.open() (the SPA index handoff) wipes ALL window
       // listeners, and this body re-runs once per written document (gen++),
@@ -4991,6 +4994,11 @@
       'function capStyle(e){try{var p=e,cs=getComputedStyle(e),o=1,z=[],first=1,layered=0,layerDone=0,r=e.getBoundingClientRect(),cl=[0,r.width,r.height,0];while(p&&p.getBoundingClientRect){var c=first?cs:getComputedStyle(p);if(!c||c.display==="none"||c.visibility==="hidden"||c.visibility==="collapse")return null;var a=parseFloat(c.opacity);if(isFinite(a))o*=a;if(o<=0.001)return null;var zi=parseInt(c.zIndex,10),stack=(c.position!=="static"&&isFinite(zi))||(isFinite(a)&&a<1)||(c.transform&&c.transform!=="none");if(!layerDone&&!stack&&c.position&&c.position!=="static")layered=1;if(stack)layerDone=1;if(stack)z.unshift({e:p,z:isFinite(zi)?zi:0,k:2});if(!first&&p!==document.documentElement){var cr=p.getBoundingClientRect(),cx=/^(hidden|clip|scroll|auto)$/.test(c.overflowX||c.overflow),cy=/^(hidden|clip|scroll|auto)$/.test(c.overflowY||c.overflow);var sx=p.offsetWidth>0?cr.width/p.offsetWidth:1,sy=p.offsetHeight>0?cr.height/p.offsetHeight:1;if(cx){var l=cr.left+(p.clientLeft||0)*sx;cl[3]=Math.max(cl[3],l-r.left);cl[1]=Math.min(cl[1],l+(p.clientWidth==null?cr.width:p.clientWidth*sx)-r.left)}if(cy){var t=cr.top+(p.clientTop||0)*sy;cl[0]=Math.max(cl[0],t-r.top);cl[2]=Math.min(cl[2],t+(p.clientHeight==null?cr.height:p.clientHeight*sy)-r.top)}if(cl[1]<=cl[3]||cl[2]<=cl[0])return null}first=0;p=p.parentNode}z.push({e:e,z:0,k:layered?2:1});return{cs:cs,o:o,z:z,c:cl[0]||cl[3]||cl[1]<r.width||cl[2]<r.height?cl:null}}catch(_){return null}}' +
       "function capOrder(a,b){var az=a._z,bz=b._z,j=0;while(j < az.length&&j<bz.length&&az[j].e===bz[j].e)j++;var aa=az[j],bb=bz[j],za=aa?aa.z:0,zb=bb?bb.z:0;if(za!==zb)return za-zb;var ka=aa?aa.k:1,kb=bb?bb.k:1;if(ka!==kb)return ka-kb;var ae=aa?aa.e:a._e,be=bb?bb.e:b._e;try{var pos=ae.compareDocumentPosition(be);if(pos&4)return-1;if(pos&2)return 1}catch(_){}return a._i-b._i}" +
       'function cssValue(v,f){v=String(v||"");return v&&v.length<100&&/^[a-z0-9.% +\\-]+$/i.test(v)?v:f}' +
+      // Hero-first layouts can have one decoded backdrop plus a fitted logo.
+      // Require opaque cover art over half the viewport AFTER clipping. Logos,
+      // hidden slides, unloaded art and below-fold rows cannot satisfy this gate.
+      "function capArea(r,c,vw,vh){c=c||[0,r.width,r.height,0];var w=Math.max(0,Math.min(vw,r.left+c[1])-Math.max(0,r.left+c[3])),h=Math.max(0,Math.min(vh,r.top+c[2])-Math.max(0,r.top+c[0]));return w*h}" +
+      'function capHero(e,r,vs,vw,vh){return String(e.tagName).toUpperCase()==="IMG"&&e.complete&&e.naturalWidth>0&&e.naturalHeight>0&&vs.cs.objectFit==="cover"&&vs.o>=0.99&&capArea({left:Math.round(r.left),top:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},vs.c,vw,vh)>=vw*vh*0.5}' +
       "function capture(){try{" +
       "if(el0())return;" +
       "var dc=docCap(),cy=scy();if(cy>8&&!dc)return;" +
@@ -5001,7 +5009,7 @@
       'var s=String(ts[i].textContent||"").replace(/^\\s+|\\s+$/g,"").slice(0,60);' +
       "var fs=24;try{fs=parseInt(getComputedStyle(ts[i]).fontSize,10)||24}catch(_){}" +
       "if(s)items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),s:s,fs:fs,o:vs.o,c:vs.c,_z:vs.z,_e:ts[i],_i:items.length})}}" +
-      "var seen={},imgs=0;" +
+      "var seen={},imgs=0,hero=0;" +
       "var ns=document.querySelectorAll('img,[style*=\"background-image\"]');" +
       "for(i=0;i<ns.length&&items.length<90;i++){" +
       "r=capRect(ns[i],dc);if(!r)continue;vs=capStyle(ns[i]);if(!vs)continue;" +
@@ -5015,10 +5023,10 @@
       "seen[k]=1;" +
       "var rad=0;try{rad=parseInt(getComputedStyle(ns[i]).borderTopLeftRadius,10)||0}catch(_){}" +
       'items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),u:u,r:rad,o:vs.o,c:vs.c,f:String(ns[i].tagName).toUpperCase()==="IMG"?(vs.cs.objectFit||"fill"):null,b:vs.cs.backgroundSize||"auto",p:String(ns[i].tagName).toUpperCase()==="IMG"?(vs.cs.objectPosition||"50% 50%"):(vs.cs.backgroundPosition||"0% 0%"),_z:vs.z,_e:ns[i],_i:items.length});' +
-      "imgs++}" +
-      "if(imgs<4||(dc&&scy()!==cy))return;" +
+      "if(capHero(ns[i],r,vs,vw,vh))hero=1;imgs++}" +
+      "if((imgs<4&&!hero)||(dc&&scy()!==cy))return;" +
       "items.sort(capOrder);for(i=0;i<items.length;i++){delete items[i]._z;delete items[i]._e;delete items[i]._i}" +
-      "var body=JSON.stringify({items:items});" +
+      "var body=JSON.stringify({items:items,hero:hero});" +
       "if(body.length>307200)return;" +
       "var CH=24576,n2=Math.ceil(body.length/CH);" +
       "try{" +
@@ -5026,7 +5034,7 @@
       'for(var j=n2;j<64;j++){if(localStorage.getItem(MK+"."+j)==null)break;localStorage.removeItem(MK+"."+j)}' +
       "localStorage.setItem(MK,JSON.stringify({v:1,ts:+new Date(),n:n2,w:vw,h:vh,srv:srv()}));" +
       "}catch(e2){try{localStorage.removeItem(MK)}catch(_){}G.err++;return}" +
-      'G.capSource=dc?"document":"viewport";' +
+      'G.capSource=dc?"document":"viewport";G.capImages=imgs;G.capHero=hero;' +
       "G.captured=1;G.capMs=+new Date()-(W.__shellT0||t0);G.items=items.length" +
       "}catch(_){G.err++}}" +
       "G.capGen=gen;" +
