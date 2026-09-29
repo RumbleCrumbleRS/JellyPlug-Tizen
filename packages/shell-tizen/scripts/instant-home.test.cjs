@@ -292,8 +292,8 @@ function makeEnv(opts) {
     },
   };
   const location = { hash: opts.hash || "" };
-  const getComputedStyle = function () {
-    return { fontSize: "28px", borderTopLeftRadius: "6px" };
+  const getComputedStyle = function (node) {
+    return Object.assign({ fontSize: "28px", borderTopLeftRadius: "6px", position: "static", transform: "none", opacity: "1", visibility: "visible", display: "block", objectFit: "fill", objectPosition: "50% 50%", backgroundSize: "auto", backgroundPosition: "0% 0%", zIndex: "auto" }, node.style);
   };
 
   return {
@@ -601,9 +601,10 @@ function visibleCard(env) {
   );
   assert.strictEqual(overlay.attrs["aria-hidden"], "true");
   assert(
-    env.marks.indexOf("snap") !== -1,
-    "skeleton still records the ring mark",
+    env.marks.indexOf("skeleton") !== -1,
+    "skeleton records a distinct placeholder mark",
   );
+  assert(!env.marks.includes("snap"), "skeleton must not count as real content");
 }
 {
   // JELA-32: skeleton killswitch → first boot stays blank (snapshot repaint
@@ -639,6 +640,7 @@ function visibleCard(env) {
   const overlay = findOverlay(env);
   assert(overlay, "expired snapshot → skeleton fallback (not blank)");
   assert.strictEqual(env.window.__shellIH.skeleton, 1, "expired → skeleton");
+  assert(!env.marks.includes("snap"), "expired content must not record snap");
 }
 {
   // JELA-32: within the bounded max-age → the real snapshot still paints
@@ -795,6 +797,166 @@ function visibleCard(env) {
   assert(findOverlay(env2), "captured snapshot paints on next boot");
 }
 
+// JELA-976: hidden carousel ancestry, logo fit, and live stacking survive capture.
+{
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const media = env.document.querySelectorAll("img");
+  const hidden = env.makeNode("DIV");
+  hidden.style.opacity = "0";
+  env.documentElement.appendChild(hidden);
+  const inactive = env.makeNode("IMG");
+  inactive.src = "http://srv/inactive-hero";
+  inactive.rect = { left: -96, top: -121, width: 2112, height: 1188, bottom: 1067 };
+  hidden.appendChild(inactive);
+  media.push(inactive);
+  const logo = env.makeNode("IMG");
+  logo.src = "http://srv/logo";
+  logo.style.objectFit = "contain";
+  logo.style.objectPosition = "0% 50%";
+  logo.style.opacity = "0.5";
+  logo.rect = { left: 96, top: 60, width: 1392, height: 354, bottom: 414 };
+  const logoParent = env.makeNode("DIV");
+  logoParent.style.opacity = "0.8";
+  env.documentElement.appendChild(logoParent);
+  logoParent.appendChild(logo);
+  media.push(logo);
+  const hero = env.makeNode("DIV");
+  hero.style.backgroundImage = 'url("http://srv/hero")';
+  hero.style.backgroundSize = "cover";
+  hero.style.backgroundPosition = "50% 20%";
+  hero.style.position = "absolute";
+  hero.style.zIndex = "-1";
+  hero.rect = { left: 0, top: 0, width: 1920, height: 600, bottom: 600 };
+  env.documentElement.appendChild(hero);
+  media.push(hero);
+  env.advance(6000);
+  assert.strictEqual(env.window.__shellIH.captured, 1);
+  const items = JSON.parse(env.store[MK + ".0"]).items;
+  assert(!items.some(it => it.u === inactive.src), "zero-opacity ancestor excludes inactive hero");
+  const savedLogo = items.find(it => it.u === logo.src);
+  assert.strictEqual(savedLogo.f, "contain", "logo keeps object-fit");
+  assert.strictEqual(savedLogo.p, "0% 50%", "logo keeps object-position");
+  assert.strictEqual(savedLogo.o, 0.4, "ancestor opacity is multiplied");
+  assert(items.findIndex(it => it.u === "http://srv/hero") < items.findIndex(it => it.s),
+    "negative-stack hero paints below genuine section title");
+  const next = makeEnv({ store: env.store });
+  next.run();
+  const paintedLogo = findOverlay(next).children.find(n => n.src === logo.src);
+  assert(paintedLogo && paintedLogo.tagName === "IMG", "logo uses native image fitting");
+  assert(paintedLogo.style.cssText.includes("object-fit:contain"));
+  assert(paintedLogo.style.cssText.includes("object-position:0% 50%"));
+  assert(paintedLogo.style.cssText.includes("opacity:0.4"));
+  assert(!paintedLogo.style.cssText.includes("background:#1f1f1f"), "transparent logo stays transparent");
+}
+
+// JELA-976: clip a large hero to its container; preserve real title outside it.
+for (const mode of ["hidden", "clip", "scroll", "auto"]) {
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const container = env.makeNode("DIV");
+  container.style.overflowX = mode;
+  container.style.overflowY = mode;
+  container.rect = { left: 0, top: 0, width: 1920, height: 500, bottom: 500 };
+  env.documentElement.appendChild(container);
+  const hero = env.makeNode("IMG");
+  hero.src = "http://srv/clipped-hero";
+  hero.rect = { left: -96, top: -121, width: 2112, height: 1188, bottom: 1067 };
+  container.appendChild(hero);
+  env.document.querySelectorAll("img").push(hero);
+  env.advance(6000);
+  const items = JSON.parse(env.store[MK + ".0"]).items;
+  assert.deepStrictEqual(items.find(it => it.u === hero.src).c, [121, 2016, 621, 96],
+    "oversized hero is clipped in its own coordinates");
+  assert(items.some(it => it.s === "Continue Watching"), "genuine title retained");
+  const next = makeEnv({ store: env.store });
+  next.run();
+  const painted = findOverlay(next).children.find(n => n.src === hero.src);
+  assert(painted.style.cssText.includes("clip:rect(121px,2016px,621px,96px)"));
+}
+for (const style of [{ visibility: "hidden" }, { display: "none" }, { opacity: "0" }]) {
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const parent = env.makeNode("DIV");
+  Object.assign(parent.style, style);
+  env.documentElement.appendChild(parent);
+  const hidden = env.document.querySelectorAll("img")[0];
+  parent.appendChild(hidden);
+  env.advance(6000);
+  assert(!JSON.parse(env.store[MK + ".0"]).items.some(it => it.u === hidden.src),
+    "hidden node cannot enter saved snapshot");
+}
+
+// Offscreen horizontal carousel slides are not visible home content.
+{
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const media = env.document.querySelectorAll("img");
+  for (const x of [-500, 1920]) {
+    const slide = env.makeNode("IMG");
+    slide.src = "http://srv/offscreen" + x;
+    slide.rect = { left: x, top: 0, width: 400, height: 400, bottom: 400 };
+    media.push(slide);
+  }
+  env.advance(6000);
+  assert(!JSON.parse(env.store[MK + ".0"]).items.some(it => /offscreen/.test(it.u)),
+    "horizontal offscreen slides excluded");
+}
+
+// CSS paints positioned auto/zero above static content, regardless of DOM order.
+for (const nested of [false, true]) for (const zIndex of ["auto", "0"]) {
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const title = env.document.querySelectorAll(".sectionTitle")[0];
+  const art = env.document.querySelectorAll("img")[0];
+  if (nested) {
+    const parent = env.makeNode("DIV");
+    parent.style.position = "relative";
+    parent.style.zIndex = "0";
+    env.documentElement.appendChild(parent);
+    parent.appendChild(art);
+    parent.appendChild(title);
+  }
+  art.style.position = "absolute";
+  art.style.zIndex = zIndex;
+  art.compareDocumentPosition = node => node === title ? 4 : 0;
+  title.compareDocumentPosition = node => node === art ? 2 : 0;
+  env.advance(6000);
+  const items = JSON.parse(env.store[MK + ".0"]).items;
+  assert(items.findIndex(it => it.s) < items.findIndex(it => it.u === art.src),
+    "positioned art paints above static title despite earlier DOM position");
+}
+// Scaled overflow uses visual dimensions, not untransformed client dimensions.
+{
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  settleHome(env);
+  const container = env.makeNode("DIV");
+  container.style.overflow = "hidden";
+  container.style.transform = "matrix(2, 0, 0, 2, 0, 0)";
+  container.clientWidth = container.offsetWidth = 100;
+  container.clientHeight = container.offsetHeight = 100;
+  container.rect = { left: 0, top: 0, width: 200, height: 200, bottom: 200 };
+  env.documentElement.appendChild(container);
+  const art = env.document.querySelectorAll("img")[0];
+  art.rect = container.rect;
+  container.appendChild(art);
+  env.advance(6000);
+  const item = JSON.parse(env.store[MK + ".0"]).items.find(it => it.u === art.src);
+  assert.strictEqual(item.c, null, "fully visible scaled child is not clipped");
+}
+
 // ---- 11. capture refuses thin results (< 4 images) --------------------------------
 {
   const env = makeEnv({
@@ -907,6 +1069,54 @@ function settleHome(env) {
     1,
     "scrollY within 8 px tolerance still counts as pristine top",
   );
+}
+
+// JELA-971: auto-scroll after pristine startup must capture ORIGINAL top geometry.
+for (const unsafe of ["", "input", "wheel", "pointerdown", "touchstart", "fixed", "sticky", "nested", "transform", "root-transform", "body-scroll"]) {
+  const env = makeEnv({ store: { jellyfin_credentials: CREDS,
+    "jellyfin.shell.serverUrl": "http://srv" }, hash: "#/home.html" });
+  env.run();
+  const parent = env.makeNode("DIV");
+  env.document.body = env.makeNode("BODY");
+  env.document.scrollingElement = env.documentElement;
+  env.documentElement.appendChild(env.document.body);
+  env.document.body.appendChild(parent);
+  if (unsafe === "root-transform") env.documentElement.style.transform = "matrix(1,0,0,1,0,-200)";
+  if (unsafe === "body-scroll") env.document.body.scrollTop = 100;
+  if (unsafe === "sticky" || unsafe === "fixed") parent.style.position = unsafe;
+  if (unsafe === "nested") parent.scrollTop = 100;
+  if (unsafe === "transform") parent.style.transform = "matrix(1,0,0,1,0,-200)";
+  const cards = [], media = [];
+  for (let i = 0; i < 6; i++) {
+    const n = env.makeNode("IMG");
+    n.src = "http://srv/top/" + i;
+    n.rect = { width: 200, height: 180, top: 140 - 447, bottom: 320 - 447, left: i * 220 };
+    parent.appendChild(n); cards.push(n); media.push(n);
+  }
+  const lower = env.makeNode("IMG"); lower.src = "http://srv/lower-row";
+  lower.rect = { width: 200, height: 180, top: 900, bottom: 1080, left: 0 };
+  parent.appendChild(lower); media.push(lower);
+  const title = env.makeNode("H2"); title.textContent = "Original top";
+  title.rect = { width: 300, height: 40, top: 80 - 447, bottom: 120 - 447, left: 0 };
+  parent.appendChild(title); env.setTitles([title]);
+  env.setCards(cards); env.setMedia(media);
+  if (unsafe === "input") env.fireKey(40);
+  if (["wheel", "pointerdown", "touchstart"].includes(unsafe)) env.fire(unsafe);
+  env.setScroll(447);
+  env.documentElement.scrollTop = 447;
+  env.advance(30000);
+  assert.equal(env.window.pageYOffset, 447, "capture must never move the viewport");
+  if (unsafe) {
+    assert.equal(env.window.__shellIH.captured, 0, unsafe + " must fail closed");
+  } else {
+    assert.equal(env.window.__shellIH.captured, 1, "untouched auto-scroll refreshes snapshot");
+    const captured = JSON.parse(env.store[MK + ".0"]).items;
+    assert.equal(captured.filter(n => n.u).length, 6);
+    assert(captured.filter(n => n.u).every(n => n.y === 140 && !n.u.includes("lower-row")));
+    assert.equal(captured.find(n => n.s).y, 80);
+    const next = makeEnv({store: env.store, now: 31000}); next.run();
+    assert.equal(next.window.__shellIH.skeleton, 0, "fresh content paints on retained-cache restart");
+  }
 }
 
 // ---- 13. quota abort leaves no torn snapshot ----------------------------------------

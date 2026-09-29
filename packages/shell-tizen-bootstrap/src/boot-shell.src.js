@@ -3822,7 +3822,7 @@
   //
   // Capture: 1.5 s poll, armed in every document but only ever fires on
   // #/home with >= 5 above-fold cards stable across two consecutive ticks,
-  // window scrollY <= 8 px (JELA-22: only ever snapshot the pristine
+  // window scrollY <= 8 px, or JELA-971 safe document geometry (pristine
   // above-fold — the hero spotlight + first card row — never a scrolled-down
   // row like "Adventure", so the boot overlay always matches the settled,
   // unscrolled home the live client paints into), and our own overlay gone
@@ -3945,20 +3945,32 @@
       'e.setAttribute("aria-hidden","true");' +
       'e.style.cssText="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2147483000;background:#101010;pointer-events:none;overflow:hidden;opacity:1;transition:opacity .4s";' +
       "for(var i=0;i<d.items.length;i++){" +
-      'var it=d.items[i],n=document.createElement("div");' +
+      'var it=d.items[i],n=document.createElement(it.f?"img":"div");' +
       'var cs="position:absolute;left:"+Math.round(it.x*rx)+"px;top:"+Math.round(it.y*ry)+"px;width:"+Math.round(it.w*rx)+"px;height:"+Math.round(it.h*ry)+"px;";' +
       'if(it.sk){cs+="background:#1c1c1c;border-radius:"+((it.r|0)||6)+"px"}' +
+      "else if(it.u&&it.f){n.src=it.u;cs+=\"object-fit:\"+(/^(fill|contain|cover|none|scale-down)$/.test(it.f)?it.f:\"contain\")+\";object-position:\"+cssValue(it.p,\"50% 50%\")+\";border-radius:\"+((it.r|0)||0)+\"px\"}" +
       'else if(it.u){cs+="background:#1f1f1f url(\\""+String(it.u).replace(/["\\\\]/g,"")+"\\") center center no-repeat;background-size:cover;border-radius:"+((it.r|0)||4)+"px"}' +
       'else{n.textContent=it.s||"";cs+="color:#ccc;font:500 "+Math.round((it.fs||26)*ry)+"px/1.25 sans-serif;white-space:nowrap;overflow:hidden"}' +
+      "if(it.u&&!it.f&&it.b)cs+=\";background-color:transparent;background-size:\"+cssValue(it.b,\"cover\")+\";background-position:\"+cssValue(it.p,\"50% 50%\");if(typeof it.o===\"number\")cs+=\";opacity:\"+Math.max(0,Math.min(1,it.o));" +
+      "if(it.c&&it.c.length===4)cs+=\";clip:rect(\"+Math.round(it.c[0]*ry)+\"px,\"+Math.round(it.c[1]*rx)+\"px,\"+Math.round(it.c[2]*ry)+\"px,\"+Math.round(it.c[3]*rx)+\"px)\";if(it.f)cs+=\";display:block;max-width:none;max-height:none;margin:0;padding:0;border:0\";" +
       "n.style.cssText=cs;" +
       "e.appendChild(n)}" +
       "de.appendChild(e);" +
-      'if(!G.painted){G.painted=1;G.skeleton=sk;G.snapAgeMs=d.age;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase("snap")}catch(_){}}' +
+      'if(!G.painted){G.painted=1;G.skeleton=sk;G.snapAgeMs=d.age;G.paintMs=+new Date()-(W.__shellT0||t0);try{W.__shellPhase&&W.__shellPhase(sk?"skeleton":"snap")}catch(_){}}' +
       "}catch(_){G.err++}}" +
       'function folds(){var n=0;try{var cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=cs[i].getBoundingClientRect();if(r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}}catch(_){}return n}' +
       // JELA-22 (JEL-647): window scroll offset, so capture only snapshots the
       // pristine above-fold (scrollY~0) and never a scrolled-down card row.
       "function scy(){try{var y=W.pageYOffset;if(y==null){var de=document.documentElement;y=de&&de.scrollTop}return+y||0}catch(_){return 0}}" +
+      // JELA-971: reconstruct only the untouched startup document's top fold.
+      // Never scroll the active page. Fixed/sticky/transformed/nested-scrolled
+      // ancestry is ambiguous, so reject it rather than save a shifted row.
+      "if(G.pristineStart==null)G.pristineStart=scy()<=8;" +
+      "function touched(){if(G.gen===gen)G.captureInput=1}" +
+      'try{W.addEventListener("keydown",touched,!0);W.addEventListener("mousedown",touched,!0);W.addEventListener("pointerdown",touched,!0);W.addEventListener("touchstart",touched,!0);W.addEventListener("wheel",touched,!0)}catch(_){}' +
+      "function docCap(){return scy()>8&&G.pristineStart&&!G.captureInput&&!(Math.abs(W.pageXOffset||0)>8)}" +
+      "function capRect(e,dc){try{var r=e.getBoundingClientRect();if(!dc)return r;var y=scy();if(r.width<=0||r.height<=0||r.bottom+y<=0||r.top+y>=(W.innerHeight||1080)*1.05)return null;var p=e,de=document.documentElement;while(p){var cs=getComputedStyle(p);if(!cs||cs.position===\"fixed\"||cs.position===\"sticky\"||(cs.transform&&cs.transform!==\"none\"))return null;if(p!==(document.scrollingElement||de)&&((p.scrollTop||0)!==0||(p.scrollLeft||0)!==0))return null;if(p===de)break;p=p.parentNode}if(p!==de)return null;return{left:r.left,top:r.top+y,bottom:r.bottom+y,width:r.width,height:r.height}}catch(_){return null}}" +
+      'function capFolds(dc){if(!dc)return folds();var n=0,cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=capRect(cs[i],dc);if(r&&r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}return n}' +
       // JELA-37: document.open() (the SPA index handoff) wipes ALL window
       // listeners, and this body re-runs once per written document (gen++),
       // so the keydown bind must be per-run, not once-per-G — the old
@@ -4047,21 +4059,25 @@
       "}" +
       'if((!SD||n<4)&&n>0){if(!fc)fc=+new Date();else if(+new Date()-fc>8000){dismiss("partial");clearInterval(wIv);return}}' +
       "}catch(_){G.err++}},700);" +
+      // JELA-976: persist effective visibility, fitting and stacking, not just boxes.
+      "function capStyle(e){try{var p=e,cs=getComputedStyle(e),o=1,z=[],first=1,layered=0,layerDone=0,r=e.getBoundingClientRect(),cl=[0,r.width,r.height,0];while(p&&p.getBoundingClientRect){var c=first?cs:getComputedStyle(p);if(!c||c.display===\"none\"||c.visibility===\"hidden\"||c.visibility===\"collapse\")return null;var a=parseFloat(c.opacity);if(isFinite(a))o*=a;if(o<=0.001)return null;var zi=parseInt(c.zIndex,10),stack=(c.position!==\"static\"&&isFinite(zi))||(isFinite(a)&&a<1)||(c.transform&&c.transform!==\"none\");if(!layerDone&&!stack&&c.position&&c.position!==\"static\")layered=1;if(stack)layerDone=1;if(stack)z.unshift({e:p,z:isFinite(zi)?zi:0,k:2});if(!first&&p!==document.documentElement){var cr=p.getBoundingClientRect(),cx=/^(hidden|clip|scroll|auto)$/.test(c.overflowX||c.overflow),cy=/^(hidden|clip|scroll|auto)$/.test(c.overflowY||c.overflow);var sx=p.offsetWidth>0?cr.width/p.offsetWidth:1,sy=p.offsetHeight>0?cr.height/p.offsetHeight:1;if(cx){var l=cr.left+(p.clientLeft||0)*sx;cl[3]=Math.max(cl[3],l-r.left);cl[1]=Math.min(cl[1],l+(p.clientWidth==null?cr.width:p.clientWidth*sx)-r.left)}if(cy){var t=cr.top+(p.clientTop||0)*sy;cl[0]=Math.max(cl[0],t-r.top);cl[2]=Math.min(cl[2],t+(p.clientHeight==null?cr.height:p.clientHeight*sy)-r.top)}if(cl[1]<=cl[3]||cl[2]<=cl[0])return null}first=0;p=p.parentNode}z.push({e:e,z:0,k:layered?2:1});return{cs:cs,o:o,z:z,c:cl[0]||cl[3]||cl[1]<r.width||cl[2]<r.height?cl:null}}catch(_){return null}}" +
+      "function capOrder(a,b){var az=a._z,bz=b._z,j=0;while(j < az.length&&j<bz.length&&az[j].e===bz[j].e)j++;var aa=az[j],bb=bz[j],za=aa?aa.z:0,zb=bb?bb.z:0;if(za!==zb)return za-zb;var ka=aa?aa.k:1,kb=bb?bb.k:1;if(ka!==kb)return ka-kb;var ae=aa?aa.e:a._e,be=bb?bb.e:b._e;try{var pos=ae.compareDocumentPosition(be);if(pos&4)return-1;if(pos&2)return 1}catch(_){}return a._i-b._i}" +
+      "function cssValue(v,f){v=String(v||\"\");return v&&v.length<100&&/^[a-z0-9.% +\\-]+$/i.test(v)?v:f}" +
       "function capture(){try{" +
       "if(el0())return;" +
-      "if(scy()>8)return;" +
-      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,fold=vh*1.05,items=[],i,r;" +
+      "var dc=docCap(),cy=scy();if(cy>8&&!dc)return;" +
+      "var vw=W.innerWidth||1920,vh=W.innerHeight||1080,fold=vh*1.05,items=[],i,r,vs;" +
       'var ts=document.querySelectorAll(".sectionTitle");' +
-      "for(i=0;i<ts.length;i++){r=ts[i].getBoundingClientRect();" +
-      "if(r.width>0&&r.height>0&&r.bottom>0&&r.top<fold){" +
+      "for(i=0;i<ts.length;i++){r=capRect(ts[i],dc);if(!r)continue;vs=capStyle(ts[i]);if(!vs)continue;" +
+      "if(r.width>0&&r.height>0&&r.bottom>0&&r.top<fold&&r.left<vw&&r.left+r.width>0){" +
       'var s=String(ts[i].textContent||"").replace(/^\\s+|\\s+$/g,"").slice(0,60);' +
       "var fs=24;try{fs=parseInt(getComputedStyle(ts[i]).fontSize,10)||24}catch(_){}" +
-      "if(s)items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),s:s,fs:fs})}}" +
+      "if(s)items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),s:s,fs:fs,o:vs.o,c:vs.c,_z:vs.z,_e:ts[i],_i:items.length})}}" +
       "var seen={},imgs=0;" +
       "var ns=document.querySelectorAll('img,[style*=\"background-image\"]');" +
       "for(i=0;i<ns.length&&items.length<90;i++){" +
-      "r=ns[i].getBoundingClientRect();" +
-      "if(!(r.width>=40&&r.height>=40&&r.bottom>0&&r.top<fold))continue;" +
+      "r=capRect(ns[i],dc);if(!r)continue;vs=capStyle(ns[i]);if(!vs)continue;" +
+      "if(!(r.width>=40&&r.height>=40&&r.bottom>0&&r.top<fold&&r.left<vw&&r.left+r.width>0))continue;" +
       'var u="";' +
       'try{if(String(ns[i].tagName).toUpperCase()==="IMG")u=ns[i].currentSrc||ns[i].src||"";' +
       'else{var m=/url\\(([\'"]?)([^)]*?)\\1\\)/.exec(String(ns[i].style.backgroundImage||""));if(m)u=m[2]}}catch(_){}' +
@@ -4070,9 +4086,10 @@
       "if(seen[k])continue;" +
       "seen[k]=1;" +
       "var rad=0;try{rad=parseInt(getComputedStyle(ns[i]).borderTopLeftRadius,10)||0}catch(_){}" +
-      "items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),u:u,r:rad});" +
+      "items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),u:u,r:rad,o:vs.o,c:vs.c,f:String(ns[i].tagName).toUpperCase()===\"IMG\"?(vs.cs.objectFit||\"fill\"):null,b:vs.cs.backgroundSize||\"auto\",p:String(ns[i].tagName).toUpperCase()===\"IMG\"?(vs.cs.objectPosition||\"50% 50%\"):(vs.cs.backgroundPosition||\"0% 0%\"),_z:vs.z,_e:ns[i],_i:items.length});" +
       "imgs++}" +
-      "if(imgs<4)return;" +
+      "if(imgs<4||(dc&&scy()!==cy))return;" +
+      "items.sort(capOrder);for(i=0;i<items.length;i++){delete items[i]._z;delete items[i]._e;delete items[i]._i}" +
       "var body=JSON.stringify({items:items});" +
       "if(body.length>307200)return;" +
       "var CH=24576,n2=Math.ceil(body.length/CH);" +
@@ -4081,6 +4098,7 @@
       'for(var j=n2;j<64;j++){if(localStorage.getItem(MK+"."+j)==null)break;localStorage.removeItem(MK+"."+j)}' +
       "localStorage.setItem(MK,JSON.stringify({v:1,ts:+new Date(),n:n2,w:vw,h:vh,srv:srv()}));" +
       "}catch(e2){try{localStorage.removeItem(MK)}catch(_){}G.err++;return}" +
+      'G.capSource=dc?"document":"viewport";' +
       "G.captured=1;G.capMs=+new Date()-(W.__shellT0||t0);G.items=items.length" +
       "}catch(_){G.err++}}" +
       "G.capGen=gen;" +
@@ -4090,8 +4108,8 @@
       "if(+new Date()-t0>300000){clearInterval(cIv);return}" +
       'var h="";try{h=String(location.hash||"")}catch(_){}' +
       'if(h.indexOf("home")===-1){st=0;ln=-1;return}' +
-      "if(scy()>8){st=0;ln=-1;return}" +
-      "var n=folds();" +
+      "var dc=docCap();if(scy()>8&&!dc){st=0;ln=-1;return}" +
+      "var n=capFolds(dc);" +
       "if(n<5){st=0;ln=n;return}" +
       "if(n===ln)st++;else{st=0;ln=n}" +
       "if(st>=2)capture()" +
@@ -7939,7 +7957,7 @@
       (window.__shellDiagInit.babel = typeof window.Babel != "undefined"),
       (window.__shellDiagInit.polyfilled = !0));
     // JEL-379: the diag HUD's "shell v" line reports the DEPLOYED widget
-    // version (single source of truth = config.xml, currently 2.0.26) so an
+    // version (single source of truth = config.xml, currently 2.0.28) so an
     // operator can identify a TV's installed bootstrap build. This mirrors the
     // retail shell's __SHELL_VER__ intent (JEL-1215) but, like the sibling HSB
     // overlay (JEL-332), keeps a plain literal guarded by selftest scenario 13
