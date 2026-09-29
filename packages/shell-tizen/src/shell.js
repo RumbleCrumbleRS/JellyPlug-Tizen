@@ -4900,7 +4900,9 @@
       "function docCap(){return scy()>8&&G.pristineStart&&!G.captureInput&&!(Math.abs(W.pageXOffset||0)>8)}" +
       // Identity transforms preserve document geometry; moving/scaling transforms do not.
       'function capIdentity(t){t=String(t||"none").replace(/\\s/g,"");return t==="none"||t==="matrix(1,0,0,1,0,0)"||t==="matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)"}' +
-      'function capRect(e,dc){try{var r=e.getBoundingClientRect();if(!dc)return r;var y=scy();if(r.width<=0||r.height<=0||r.bottom+y<=0||r.top+y>=(W.innerHeight||1080)*1.05)return null;var p=e,de=document.documentElement;while(p){var cs=getComputedStyle(p);if(!cs||cs.position==="fixed"||cs.position==="sticky"||!capIdentity(cs.transform))return null;if(p!==(document.scrollingElement||de)&&((p.scrollTop||0)!==0||(p.scrollLeft||0)!==0))return null;if(p===de)break;p=p.parentNode}if(p!==de)return null;return{left:r.left,top:r.top+y,bottom:r.bottom+y,width:r.width,height:r.height}}catch(_){return null}}' +
+      // A leaf cover image can preserve its uniformly scaled bounding box.
+      'function capCoverScale(e,cs){if(String(e.tagName).toUpperCase()!=="IMG"||cs.objectFit!=="cover")return false;if(!/^[0-9.]+% [0-9.]+%$/.test(cs.objectPosition||"")||!/^(0(px)?\\s*)+$/.test(cs.borderWidth||"0")||!/^(0(px)?\\s*)+$/.test(cs.padding||"0"))return false;var t=String(cs.transform||"");if(t.indexOf("matrix(")!==0||t.charAt(t.length-1)!==")")return false;var a=t.slice(7,-1).split(",");if(a.length!==6)return false;for(var i=0;i<6;i++){if(!a[i].replace(/\\s/g,""))return false;a[i]=Number(a[i]);if(!isFinite(a[i]))return false}return a[0]>0&&a[0]===a[3]&&a[1]===0&&a[2]===0&&a[4]===0&&a[5]===0}' +
+      'function capRect(e,dc){try{var r=e.getBoundingClientRect();if(!dc)return r;var y=scy();if(r.width<=0||r.height<=0||r.bottom+y<=0||r.top+y>=(W.innerHeight||1080)*1.05)return null;var p=e,de=document.documentElement;while(p){var cs=getComputedStyle(p);if(!cs||cs.position==="fixed"||cs.position==="sticky"||(!capIdentity(cs.transform)&&!(p===e&&capCoverScale(e,cs))))return null;if(p!==(document.scrollingElement||de)&&((p.scrollTop||0)!==0||(p.scrollLeft||0)!==0))return null;if(p===de)break;p=p.parentNode}if(p!==de)return null;return{left:r.left,top:r.top+y,bottom:r.bottom+y,width:r.width,height:r.height}}catch(_){return null}}' +
       'function capFolds(dc){if(!dc)return folds();var n=0,cs=document.querySelectorAll(".card"),vh=W.innerHeight||1080;for(var i=0;i<cs.length&&n<12;i++){var r=capRect(cs[i],dc);if(r&&r.width>0&&r.height>0&&r.top<vh&&r.bottom>0)n++}return n}' +
       // JELA-37: document.open() (the SPA index handoff) wipes ALL window
       // listeners, and this body re-runs once per written document (gen++),
@@ -5021,7 +5023,7 @@
       'var k=Math.round(r.left)+"_"+Math.round(r.top)+"_"+Math.round(r.width);' +
       "if(seen[k])continue;" +
       "seen[k]=1;" +
-      "var rad=0;try{rad=parseInt(getComputedStyle(ns[i]).borderTopLeftRadius,10)||0}catch(_){}" +
+      'var rad=0;try{rad=parseFloat(vs.cs.borderTopLeftRadius)||0;if(!capIdentity(vs.cs.transform)&&capCoverScale(ns[i],vs.cs))rad*=Number(vs.cs.transform.slice(7).split(",")[0])}catch(_){}' +
       'items.push({x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height),u:u,r:rad,o:vs.o,c:vs.c,f:String(ns[i].tagName).toUpperCase()==="IMG"?(vs.cs.objectFit||"fill"):null,b:vs.cs.backgroundSize||"auto",p:String(ns[i].tagName).toUpperCase()==="IMG"?(vs.cs.objectPosition||"50% 50%"):(vs.cs.backgroundPosition||"0% 0%"),_z:vs.z,_e:ns[i],_i:items.length});' +
       "if(capHero(ns[i],r,vs,vw,vh))hero=1;imgs++}" +
       "if((imgs<4&&!hero)||(dc&&scy()!==cy))return;" +
