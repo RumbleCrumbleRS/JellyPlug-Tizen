@@ -298,14 +298,14 @@ async function driveShell(label, code) {
   await e.api.loadConfigEpoch(S);
   const st = e.window.__shellConfigEpoch;
   check(
-    label + ": scripts mismatch -> inv=[scripts], jsi+vqk dropped, web kept",
+    label + ": scripts mismatch -> inv=[scripts], jsi+vqk+index dropped",
     st.st === "mismatch" &&
       st.inv.join() === "scripts" &&
       e.jsiChannelCleared === 1 &&
       !e.store.has("shell.txTEST:vqk:/JavaScriptInjector/public.js") &&
       !e.store.has("shell.txTEST:/JavaScriptInjector/public.js?x=1") &&
       !e.store.has("shell.txTEST:ts:/JavaScriptInjector/public.js?x=1") &&
-      e.store.get("jellyfin.shell.webIndexHtml") === "IDX",
+      !e.store.has("jellyfin.shell.webIndexHtml"),
   );
   check(
     label +

@@ -338,8 +338,15 @@ const INTENTIONAL_DIVERGENCES = [
   },
   {
     name: "loadRemoteWebClient",
+    class: "retail-feature",
+    why: "JELA-981: both wrappers await the epoch before cache selection; retail alone retains the opt-in maybeBootLite gate.",
+    retail: "53b07ac56e8530db",
+    boot: "9527f18f90ccddfb",
+  },
+  {
+    name: "loadEpochWebClient",
     class: "hsb-feature",
-    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document, and gates the whole SPA load on maybeBootLite (JELA-67, opt-in Lite canvas home — hosted shell is the fielded target; the baked fallback deliberately omits it like the other retail-only opt-ins).",
+    why: "boot wires vendors-bundle/stylesheet cache recording + lazy-babel markBabelNeeded into the load path; retail does not have those subsystems. Retail additionally calls injectDirectHome (JELA-29, retail-only measurement prototype) and injectDiagBeaconPost (JELA-30, opt-in boot-ring beacon) in the written document, The Lite gate stays in loadRemoteWebClient (JELA-981).",
     // JELA-707: re-pinned — both shells' load paths now route the fetched
     // index html through stripJeScriptsForDefer (a shared, auto-guarded
     // helper) after the JELA-710 font rewrite.
@@ -353,8 +360,8 @@ const INTENTIONAL_DIVERGENCES = [
     // `__shellWebIndexOrigin` before document.write, so an in-document
     // consumer (the JELA-110/542 media-bar hero probe) can read the document
     // the shell already holds instead of re-fetching a `no-store` copy.
-    retail: "46e7121f8624c6a5",
-    boot: "318fe6eb12b03e22",
+    retail: "b3a4fbd148d950cc",
+    boot: "eb95fa249a0c7a73",
   },
   {
     name: "bootstrap",

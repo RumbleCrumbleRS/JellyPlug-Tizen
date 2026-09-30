@@ -501,7 +501,7 @@ const PUB_HTML = "__shellWebIndexHtml";
 const PUB_ORIGIN = "__shellWebIndexOrigin";
 
 for (const [label, src] of SRC_SHELLS) {
-  const body = extractFn(src, "loadRemoteWebClient", label);
+  const body = extractFn(src, "loadEpochWebClient", label);
   const pubAt = body.indexOf(PUB_HTML);
 
   check(
