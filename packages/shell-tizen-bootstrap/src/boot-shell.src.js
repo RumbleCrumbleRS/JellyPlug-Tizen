@@ -6290,9 +6290,9 @@
   // The server plugin (JELA-58, v1.0.13.0+) publishes a config fingerprint
   // in /shell/manifest.json as additive fields: `configEpoch` (aggregate
   // sha256) + `components` {web,shell,scripts,branding} (per-group sha256).
-  // The gate fetches the manifest once per boot (3 s bound, off the critical
-  // path — background revalidation waits for it, primary fetches never do)
-  // and compares it against the record persisted by the last adopted boot:
+  // The gate fetches the manifest once per boot (3 s bound including body).
+  // It compares against the record persisted by the last adopted boot.
+  // Cache selection waits so invalidated bytes cannot launch the page:
   //   MATCH    -> window.__shellCfgEM=1, a boot-scoped flag whose
   //               suppression points (a) skip the /web/ index+config SWR
   //               revalidation pair, (b) skip the stylesheet miss-populate
@@ -6304,7 +6304,7 @@
   //               EXISTING bounded LS caches instead of refetching.
   //   MISMATCH -> per-component diff invalidates ONLY the affected cache
   //               groups (web -> index/config/bundle/stylesheet bodies;
-  //               scripts -> JSI channel + JEL-619 version-keyed slots;
+  //               scripts -> index references + JSI channel + version-keyed slots;
   //               branding -> stylesheet bodies; shell -> nothing, the
   //               bootstrap's manifest-sha path already adopts new shell
   //               bytes), then today's refetch machinery repopulates and
@@ -6366,7 +6366,9 @@
         BUNDLE_CACHE_KEY,
         SS_KEY,
       ]);
-      if (ch("scripts", [])) {
+      // JELA-983: injected version URLs live in index HTML too. Remove the
+      // reference before cache selection, not only the cached script bodies.
+      if (ch("scripts", [WEB_INDEX_CACHE_KEY])) {
         jsiChannelCacheClear();
         // Drop the JEL-619 version-keyed slots via the per-path vqk: index
         // so every query-bearing plugin body refetches with a fresh buster.
@@ -6438,13 +6440,12 @@
       fetch(u + "/shell/manifest.json?__sb=" + Date.now(), {
         credentials: "omit",
         cache: "no-store",
+      }).then(function (r) {
+        return r && r.ok ? r.json() : null;
       }),
       "cfg epoch",
       3000,
     )
-      .then(function (r) {
-        return r && r.ok ? r.json() : null;
-      })
       .then(function (m) {
         // JELA-865: park the whole manifest body, not just the epoch fields.
         // patchPlaybackBundles reads `patchedBundle` off it, and this is the
@@ -8394,13 +8395,20 @@
     }
   }
   function loadRemoteWebClient(serverUrl) {
-    var baseUrl = serverUrl + "/web/",
-      babelNeededFlag = !1;
-    // JELA-59: kick the config-epoch probe first — loadTxDropManifest and
-    // the SWR revalidation below chain on window.__shellEpochReady.
+    // Resolve the config epoch before selecting this boot's web cache.
     try {
       loadConfigEpoch(serverUrl);
     } catch (_) {}
+    // JELA-981: invalidate before capturing cached bodies. Otherwise a
+    // slow manifest removes storage after stale bytes are already selected.
+    // Errors/absent fields still use the existing caches; the probe is bounded.
+    return ceReady().then(function () {
+      return loadEpochWebClient(serverUrl);
+    });
+  }
+  function loadEpochWebClient(serverUrl) {
+    var baseUrl = serverUrl + "/web/";
+    var babelNeededFlag = false;
     // JEL-621: kick the pre-lowered drop manifest fetch first so it overlaps
     // the /web/ RTT pair below. Tiny bounded fetch; resolves null on servers
     // without a /shell/ drop and every consumer falls back to Babel.
