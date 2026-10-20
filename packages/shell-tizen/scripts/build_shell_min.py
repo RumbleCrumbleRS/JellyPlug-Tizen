@@ -165,7 +165,13 @@ QA_BEACON_PLACEHOLDER = "__QA_BEACON_BODY__"
 #   more than bytes. The cap's remaining job is to keep per-ticket shell
 #   growth VISIBLE and deliberately re-baselined, which the SOFT_HEADROOM
 #   warning still does at this level.
-HARD_CAP = 278528
+# JELA-986 raised it 278528 -> 294912 (272 -> 288 KiB): the first boot against
+# Jellyfin 12.2.0 on the Tizen 5.0 rig showed Jellyfin Enhanced 12.12 modules
+# dying on `ResizeObserver` / `Intl.DisplayNames` (absent on M63); the two
+# shims added to chromium56PolyfillBody (mirrored in boot-shell) grew the blob
+# to ~282.1 KB, 3533 B over the old cap (JELA-905 had already left it at 7407 B
+# headroom, under SOFT_HEADROOM). One 16 KiB step leaves ~12.8 KB headroom.
+HARD_CAP = 294912
 SOFT_HEADROOM = 8192  # warn threshold: remaining bytes under HARD_CAP
 # MIN_JEL_LINES is the JEL-929 grep floor: shell.jel-history.txt must carry
 # >= 80 `*JEL-N` breadcrumb lines so `grep -c '^*JEL-'` on it stays a
